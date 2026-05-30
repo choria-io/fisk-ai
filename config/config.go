@@ -1,0 +1,699 @@
+//  Copyright (c) 2026, R.I. Pienaar and the Choria Project contributors
+//
+//  SPDX-License-Identifier: Apache-2.0
+
+package config
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"github.com/goccy/go-yaml"
+)
+
+// identityPattern constrains the agent identity to characters that are also legal
+// in a single NATS subject token and queue group, since the identity is used as
+// the discovery queue group. It rejects whitespace, '.', '*', '>', and anything
+// else that would form an invalid or wildcard-bearing subject.
+var identityPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// Default budget values applied wherever a config leaves a value unset.
+const (
+	defaultLLMMaxTokens     = 200000
+	defaultLLMMaxIterations = 50
+	defaultLLMCallTimeout   = 120 * time.Second
+)
+
+// Config is the top-level agent configuration.
+type Config struct {
+	// Identity is the name used in discovery; it doubles as a queue group so
+	// multiple agents sharing an identity share the work. Optional if MCP.
+	Identity string `json:"identity" yaml:"identity"`
+	// ApplicationPath is the app to run and introspect for tools.
+	ApplicationPath string `json:"application_path" yaml:"application_path"`
+	// NatsContext is the name of a NATS context (as managed by `nats context`
+	// and resolved by jsm.go/natscontext) used to connect to NATS for importing
+	// remote tools and for the a2a server. Required when RemoteTools is set or in
+	// server mode.
+	NatsContext string `json:"nats_context,omitempty" yaml:"nats_context,omitempty"`
+	// SystemPrompt describes what we are doing and may be long; think of it as a
+	// single-skill agent where this is the skill. Optional if MCP.
+	SystemPrompt string `json:"system_prompt" yaml:"system_prompt"`
+
+	// Exclude filters tools out. By default the entire command becomes tools
+	// (regex matching); this lets you take `nats` and only expose `nats auth`.
+	Exclude *ToolFilter `json:"exclude,omitempty" yaml:"exclude,omitempty"`
+	// Include restricts tools to a specific set; it can never include `ai:deny`.
+	Include *ToolFilter `json:"include,omitempty" yaml:"include,omitempty"`
+	// RemoteAgents are remote agents we can talk to using a2a-like behaviors.
+	RemoteAgents []RemoteAgent `json:"remote_agents,omitempty" yaml:"remote_agents,omitempty"`
+	// RemoteTools are remote agents we pull in all the tools of.
+	RemoteTools []RemoteToolHost `json:"remote_tools,omitempty" yaml:"remote_tools,omitempty"`
+	// Expose makes this agent discoverable to other agents and/or over MCP.
+	Expose *ExposeConfig `json:"expose,omitempty" yaml:"expose,omitempty"`
+	// Harness groups the settings that govern how the agent harness itself behaves
+	// during a run: the human-in-the-loop tools, the confirmation gate tags, and the
+	// terminal UI switches. It is optional; its zero value leaves every setting at its
+	// default (human-in-the-loop off, no extra confirm tags, TUI on, bell on).
+	Harness HarnessConfig `json:"harness,omitempty" yaml:"harness,omitempty"`
+
+	// LLM is the model to use and general LLM setup. Always required.
+	LLM LLMConfig `json:"llm" yaml:"llm"`
+}
+
+// HarnessConfig groups the settings that govern how the agent harness behaves
+// during a run, as distinct from the model (llm) or the tool selection. Every
+// field is optional and its zero value is the default behavior.
+type HarnessConfig struct {
+	// HumanInTheLoop, when enabled, gives the model a built-in in-process tool to
+	// put a question to the operator at the terminal. Agent mode only; it is never
+	// exposed over MCP and needs an interactive terminal.
+	HumanInTheLoop *HumanInTheLoopConfig `json:"human_in_the_loop,omitempty" yaml:"human_in_the_loop,omitempty"`
+	// ConfirmTags lists command tags that, in addition to the always-on ai:confirm
+	// tag, require the operator's explicit approval before a tagged command runs.
+	// Matching is exact (not a regex) and additive to ai:confirm. In the agent loop
+	// it gates against the operator; over MCP it gates through client elicitation as
+	// governed by expose.agent.mcp.confirm_over_mcp.
+	ConfirmTags []string `json:"confirm_tags,omitempty" yaml:"confirm_tags,omitempty"`
+	// NoTUI disables the full-screen terminal UI for this agent, always using the
+	// line-by-line output even on an interactive terminal. It is a hard off switch
+	// that the command line cannot re-enable, for agents whose operators rely on the
+	// line UI (piping, screen readers). The TUI is otherwise the default on a terminal.
+	NoTUI bool `json:"no_tui,omitempty" yaml:"no_tui,omitempty"`
+	// NoBell silences the terminal bell the full-screen UI rings when a run blocks
+	// waiting on an operator decision (an approval gate or an ask_human_* prompt). The
+	// bell is on by default so an operator who looked away is alerted; set this for an
+	// agent that prompts often, or where an audible bell is unwelcome. Like no_tui it
+	// is a negative switch, and it has no effect in the line UI.
+	NoBell bool `json:"no_bell,omitempty" yaml:"no_bell,omitempty"`
+	// Memory, when enabled, gives the model built-in tools to keep durable notes in
+	// a key/value store that survives across runs. Agent mode only; like the
+	// human-in-the-loop tools it is not exposed over MCP.
+	Memory *MemoryConfig `json:"memory,omitempty" yaml:"memory,omitempty"`
+}
+
+// MemoryConfig configures the built-in memory tools and the backing store. The
+// options block is decoded per backend, so its legal keys depend on backend; for
+// the file backend it accepts a single directory.
+type MemoryConfig struct {
+	// Enabled turns the memory tools on. The block being absent, or present with
+	// enabled false, leaves them off.
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// Backend selects the store implementation. It defaults to "file", the only
+	// backend today, which keeps each memory in a markdown file under a directory.
+	Backend string `json:"backend,omitempty" yaml:"backend,omitempty"`
+	// NoIndex opts out of injecting the list of stored memories (key and
+	// description) into the system prompt at run start. The index is on by default
+	// so the model knows what it has saved without having to call memory_list; set
+	// this to keep the store's contents out of the prompt. Like no_tui it is a
+	// negative switch.
+	NoIndex bool `json:"no_index,omitempty" yaml:"no_index,omitempty"`
+	// Options carries backend-specific settings as a raw block, decoded against a
+	// typed per-backend schema at store construction so an unknown option key fails
+	// as loudly as an unknown top-level key. For the file backend it accepts
+	// {directory: <path>}, defaulting to memory/<identity>.
+	Options json.RawMessage `json:"options,omitempty" yaml:"options,omitempty"`
+}
+
+// Confirm-over-MCP policies for ExposedMCPConfig.ConfirmOverMCP.
+const (
+	// ConfirmOverMCPAuto asks a client that supports elicitation to approve each
+	// confirm-tagged command and runs it ungated for a client that does not. It is
+	// the default when confirm_over_mcp is unset.
+	ConfirmOverMCPAuto = "auto"
+	// ConfirmOverMCPAlways requires approval for every confirm-tagged command: a
+	// client that cannot elicit is refused rather than allowed to run it ungated.
+	ConfirmOverMCPAlways = "always"
+	// ConfirmOverMCPNever never asks over MCP; confirm-tagged commands run ungated
+	// regardless of client support, for operators who rely on the client's own
+	// approval UI and want to avoid a second prompt.
+	ConfirmOverMCPNever = "never"
+)
+
+// HumanInTheLoopConfig configures the built-in human-in-the-loop tools, which let
+// the model ask the operator a question at the terminal during an agent run.
+type HumanInTheLoopConfig struct {
+	// Enabled turns the human-in-the-loop tools on. The block being absent, or
+	// present with enabled false, leaves them off.
+	Enabled bool `json:"enabled" yaml:"enabled"`
+}
+
+// Anthropic model identifiers usable as an LLMConfig.Model value.
+const (
+	// ModelClaudeFable5 is the Claude Fable 5 model, the most capable widely
+	// released model for the most demanding reasoning and long-horizon agentic
+	// work; the slowest and most expensive tier.
+	ModelClaudeFable5 = "claude-fable-5"
+	// ModelClaudeOpus48 is the Claude Opus 4.8 model, the most capable Opus tier;
+	// slowest and most expensive Opus, best for hard reasoning and agentic work.
+	ModelClaudeOpus48 = "claude-opus-4-8"
+	// ModelClaudeOpus47 is the Claude Opus 4.7 model, the prior Opus release.
+	ModelClaudeOpus47 = "claude-opus-4-7"
+	// ModelClaudeOpus46 is the Claude Opus 4.6 model, an earlier Opus release.
+	ModelClaudeOpus46 = "claude-opus-4-6"
+	// ModelClaudeOpus45 is the Claude Opus 4.5 model, an earlier Opus release.
+	ModelClaudeOpus45 = "claude-opus-4-5-20251101"
+	// ModelClaudeSonnet5 is the Claude Sonnet 5 model, the mid tier balancing
+	// capability, speed, and cost; a good general-purpose default.
+	ModelClaudeSonnet5 = "claude-sonnet-5"
+	// ModelClaudeSonnet46 is the Claude Sonnet 4.6 model, the prior Sonnet release.
+	ModelClaudeSonnet46 = "claude-sonnet-4-6"
+	// ModelClaudeSonnet45 is the Claude Sonnet 4.5 model, an earlier Sonnet release.
+	ModelClaudeSonnet45 = "claude-sonnet-4-5-20250929"
+	// ModelClaudeHaiku45 is the Claude Haiku 4.5 model, the fastest and cheapest
+	// tier; best for high-throughput, latency-sensitive, or simpler tasks.
+	ModelClaudeHaiku45 = "claude-haiku-4-5-20251001"
+)
+
+// LLMConfig holds the model to use and general LLM setup.
+type LLMConfig struct {
+	// Model is the LLM model to use, e.g. ModelClaudeSonnet5 ("claude-sonnet-5").
+	Model string `json:"model" yaml:"model"`
+	// Budget bounds LLM usage; optional but recommended for long running agents.
+	Budget LLMBudget `json:"budget" yaml:"budget"`
+	// Thinking configures whether the model exposes its reasoning. Off by default:
+	// when off, no thinking is requested and the model uses its default behavior.
+	Thinking ThinkingConfig `json:"thinking" yaml:"thinking"`
+	// NoPromptCache disables Anthropic prompt caching for this agent. Caching is on by
+	// default (the zero value), mirroring no_tui / no_bell; set it only for a non-Anthropic
+	// endpoint (ANTHROPIC_BASE_URL) whose proxy rejects or ignores cache_control. Disabling
+	// only raises cost, it never changes output.
+	NoPromptCache bool `json:"no_prompt_cache,omitempty" yaml:"no_prompt_cache,omitempty"`
+}
+
+// ThinkingConfig configures whether the model exposes its reasoning. It is a
+// struct rather than a bare bool so further controls (e.g. effort) can be added
+// later without changing the configuration shape. The setting is provider
+// neutral: the active backend maps it to its own mechanism. Older Anthropic
+// models that predate adaptive thinking (e.g. Sonnet 4.5, Haiku 4.5) reject it,
+// so it is left off by default and opted into per agent.
+type ThinkingConfig struct {
+	// Enabled turns model thinking on. Off by default.
+	Enabled bool `json:"enabled" yaml:"enabled"`
+}
+
+// LLMBudget bounds how much an agent may spend on the LLM.
+//
+// MaxTokens is a tokens-processed cap, not a dollar cap: it sums the full input
+// throughput (uncached input plus cache reads and cache writes) and the output,
+// so its magnitude matches the pre-cache world and a resume stays consistent.
+// Prompt caching makes a run far cheaper in dollars than the token count implies
+// (a cache read costs roughly a tenth of an uncached input token), so MaxTokens
+// intentionally over-counts real spend; a cost-weighted budget is a separate
+// future feature.
+type LLMBudget struct {
+	// MaxTokens is the maximum number of tokens to spend. It is a soft cap: the
+	// running total is checked after each call, so a single call can overshoot it
+	// by up to that call's input plus its max output tokens before the run stops.
+	MaxTokens int64 `json:"max_tokens" yaml:"max_tokens"`
+	// MaxIterations is the maximum number of LLM iterations to perform.
+	MaxIterations int64 `json:"max_iterations" yaml:"max_iterations"`
+	// CallTimeoutString is the per-call timeout as a duration string, e.g. 60s.
+	CallTimeoutString string `json:"call_timeout" yaml:"call_timeout"`
+	// CallTimeoutParsed is the parsed form of CallTimeoutString.
+	CallTimeoutParsed time.Duration `json:"-" yaml:"-"`
+}
+
+// ExposeConfig controls how this agent is exposed to others.
+type ExposeConfig struct {
+	// Agent listens on a subject for a prompt, tools etc, making it discoverable.
+	Agent *AgentExpose `json:"agent,omitempty" yaml:"agent,omitempty"`
+}
+
+// AgentExpose configures the agent-facing exposure of this agent.
+type AgentExpose struct {
+	// AgentToAgent opts this agent in to serving its tools to other agents over
+	// a2a. It is the switch for the `fisk-ai a2a` command, which refuses to start
+	// unless it is true; an agent that says nothing serves nothing.
+	AgentToAgent bool `json:"agent_to_agent" yaml:"agent_to_agent"`
+	// MCP opts this agent in to serving its tools over MCP and carries the listen
+	// port. Its presence is the switch for the `fisk-ai mcp` command, which refuses
+	// to start unless it is set.
+	MCP *ExposedMCPConfig `json:"mcp,omitempty" yaml:"mcp,omitempty"`
+	// Tools optionally narrows the served set, applied on top of the top-level
+	// include/exclude; it can only remove tools, never add them. When absent the
+	// whole top-level-selected set is served.
+	Tools *ExposedToolSelection `json:"tools,omitempty" yaml:"tools,omitempty"`
+}
+
+// ExposedToolSelection narrows the served tool set, on top of the top-level
+// include/exclude. Each filter is honored only when it carries patterns or tags.
+type ExposedToolSelection struct {
+	// Exclude drops tools from the served set. By default the entire command
+	// becomes tools (regex matching); this lets you take `nats` and only serve
+	// `nats auth`.
+	Exclude *ToolFilter `json:"exclude,omitempty" yaml:"exclude,omitempty"`
+	// Include restricts the served set to a specific subset; it can never re-add an
+	// `ai:deny` tool or one the top-level filters already removed.
+	Include *ToolFilter `json:"include,omitempty" yaml:"include,omitempty"`
+}
+
+// ExposedMCPConfig configures the MCP server.
+type ExposedMCPConfig struct {
+	// Port is the TCP port the MCP server listens on.
+	Port int `json:"port" yaml:"port"`
+	// Instructions is optional free text sent to clients at connection time to
+	// describe how to use the server and its tools. Clients may pass it to the
+	// LLM as a hint, so it is a place to add orientation that the individual tool
+	// descriptions are too terse to carry. When empty nothing is sent.
+	Instructions string `json:"instructions,omitempty" yaml:"instructions,omitempty"`
+	// ConfirmOverMCP selects how confirm-tagged commands (ai:confirm and the
+	// harness confirm_tags) are gated when served over MCP: "auto" (the default)
+	// asks clients that support elicitation and runs the command ungated for clients
+	// that do not, "always" refuses a confirm-tagged command when the client cannot
+	// be asked, and "never" never asks and runs it ungated, delegating approval to
+	// the client's own UI.
+	ConfirmOverMCP string `json:"confirm_over_mcp,omitempty" yaml:"confirm_over_mcp,omitempty"`
+}
+
+// RemoteAgent is a remote agent we can talk to using a2a-like behaviors.
+type RemoteAgent struct {
+	// Name is the remote agent's identity.
+	Name string `yaml:"name" json:"name"`
+	// Alias is a short local name for the remote agent.
+	Alias string `yaml:"alias,omitempty" json:"alias,omitempty"`
+}
+
+// RemoteToolHost is a remote agent we pull in all the tools of.
+type RemoteToolHost struct {
+	// Name is the remote agent's identity.
+	Name string `yaml:"name" json:"name"`
+	// Alias is a short local name for the remote tool host.
+	Alias string `yaml:"alias,omitempty" json:"alias,omitempty"`
+	// Exclude filters out tools from this host (same semantics as the top level).
+	Exclude *ToolFilter `json:"exclude,omitempty" yaml:"exclude,omitempty"`
+	// Include restricts tools from this host (same semantics as the top level).
+	Include *ToolFilter `json:"include,omitempty" yaml:"include,omitempty"`
+}
+
+// EffectiveAlias is the prefix applied to tools imported from this host: the
+// configured Alias when set, otherwise the host's identity. Imported tools are
+// named "<alias>_<remote tool name>" so they carry their provenance and stay
+// distinct from local tools and from other hosts' tools.
+func (h RemoteToolHost) EffectiveAlias() string {
+	if h.Alias != "" {
+		return h.Alias
+	}
+
+	return h.Name
+}
+
+// ToolFilter is a generic filter selecting tools by name or tag. It is used at
+// several levels: top-level include/exclude, per remote tool host, and when
+// exposing tools.
+type ToolFilter struct {
+	// Tools is an explicit list of tool names, regex matched.
+	Tools []string `json:"tools,omitempty" yaml:"tools,omitempty"`
+	// Tags matches tools by tag. `ai:deny` is always active and can never be
+	// included; "" matches untagged commands.
+	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty"`
+}
+
+// Mode selects which set of required fields a config is validated against. The
+// same file drives both the agent (run) and the MCP server, but each needs a
+// different subset of fields.
+type Mode int
+
+const (
+	// ModeAgent validates a config for running the LLM agent: it needs a prompt
+	// and a model in addition to the application.
+	ModeAgent Mode = iota
+	// ModeMCP validates a config for serving tools over MCP: only the application
+	// is needed, since there is no prompt or model in that mode.
+	ModeMCP
+	// ModeServer validates a config for the a2a server: it serves the application's
+	// tools to remote agents over NATS, so it needs the application, a valid
+	// identity (it keys the discovery and tool subjects and the queue group), and a
+	// NATS context. Like MCP it uses neither a prompt nor a model.
+	ModeServer
+)
+
+// NewConfig returns a Config with default budgets applied.
+func NewConfig() *Config {
+	cfg := &Config{}
+
+	cfg.prepare()
+
+	return cfg
+}
+
+// ParseConfigFile reads the YAML config at path and parses it for agent mode.
+func ParseConfigFile(path string) (*Config, error) {
+	return ParseConfigFileForMode(path, ModeAgent)
+}
+
+// ParseConfigFileForMode reads the YAML config at path and parses it for the
+// given mode.
+func ParseConfigFileForMode(path string, mode Mode) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading config %q: %w", path, err)
+	}
+
+	return ParseConfigForMode(data, mode)
+}
+
+// ParseConfig parses the YAML config in data for agent mode.
+func ParseConfig(data []byte) (*Config, error) {
+	return ParseConfigForMode(data, ModeAgent)
+}
+
+// ParseConfigForMode parses the YAML config in data, applies default budgets,
+// parses duration strings, and validates the result against the given mode.
+func ParseConfigForMode(data []byte, mode Mode) (*Config, error) {
+	cfg := &Config{}
+	// UseJSONUnmarshaler makes goccy populate json.RawMessage fields (such as a
+	// memory backend's options block) with canonical JSON, so a raw sub-block can
+	// be decoded later against a typed per-backend schema regardless of whether the
+	// config was YAML or, in future, JSON.
+	if err := yaml.UnmarshalWithOptions(data, cfg, yaml.DisallowUnknownField(), yaml.UseJSONUnmarshaler()); err != nil {
+		return nil, fmt.Errorf("parsing config: %w", err)
+	}
+
+	if err := cfg.prepare(); err != nil {
+		return nil, err
+	}
+
+	if err := ValidateForMode(cfg, mode); err != nil {
+		return nil, err
+	}
+
+	return cfg, nil
+}
+
+// Validate checks that required fields are set for agent mode.
+func Validate(cfg *Config) error {
+	return ValidateForMode(cfg, ModeAgent)
+}
+
+// ValidateForMode checks that the fields required by mode are set. Every mode
+// needs application_path; ModeMCP needs nothing more, since it serves tools and
+// uses neither a prompt nor a model. ModeServer needs a valid identity and a NATS
+// context but, like MCP, no prompt or model. ModeAgent additionally needs a
+// model, and a prompt and identity unless the agent is also exposed over MCP.
+func ValidateForMode(cfg *Config, mode Mode) error {
+	if cfg == nil {
+		return fmt.Errorf("config is nil")
+	}
+
+	if cfg.ApplicationPath == "" {
+		return fmt.Errorf("application_path is required")
+	}
+
+	// The identity doubles as the discovery queue group, so when set it must be a
+	// legal NATS subject token. It defaults to the application binary's basename,
+	// which can carry illegal characters (a dot, a space), so check it in every
+	// mode whenever it is non-empty rather than only where it is required.
+	if cfg.Identity != "" && !identityPattern.MatchString(cfg.Identity) {
+		return fmt.Errorf("identity %q is invalid: it must contain only letters, digits, '-' or '_' (it doubles as a NATS queue group); set an explicit identity if the application binary name contains other characters", cfg.Identity)
+	}
+
+	// Remote tool hosts are consulted whenever the agent runs or is inspected, so
+	// validate them in every mode rather than only where they are imported.
+	if err := validateRemoteToolHosts(cfg.RemoteTools); err != nil {
+		return err
+	}
+
+	if mode == ModeServer {
+		if cfg.Identity == "" {
+			return fmt.Errorf("identity is required for the a2a server")
+		}
+		if cfg.NatsContext == "" {
+			return fmt.Errorf("nats_context is required for the a2a server")
+		}
+		return nil
+	}
+
+	if mode == ModeMCP {
+		return nil
+	}
+
+	// ModeAgent: a config that imports remote tools must say how to reach NATS.
+	if len(cfg.RemoteTools) > 0 && cfg.NatsContext == "" {
+		return fmt.Errorf("nats_context is required when remote_tools is set")
+	}
+
+	mcpOnly := cfg.Expose != nil && cfg.Expose.Agent != nil && cfg.Expose.Agent.MCP != nil
+	if !mcpOnly {
+		if cfg.Identity == "" {
+			return fmt.Errorf("identity is required unless exposed over MCP")
+		}
+		if cfg.SystemPrompt == "" {
+			return fmt.Errorf("prompt is required unless exposed over MCP")
+		}
+	}
+
+	if cfg.LLM.Model == "" {
+		return fmt.Errorf("llm.model is required")
+	}
+
+	return nil
+}
+
+// validateRemoteToolHosts checks each remote tool host's identity, alias, and
+// filters. The host name keys the NATS subjects, so it must be a legal subject
+// token; the alias, when set, prefixes imported tool names, so it must be a legal
+// tool-name token. A tag-based exclude is rejected outright: discovery does not
+// carry tags (a ToolDescriptor has only a name, description and input schema), so
+// an exclude-by-tag could never be honored and would silently leave a tool the
+// operator meant to remove imported anyway. An include-by-tag is not an error
+// here; the importing command warns and ignores it.
+func validateRemoteToolHosts(hosts []RemoteToolHost) error {
+	for _, host := range hosts {
+		if host.Name == "" {
+			return fmt.Errorf("remote_tools host is missing a name")
+		}
+		if !identityPattern.MatchString(host.Name) {
+			return fmt.Errorf("remote_tools host name %q is invalid: it must contain only letters, digits, '-' or '_' (it keys the NATS subjects)", host.Name)
+		}
+		if host.Alias != "" && !identityPattern.MatchString(host.Alias) {
+			return fmt.Errorf("remote_tools host %q has an invalid alias %q: it must contain only letters, digits, '-' or '_' (it prefixes imported tool names)", host.Name, host.Alias)
+		}
+		if host.Exclude != nil && len(host.Exclude.Tags) > 0 {
+			return fmt.Errorf("remote_tools host %q has an exclude.tags filter, which cannot be honored: discovery does not carry tags, so a tool excluded by tag would be imported anyway; exclude by tool name instead", host.Name)
+		}
+	}
+
+	return nil
+}
+
+// HumanInTheLoopEnabled reports whether the built-in human-in-the-loop tools are
+// enabled. They are only ever active in agent mode.
+func (c *Config) HumanInTheLoopEnabled() bool {
+	return c.Harness.HumanInTheLoop != nil && c.Harness.HumanInTheLoop.Enabled
+}
+
+// MemoryEnabled reports whether the built-in memory tools are enabled. Like the
+// human-in-the-loop tools they are only ever active in agent mode.
+func (c *Config) MemoryEnabled() bool {
+	return c.Harness.Memory != nil && c.Harness.Memory.Enabled
+}
+
+// MemoryIndexEnabled reports whether the list of stored memories should be
+// injected into the system prompt at run start. It requires memory to be enabled
+// and no_index to be unset.
+func (c *Config) MemoryIndexEnabled() bool {
+	return c.MemoryEnabled() && !c.Harness.Memory.NoIndex
+}
+
+// MemoryBackend returns the configured memory backend, defaulting to "file" when
+// memory is enabled but no backend is named. It returns "" when memory is off.
+func (c *Config) MemoryBackend() string {
+	if !c.MemoryEnabled() {
+		return ""
+	}
+	if c.Harness.Memory.Backend == "" {
+		return "file"
+	}
+
+	return c.Harness.Memory.Backend
+}
+
+// MemoryRawOptions returns the raw backend options block, decoded per backend at
+// store construction. It is nil when memory is off or no options are set.
+func (c *Config) MemoryRawOptions() json.RawMessage {
+	if !c.MemoryEnabled() {
+		return nil
+	}
+
+	return c.Harness.Memory.Options
+}
+
+// ConfirmTags returns the extra confirmation gate tags configured under the
+// harness block, additive to the always-on ai:confirm tag. It is nil when none
+// are set; prepare normalizes the stored slice (trim, de-duplicate, drop empties).
+func (c *Config) ConfirmTags() []string {
+	return c.Harness.ConfirmTags
+}
+
+// TUIDisabled reports whether the agent config turns off the full-screen terminal
+// UI. When true the run uses the line UI even on an interactive terminal, and no
+// command-line flag can re-enable it.
+func (c *Config) TUIDisabled() bool {
+	return c.Harness.NoTUI
+}
+
+// BellEnabled reports whether the full-screen UI should ring the terminal bell when a
+// run blocks on an operator decision. It is on unless the agent config sets no_bell.
+func (c *Config) BellEnabled() bool {
+	return !c.Harness.NoBell
+}
+
+// PromptCacheEnabled reports whether Anthropic prompt caching should be applied to
+// this agent's requests. It is on unless the agent config sets no_prompt_cache, which
+// is the escape hatch for a non-Anthropic endpoint whose proxy rejects cache_control.
+func (c *Config) PromptCacheEnabled() bool {
+	return !c.LLM.NoPromptCache
+}
+
+// ThinkingEnabled reports whether the model should be asked to expose its
+// reasoning. Off unless explicitly enabled under llm.thinking.
+func (c *Config) ThinkingEnabled() bool {
+	return c.LLM.Thinking.Enabled
+}
+
+// MCPPort returns the MCP server port configured under expose.agent.mcp, or 0 if
+// none is set. Callers layer their own default and flag override on top.
+func (c *Config) MCPPort() int {
+	if c.Expose == nil || c.Expose.Agent == nil || c.Expose.Agent.MCP == nil {
+		return 0
+	}
+
+	return c.Expose.Agent.MCP.Port
+}
+
+// MCPInstructions returns the optional instructions configured under
+// expose.agent.mcp, or "" if none is set. The MCP server sends them to clients
+// at connection time only when non-empty.
+func (c *Config) MCPInstructions() string {
+	if c.Expose == nil || c.Expose.Agent == nil || c.Expose.Agent.MCP == nil {
+		return ""
+	}
+
+	return c.Expose.Agent.MCP.Instructions
+}
+
+// ConfirmOverMCPMode returns the configured confirm-over-MCP policy from
+// expose.agent.mcp, defaulting to auto when no MCP block or value is set. prepare
+// normalizes and validates the stored value, so this returns one of the three
+// known policies.
+func (c *Config) ConfirmOverMCPMode() string {
+	if c.Expose == nil || c.Expose.Agent == nil || c.Expose.Agent.MCP == nil || c.Expose.Agent.MCP.ConfirmOverMCP == "" {
+		return ConfirmOverMCPAuto
+	}
+
+	return c.Expose.Agent.MCP.ConfirmOverMCP
+}
+
+// A2AEnabled reports whether this agent opts in to serving its tools to other
+// agents over a2a, set under expose.agent.agent_to_agent. Serving is off unless
+// explicitly enabled, so a config that says nothing exposes nothing.
+func (c *Config) A2AEnabled() bool {
+	return c.Expose != nil && c.Expose.Agent != nil && c.Expose.Agent.AgentToAgent
+}
+
+// MCPEnabled reports whether this agent opts in to serving its tools over MCP.
+// Presence of the expose.agent.mcp block is the switch; it also carries the
+// listen port. Like a2a, a config that says nothing exposes nothing.
+func (c *Config) MCPEnabled() bool {
+	return c.Expose != nil && c.Expose.Agent != nil && c.Expose.Agent.MCP != nil
+}
+
+// prepare fills in default budgets and parses all duration strings.
+func (c *Config) prepare() error {
+	if c.Identity == "" && c.ApplicationPath != "" {
+		c.Identity = filepath.Base(c.ApplicationPath)
+	}
+
+	c.Harness.ConfirmTags = normalizeTags(c.Harness.ConfirmTags)
+
+	if c.Expose != nil && c.Expose.Agent != nil && c.Expose.Agent.MCP != nil {
+		mode, err := normalizeConfirmOverMCP(c.Expose.Agent.MCP.ConfirmOverMCP)
+		if err != nil {
+			return err
+		}
+		c.Expose.Agent.MCP.ConfirmOverMCP = mode
+	}
+
+	if err := c.LLM.Budget.prepare(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// normalizeConfirmOverMCP lower-cases and trims the confirm_over_mcp value,
+// defaulting an empty value to auto and rejecting anything that is not one of the
+// three known policies, so a typo fails loudly at parse time rather than silently
+// selecting a weaker or stronger gate than the operator intended.
+func normalizeConfirmOverMCP(v string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "", ConfirmOverMCPAuto:
+		return ConfirmOverMCPAuto, nil
+	case ConfirmOverMCPAlways:
+		return ConfirmOverMCPAlways, nil
+	case ConfirmOverMCPNever:
+		return ConfirmOverMCPNever, nil
+	default:
+		return "", fmt.Errorf("invalid confirm_over_mcp %q: must be auto, always or never", v)
+	}
+}
+
+// normalizeTags trims surrounding whitespace from each tag, drops empties, and
+// removes duplicates while preserving first-seen order. Trimming matters for
+// confirm tags: a trailing space would make a tag silently fail to match a real
+// command tag, leaving a command the operator believes is gated able to run
+// without confirmation.
+func normalizeTags(tags []string) []string {
+	if len(tags) == 0 {
+		return tags
+	}
+
+	seen := make(map[string]bool, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		out = append(out, tag)
+	}
+
+	return out
+}
+
+// prepare applies LLM budget defaults and parses the call timeout.
+func (b *LLMBudget) prepare() error {
+	if b.MaxTokens < 0 {
+		return fmt.Errorf("invalid llm max_tokens %d: must not be negative", b.MaxTokens)
+	}
+	if b.MaxIterations < 0 {
+		return fmt.Errorf("invalid llm max_iterations %d: must not be negative", b.MaxIterations)
+	}
+
+	if b.MaxTokens == 0 {
+		b.MaxTokens = defaultLLMMaxTokens
+	}
+	if b.MaxIterations == 0 {
+		b.MaxIterations = defaultLLMMaxIterations
+	}
+
+	if b.CallTimeoutString == "" {
+		b.CallTimeoutParsed = defaultLLMCallTimeout
+		return nil
+	}
+
+	d, err := time.ParseDuration(b.CallTimeoutString)
+	if err != nil {
+		return fmt.Errorf("invalid llm call_timeout %q: %w", b.CallTimeoutString, err)
+	}
+	b.CallTimeoutParsed = d
+
+	return nil
+}

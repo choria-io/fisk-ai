@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/session.tool_result.json",
+  "title": "fisk-ai session store v1 tool result record",
+  "allOf": [
+    {
+      "$ref": "session.common.json#/$defs/envelope"
+    }
+  ],
+  "properties": {
+    "protocol": {
+      "const": "io.choria.fisk-ai.v1.session.tool_result"
+    },
+    "tool_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool_use_id",
+        "result"
+      ],
+      "properties": {
+        "tool_use_id": {
+          "type": "string",
+          "description": "The tool_use id this result answers."
+        },
+        "result": {
+          "type": "object",
+          "description": "The tool result content block stored verbatim as the provider represents it (anthropic ContentBlockParamUnion). Opaque here."
+        },
+        "remote": {
+          "type": "boolean",
+          "description": "Set when the call was dispatched to another agent over A2A."
+        }
+      }
+    }
+  },
+  "required": [
+    "tool_result"
+  ],
+  "unevaluatedProperties": false
+}

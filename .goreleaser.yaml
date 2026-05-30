@@ -1,0 +1,65 @@
+version: 2
+project_name: fisk-ai
+
+release:
+  github:
+    owner: choria-io
+    name: fisk-ai
+  name_template: "Release {{.Version}}"
+  draft: true
+
+changelog:
+  disable: true
+
+builds:
+  - id: fisk-ai
+    binary: fisk-ai
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm
+      - arm64
+    goarm:
+      - "6"
+      - "7"
+
+archives:
+  - name_template: "fisk-ai-{{.Version}}-{{.Os}}-{{.Arch}}{{if .Arm}}{{.Arm}}{{end}}"
+    wrap_in_directory: true
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE
+
+homebrew_casks:
+  - name: fisk-ai
+    binaries:
+      - fisk-ai
+    directory: Casks
+    repository:
+      owner: choria-io
+      name: homebrew-tap
+    homepage: "https://github.com/choria-io/fisk-ai"
+    description: Fisk Agent and MCP Creation Toolkit
+
+checksum:
+  name_template: "SHA256SUMS"
+  algorithm: sha256
+
+nfpms:
+  - file_name_template: 'fisk-ai-{{.Version}}-{{ if eq .Arch "amd64" }}x86_64{{ else}}{{.Arch}}{{end}}{{if .Arm}}{{.Arm}}{{end}}'
+    homepage:  https://github.com/choria-io/fisk-ai
+    description: Fisk Agent and MCP Creation Toolkit
+    maintainer: R.I. Pienaar <rip@devco.net>
+    license: Apache 2.0
+    vendor: Choria
+    bindir: /usr/bin
+    formats:
+      - deb
+      - rpm

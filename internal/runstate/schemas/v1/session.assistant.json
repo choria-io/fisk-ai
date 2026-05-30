@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/session.assistant.json",
+  "title": "fisk-ai session store v1 assistant record",
+  "allOf": [
+    {
+      "$ref": "session.common.json#/$defs/envelope"
+    }
+  ],
+  "properties": {
+    "protocol": {
+      "const": "io.choria.fisk-ai.v1.session.assistant"
+    },
+    "assistant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "iteration",
+        "message",
+        "in_tokens",
+        "out_tokens"
+      ],
+      "properties": {
+        "iteration": {
+          "type": "integer"
+        },
+        "message": {
+          "type": "object",
+          "description": "The assistant turn stored verbatim as the provider represents it (anthropic MessageParam). Opaque here so provider block shapes, including thinking signatures and server-side tool blocks, are preserved without this schema constraining them."
+        },
+        "stop_reason": {
+          "type": "string"
+        },
+        "in_tokens": {
+          "type": "integer"
+        },
+        "out_tokens": {
+          "type": "integer"
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "description": "Input tokens served from the prompt cache. Additive and optional; absent on a journal written before prompt caching, where it folds as zero."
+        },
+        "cache_create_tokens": {
+          "type": "integer",
+          "description": "Input tokens written into the prompt cache. Additive and optional; absent on a journal written before prompt caching, where it folds as zero."
+        }
+      }
+    }
+  },
+  "required": [
+    "assistant"
+  ],
+  "unevaluatedProperties": false
+}

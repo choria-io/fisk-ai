@@ -1,0 +1,324 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/common.json",
+  "title": "fisk-ai A2A v1 common definitions",
+  "$defs": {
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Logical agent identity; maps to config.Identity."
+        },
+        "instance": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+$",
+          "description": "Specific running instance of the named agent."
+        }
+      }
+    },
+    "header": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "id",
+        "request",
+        "conversation",
+        "sequence",
+        "time",
+        "sender"
+      ],
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "description": "Message protocol id, e.g. io.choria.fisk-ai.v1.request."
+        },
+        "id": {
+          "type": "string",
+          "description": "Unique id of this message."
+        },
+        "request": {
+          "type": "string",
+          "description": "Correlation tag of the originating request; every reply echoes it. On a request it equals id."
+        },
+        "conversation": {
+          "type": "string",
+          "description": "Stable across multiple requests in a session."
+        },
+        "parent": {
+          "type": "string",
+          "description": "Causation: the request that spawned this one, for multi-hop A->B->C."
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Per-request, gap-free, monotonic ordering authority. Never reused across a restart."
+        },
+        "time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Advisory/audit only; not an ordering authority."
+        },
+        "sender": {
+          "$ref": "#/$defs/identity"
+        },
+        "recipient": {
+          "$ref": "#/$defs/identity"
+        },
+        "must_understand": {
+          "type": "boolean",
+          "default": false,
+          "description": "If true and the receiver does not understand this protocol id, it must fail closed."
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "input_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Mirrors LLMBudget. The receiver's local config is the ceiling; a request may only lower a limit.",
+      "properties": {
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "call_timeout": {
+          "type": "string",
+          "description": "Go duration string, e.g. 60s."
+        }
+      }
+    },
+    "stop_reason": {
+      "type": "string",
+      "enum": [
+        "end_turn",
+        "max_tokens",
+        "refusal",
+        "canceled",
+        "error",
+        "budget_exhausted"
+      ]
+    },
+    "exec_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Optional command metadata, mirroring CommandResult; absent for non-shell tools.",
+      "properties": {
+        "command": {
+          "type": "string"
+        },
+        "exit_code": {
+          "type": "integer"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "tool_descriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "A tool an agent exposes, as reported in a discovery reply.",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "JSON schema for the tool input."
+        }
+      }
+    },
+    "block": {
+      "description": "One content block. Discriminated by `type`.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/thinkingBlock"
+        },
+        {
+          "$ref": "#/$defs/textBlock"
+        },
+        {
+          "$ref": "#/$defs/toolCallBlock"
+        },
+        {
+          "$ref": "#/$defs/toolResultBlock"
+        },
+        {
+          "$ref": "#/$defs/agentCallBlock"
+        },
+        {
+          "$ref": "#/$defs/statusBlock"
+        }
+      ]
+    },
+    "thinkingBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "thinking"
+        },
+        "text": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string",
+          "description": "Opaque, provider-defined; display/audit only, never replayed into a model across the boundary."
+        },
+        "provider": {
+          "type": "string",
+          "description": "Originating provider for the signature, e.g. anthropic."
+        }
+      }
+    },
+    "textBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "text"
+      ],
+      "properties": {
+        "type": {
+          "const": "text"
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "toolCallBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id",
+        "name"
+      ],
+      "properties": {
+        "type": {
+          "const": "tool_call"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "input": {
+          "type": "object",
+          "description": "Tool arguments."
+        }
+      }
+    },
+    "toolResultBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "call_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "tool_result"
+        },
+        "call_id": {
+          "type": "string",
+          "description": "The id of the tool_call this answers."
+        },
+        "is_error": {
+          "type": "boolean",
+          "description": "Harness failure (tool did not run cleanly), distinct from a non-zero exit."
+        },
+        "output": {
+          "type": "string"
+        },
+        "exec": {
+          "$ref": "#/$defs/exec_result"
+        }
+      }
+    },
+    "agentCallBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "id",
+        "name",
+        "task"
+      ],
+      "description": "A call to another agent (multi-hop), distinct from a local tool_call.",
+      "properties": {
+        "type": {
+          "const": "agent_call"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "task": {
+          "type": "string",
+          "description": "request id of the spawned sub-task; correlate its stream via the header `parent`."
+        }
+      }
+    },
+    "statusBlock": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "const": "status"
+        },
+        "iteration": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "phase": {
+          "type": "string",
+          "description": "e.g. calling-llm, executing-tool."
+        },
+        "usage": {
+          "$ref": "#/$defs/usage"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/error.json",
+  "title": "fisk-ai A2A v1 terminal error",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/header"
+    }
+  ],
+  "properties": {
+    "protocol": {
+      "const": "io.choria.fisk-ai.v1.error"
+    },
+    "stop_reason": {
+      "$ref": "common.json#/$defs/stop_reason"
+    },
+    "error": {
+      "type": "string"
+    },
+    "code": {
+      "type": "string",
+      "description": "Optional machine-readable code."
+    }
+  },
+  "required": [
+    "error"
+  ],
+  "unevaluatedProperties": false
+}

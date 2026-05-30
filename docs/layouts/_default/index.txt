@@ -1,0 +1,12 @@
+{{ with .Site.Title -}}
+    # {{ . }}
+{{- end }}
+
+
+> Fisk AI is a AI Harness that turns CLI commands written using [Fisk](https://github.com/choria-io/fisk) - especially those from [App Builder](https://choria-io.github.io/appbuilder/) - into safe and deterministic AI Agents.
+
+## Key Information
+
+{{ range (where (sort ((.Site.GetPage "/").Pages) "Weight" "asc") "Params.sitemap_exclude" "ne" true) -}}
+    - [{{ .Title }}]({{ .Permalink }}index.md): {{ .Description }}
+{{ end }}

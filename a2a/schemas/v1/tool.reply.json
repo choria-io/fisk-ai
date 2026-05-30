@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/tool.reply.json",
+  "title": "fisk-ai A2A v1 tool reply",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/header"
+    }
+  ],
+  "properties": {
+    "protocol": {
+      "const": "io.choria.fisk-ai.v1.tool.reply"
+    },
+    "is_error": {
+      "type": "boolean",
+      "description": "Harness failure (tool did not run cleanly), distinct from a non-zero exit in exec."
+    },
+    "output": {
+      "type": "string"
+    },
+    "exec": {
+      "$ref": "common.json#/$defs/exec_result"
+    }
+  },
+  "unevaluatedProperties": false
+}

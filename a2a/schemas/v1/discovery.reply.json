@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/discovery.reply.json",
+  "title": "fisk-ai A2A v1 discovery reply",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/header"
+    }
+  ],
+  "properties": {
+    "protocol": {
+      "const": "io.choria.fisk-ai.v1.discovery.reply"
+    },
+    "name": {
+      "type": "string",
+      "description": "The agent's identity."
+    },
+    "version": {
+      "type": "string",
+      "description": "The agent's version."
+    },
+    "description": {
+      "type": "string"
+    },
+    "protocols": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Protocol namespaces the agent supports, e.g. io.choria.fisk-ai.v1."
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "$ref": "common.json#/$defs/tool_descriptor"
+      }
+    }
+  },
+  "required": [
+    "name",
+    "version"
+  ],
+  "unevaluatedProperties": false
+}

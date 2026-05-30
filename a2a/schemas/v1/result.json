@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/result.json",
+  "title": "fisk-ai A2A v1 terminal result",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/header"
+    }
+  ],
+  "properties": {
+    "protocol": {
+      "const": "io.choria.fisk-ai.v1.result"
+    },
+    "stop_reason": {
+      "$ref": "common.json#/$defs/stop_reason"
+    },
+    "text": {
+      "type": "string",
+      "description": "Final answer."
+    },
+    "usage": {
+      "$ref": "common.json#/$defs/usage"
+    }
+  },
+  "required": [
+    "stop_reason"
+  ],
+  "unevaluatedProperties": false
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/event.json",
+  "title": "fisk-ai A2A v1 stream event",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/header"
+    }
+  ],
+  "properties": {
+    "protocol": {
+      "const": "io.choria.fisk-ai.v1.event"
+    },
+    "block": {
+      "$ref": "common.json#/$defs/block"
+    }
+  },
+  "required": [
+    "block"
+  ],
+  "unevaluatedProperties": false
+}

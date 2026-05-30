@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/session.common.json",
+  "title": "fisk-ai session store v1 common definitions",
+  "$defs": {
+    "envelope": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "seq"
+      ],
+      "properties": {
+        "protocol": {
+          "type": "string",
+          "description": "Record schema id, e.g. io.choria.fisk-ai.v1.session.meta. Self-describes the record independent of where it is stored."
+        },
+        "seq": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Monotonic record id within a run, the ordering authority. Starts at 1 on the meta record."
+        }
+      }
+    },
+    "fingerprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Configuration the run was started with; validated on resume. The system prompt is stored as a hash, never verbatim.",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "system_hash": {
+          "type": "string"
+        },
+        "tools_hash": {
+          "type": "string"
+        },
+        "thinking_mode": {
+          "type": "string"
+        },
+        "max_tokens": {
+          "type": "integer"
+        },
+        "max_iterations": {
+          "type": "integer"
+        }
+      }
+    }
+  }
+}

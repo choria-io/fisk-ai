@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/ack.json",
+  "title": "fisk-ai A2A v1 ack",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/header"
+    }
+  ],
+  "properties": {
+    "protocol": {
+      "const": "io.choria.fisk-ai.v1.ack"
+    },
+    "accepted": {
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string",
+      "description": "Why rejected, when accepted is false."
+    }
+  },
+  "required": [
+    "accepted"
+  ],
+  "unevaluatedProperties": false
+}

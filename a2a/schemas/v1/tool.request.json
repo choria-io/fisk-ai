@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/tool.request.json",
+  "title": "fisk-ai A2A v1 tool request",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/header"
+    }
+  ],
+  "properties": {
+    "protocol": {
+      "const": "io.choria.fisk-ai.v1.tool.request"
+    },
+    "name": {
+      "type": "string",
+      "description": "The tool to invoke."
+    },
+    "input": {
+      "type": "object",
+      "description": "Tool arguments."
+    }
+  },
+  "required": [
+    "name"
+  ],
+  "unevaluatedProperties": false
+}

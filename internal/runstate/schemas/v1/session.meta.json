@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/session.meta.json",
+  "title": "fisk-ai session store v1 meta record",
+  "allOf": [
+    {
+      "$ref": "session.common.json#/$defs/envelope"
+    }
+  ],
+  "properties": {
+    "protocol": {
+      "const": "io.choria.fisk-ai.v1.session.meta"
+    },
+    "seq": {
+      "const": 1
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "run_id",
+        "created",
+        "fingerprint"
+      ],
+      "properties": {
+        "version": {
+          "type": "integer",
+          "description": "On-disk payload schema version. Fold rejects a snapshot written by a newer version."
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "fingerprint": {
+          "$ref": "session.common.json#/$defs/fingerprint"
+        },
+        "prompt": {
+          "type": "string",
+          "description": "The initial user prompt, from which the first message is rebuilt."
+        },
+        "interactive": {
+          "type": "boolean",
+          "description": "Marks a chat (--chat) run so a resume reopens the input bar. Absent on a one-shot or batch checkpoint run."
+        }
+      }
+    }
+  },
+  "required": [
+    "meta"
+  ],
+  "unevaluatedProperties": false
+}

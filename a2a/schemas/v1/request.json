@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://choria.io/schemas/io.choria.fisk-ai.v1/request.json",
+  "title": "fisk-ai A2A v1 task request",
+  "allOf": [
+    {
+      "$ref": "common.json#/$defs/header"
+    }
+  ],
+  "properties": {
+    "protocol": {
+      "const": "io.choria.fisk-ai.v1.request"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "context": {
+      "type": "string",
+      "description": "Optional supporting material."
+    },
+    "tool_hints": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "budget": {
+      "$ref": "common.json#/$defs/budget"
+    },
+    "stream": {
+      "type": "boolean",
+      "default": true,
+      "description": "false means the caller wants only a terminal result, no event stream."
+    }
+  },
+  "required": [
+    "prompt"
+  ],
+  "unevaluatedProperties": false
+}
