@@ -5,8 +5,8 @@
 
 ## Key Information
 
-- [Agents](https://ai.choria.io/agents/index.md): Create LLM agents from Fisk CLI applications
-- [MCP Servers](https://ai.choria.io/mcp/index.md): Serve Fisk application tools over MCP
-- [Reference](https://ai.choria.io/reference/index.md): Configuration Reference
-- [Design](https://ai.choria.io/design/index.md): How Fisk AI is built: architecture, subsystems, and the flows that tie them together.
+- [Agents](https://choria-io.github.io/fisk-ai/agents/index.md): Create LLM agents from Fisk CLI applications
+- [MCP Servers](https://choria-io.github.io/fisk-ai/mcp/index.md): Serve Fisk application tools over MCP
+- [Reference](https://choria-io.github.io/fisk-ai/reference/index.md): Configuration Reference
+- [Design](https://choria-io.github.io/fisk-ai/design/index.md): How Fisk AI is built: architecture, subsystems, and the flows that tie them together.
 

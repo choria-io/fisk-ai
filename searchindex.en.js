@@ -5,7 +5,7 @@ var relearn_searchindex = [
     "description": "Fisk AI turns any fisk-based command-line application into an LLM agent. It introspects the app’s command tree, exposes the allowed commands as tools, and runs an agent loop against the Anthropic API that calls those commands to satisfy a prompt.\nNo glue code — if your CLI is built with Fisk, Fisk AI can turn it into a purpose built agentic harness.\nThe main focus is on safety and determinism, every features is carefully considered and designed. What sets this Harness apart is what it does not have rather than a long list of features.",
     "tags": [],
     "title": "Introduction",
-    "uri": "/"
+    "uri": "/fisk-ai/"
   },
   {
     "breadcrumb": "Introduction",
@@ -13,7 +13,7 @@ var relearn_searchindex = [
     "description": "Create LLM agents from Fisk CLI applications",
     "tags": [],
     "title": "Agents",
-    "uri": "/agents/"
+    "uri": "/fisk-ai/agents/"
   },
   {
     "breadcrumb": "Introduction \u003e Design",
@@ -21,7 +21,7 @@ var relearn_searchindex = [
     "description": "A guided deep-dive into the Fisk AI codebase: architecture, subsystems, and the flows that connect them.",
     "tags": [],
     "title": "Code Map",
-    "uri": "/design/codemap/"
+    "uri": "/fisk-ai/design/codemap/"
   },
   {
     "breadcrumb": "Introduction \u003e Design \u003e Code Map",
@@ -29,7 +29,7 @@ var relearn_searchindex = [
     "description": "How the packages layer, the interface seams that keep them apart, and how a run composes.",
     "tags": [],
     "title": "Architecture",
-    "uri": "/design/codemap/architecture/"
+    "uri": "/fisk-ai/design/codemap/architecture/"
   },
   {
     "breadcrumb": "Introduction \u003e Design",
@@ -37,7 +37,7 @@ var relearn_searchindex = [
     "description": "planned direction for the Fisk AI platform",
     "tags": [],
     "title": "Development Roadmap",
-    "uri": "/design/roadmap/"
+    "uri": "/fisk-ai/design/roadmap/"
   },
   {
     "breadcrumb": "Introduction",
@@ -45,7 +45,7 @@ var relearn_searchindex = [
     "description": "Serve Fisk application tools over MCP",
     "tags": [],
     "title": "MCP Servers",
-    "uri": "/mcp/"
+    "uri": "/fisk-ai/mcp/"
   },
   {
     "breadcrumb": "Introduction",
@@ -53,7 +53,7 @@ var relearn_searchindex = [
     "description": "Configuration Reference",
     "tags": [],
     "title": "Reference",
-    "uri": "/reference/"
+    "uri": "/fisk-ai/reference/"
   },
   {
     "breadcrumb": "Introduction \u003e Design \u003e Code Map",
@@ -61,7 +61,7 @@ var relearn_searchindex = [
     "description": "How a fisk command tree becomes the tool set an LLM may call, filtered by tags and rules.",
     "tags": [],
     "title": "Tools and Introspection",
-    "uri": "/design/codemap/tools/"
+    "uri": "/fisk-ai/design/codemap/tools/"
   },
   {
     "breadcrumb": "Introduction",
@@ -69,7 +69,7 @@ var relearn_searchindex = [
     "description": "How Fisk AI is built: architecture, subsystems, and the flows that tie them together.",
     "tags": [],
     "title": "Design",
-    "uri": "/design/"
+    "uri": "/fisk-ai/design/"
   },
   {
     "breadcrumb": "Introduction \u003e Design \u003e Code Map",
@@ -77,7 +77,7 @@ var relearn_searchindex = [
     "description": "Call the model, run the tools it asks for, feed the results back, all under a budget.",
     "tags": [],
     "title": "The Agent Loop",
-    "uri": "/design/codemap/agent-loop/"
+    "uri": "/fisk-ai/design/codemap/agent-loop/"
   },
   {
     "breadcrumb": "Introduction \u003e Design \u003e Code Map",
@@ -85,7 +85,7 @@ var relearn_searchindex = [
     "description": "How every command runs sandboxed by construction, and how a human gates the ones that matter.",
     "tags": [],
     "title": "Safety and Human in the Loop",
-    "uri": "/design/codemap/safety/"
+    "uri": "/fisk-ai/design/codemap/safety/"
   },
   {
     "breadcrumb": "Introduction \u003e Design \u003e Code Map",
@@ -93,7 +93,7 @@ var relearn_searchindex = [
     "description": "A run journaled event by event, so it can be suspended, resumed, or survive a crash.",
     "tags": [],
     "title": "Sessions and Resume",
-    "uri": "/design/codemap/sessions/"
+    "uri": "/fisk-ai/design/codemap/sessions/"
   },
   {
     "breadcrumb": "Introduction \u003e Design \u003e Code Map",
@@ -101,7 +101,7 @@ var relearn_searchindex = [
     "description": "A small key/value store that lets the model keep durable notes across separate runs.",
     "tags": [],
     "title": "Memory",
-    "uri": "/design/codemap/memory/"
+    "uri": "/fisk-ai/design/codemap/memory/"
   },
   {
     "breadcrumb": "Introduction \u003e Design \u003e Code Map",
@@ -109,7 +109,7 @@ var relearn_searchindex = [
     "description": "The full-screen runner, its event-driven render, and the single-writer discipline that keeps it safe.",
     "tags": [],
     "title": "The Terminal UI",
-    "uri": "/design/codemap/terminal-ui/"
+    "uri": "/fisk-ai/design/codemap/terminal-ui/"
   },
   {
     "breadcrumb": "Introduction \u003e Design \u003e Code Map",
@@ -117,7 +117,7 @@ var relearn_searchindex = [
     "description": "Serving the same tools to an MCP client or a peer agent over NATS, and importing a peer's tools.",
     "tags": [],
     "title": "Interoperability: MCP and A2A",
-    "uri": "/design/codemap/interop/"
+    "uri": "/fisk-ai/design/codemap/interop/"
   },
   {
     "breadcrumb": "Introduction \u003e Design \u003e Code Map",
@@ -125,7 +125,7 @@ var relearn_searchindex = [
     "description": "The command surface, a source-file map by package, the key types, and a glossary.",
     "tags": [],
     "title": "Reference and Map",
-    "uri": "/design/codemap/reference-map/"
+    "uri": "/fisk-ai/design/codemap/reference-map/"
   },
   {
     "breadcrumb": "Introduction",
@@ -133,7 +133,7 @@ var relearn_searchindex = [
     "description": "",
     "tags": [],
     "title": "Categories",
-    "uri": "/categories/"
+    "uri": "/fisk-ai/categories/"
   },
   {
     "breadcrumb": "Introduction",
@@ -141,6 +141,6 @@ var relearn_searchindex = [
     "description": "",
     "tags": [],
     "title": "Tags",
-    "uri": "/tags/"
+    "uri": "/fisk-ai/tags/"
   }
 ]
