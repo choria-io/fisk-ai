@@ -1,4 +1,4 @@
-baseURL = "https://ai.choria.io/"
+baseURL = "https://choria-io.github.io/fisk-ai/"
 languageCode = "en-us"
 title = "Fisk AI"
 theme = "hugo-theme-relearn"
