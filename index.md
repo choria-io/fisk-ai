@@ -72,8 +72,8 @@ harness:
   human_in_the_loop:
     enabled: true
     
-  # Map nats command tags of impact to HITL prompts - any command that changes the system requires
-  # human approval
+  # Map nats command tags of impact to HITL prompts - any 
+  # command that changes the system requires human approval
   confirm_tags: [impact:rw]
   
 

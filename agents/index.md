@@ -11,6 +11,17 @@ and deterministic manner.
 Building an agent resembles building a CLI tool: describe the goals, give broad guidance, supply tools to interact with
 the world deterministically, then run it on a shell like any other utility.
 
+## Installation
+
+On a Mac you can install `fisk-ai` using homebrew:
+
+```nohighlight
+brew tap choria-io/tap
+brew install choria-io/tap/fisk-ai
+```
+
+Other Operating System users can download the latest release from the [releases page](https://github.com/choria-io/fisk-ai/releases).
+
 ## Basic agent
 
 This example builds an AI agent that speaks in `cowsay` bubbles.
