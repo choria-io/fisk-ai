@@ -98,4 +98,4 @@ We can now prompt this agent knowing it can only interact with these `nats` comm
 
  > How many consumers does the biggest stream (by messages) have? Show their names and when last they had activity
 
-![](/screenshot.png)
+![](screenshot.png)
