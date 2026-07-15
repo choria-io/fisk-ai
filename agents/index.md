@@ -377,6 +377,28 @@ exclude:
 
 This excludes any command that has the `scope:system` tag.
 
+### Global flags
+
+A wrapped binary often has application-level global flags that apply to every subcommand. `nats`, for example, has
+`--context` to select a stored connection profile, alongside sensitive globals such as `--user` and `--password`. By
+default none of these are exposed to the model. `global_flags` is an allowlist of the globals you want the model to be
+able to set per command:
+
+```yaml
+global_flags:
+  - context
+```
+
+Each named global becomes an argument on every leaf command tool, so the model can run `nats stream ls` against a chosen
+context without you hard-wiring one. Names are the long flag name, with or without the leading dashes, and are validated
+against the binary's real global flags at load; a name matching none is an error. Hidden and framework flags (like
+`--help`) cannot be exposed, and a global that clashes with a command's own flag or argument is skipped for that command.
+A global the application marks required is always exposed, whether or not it is listed, since the command cannot run
+without it.
+
+Run `fisk-ai info` to see which globals a binary exposes; it lists the application's global flags and marks the ones you
+have allowlisted.
+
 ### Session snapshots and resumption
 
 #### Creating a snapshot
