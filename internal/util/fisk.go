@@ -86,6 +86,31 @@ type Tool struct {
 	// ToolsForApp; it is empty for tools built directly with ApplicationTools,
 	// whose handlers therefore cannot run until it is populated.
 	AppPath string
+	// GlobalFlags are the application-level (global) flags exposed on this command.
+	// They are resolved once from the configured allowlist (unioned with the
+	// application's required globals) and filtered so none collides with the
+	// command's own flags or arguments. They are merged into the tool's input schema
+	// (InputSchema) and, when the model supplies them, rendered onto the command line
+	// after the command path (argv). It is nil when no globals are exposed.
+	GlobalFlags []*fisk.FlagModel
+}
+
+// frameworkGlobalFlags are the application-level flags fisk adds automatically:
+// the help variants, shell completion hooks, the introspection hook, and version.
+// None is ever exposable to the model. Exposing --help or --version would make a
+// tool print usage or a version string instead of running, and the completion
+// hooks are noise. The list mirrors fisk's own internal ignore set, plus version.
+var frameworkGlobalFlags = map[string]bool{
+	"help":                   true,
+	"help-long":              true,
+	"help-man":               true,
+	"help-llm":               true,
+	"help-compact":           true,
+	"completion-bash":        true,
+	"completion-script-bash": true,
+	"completion-script-zsh":  true,
+	"fisk-introspect":        true,
+	"version":                true,
 }
 
 // Name is the LLM tool name: the command path joined with "_", e.g. the command
@@ -203,9 +228,86 @@ func (t *Tool) ConfirmTrigger(extraTags []string) string {
 
 // InputSchema is the Anthropic-restricted JSON schema for the command, as
 // precomputed by fisk during introspection. ApplicationTools guarantees it is
-// present, so it is non-nil for any tool obtained that way.
+// present, so it is non-nil for any tool obtained that way. When the tool exposes
+// application global flags they are merged in as extra properties.
 func (t *Tool) InputSchema() map[string]any {
-	return t.Model.RestrictedSchema
+	if len(t.GlobalFlags) == 0 {
+		return t.Model.RestrictedSchema
+	}
+
+	return mergeGlobalFlags(t.Model.RestrictedSchema, t.GlobalFlags)
+}
+
+// mergeGlobalFlags returns a copy of the command's restricted schema with the
+// exposed global flags added as properties. It clones the schema, its properties
+// map and its required list rather than mutating the shared model schema, which is
+// reused on every request, so the injected properties cannot leak into the cached
+// schema or accumulate across calls. A global that is required and carries no
+// default is added to the required list; otherwise it is optional. A global whose
+// name is already a property is left to the command's own definition (it is
+// filtered by applicableGlobals before it reaches here; this is belt and braces).
+func mergeGlobalFlags(schema map[string]any, globals []*fisk.FlagModel) map[string]any {
+	out := make(map[string]any, len(schema)+1)
+	for k, v := range schema {
+		out[k] = v
+	}
+
+	props := map[string]any{}
+	if existing, ok := schema["properties"].(map[string]any); ok {
+		for k, v := range existing {
+			props[k] = v
+		}
+	}
+
+	required := append([]string{}, schemaRequired(schema["required"])...)
+
+	for _, f := range globals {
+		if _, exists := props[f.Name]; exists {
+			continue
+		}
+		props[f.Name] = globalFlagSchema(f)
+		if f.Required && len(f.Default) == 0 {
+			required = append(required, f.Name)
+		}
+	}
+
+	out["properties"] = props
+	if len(required) > 0 {
+		out["required"] = required
+	}
+
+	return out
+}
+
+// globalFlagSchema builds the JSON schema property for an exposed global flag. It
+// reuses the flag's own restricted schema, which after the introspection JSON
+// round-trip (a flag's Value does not survive it) resolves to a boolean for a
+// boolean flag and a string otherwise, wrapped in an array for a cumulative flag;
+// a richer scalar type such as int or duration degrades to string, which is
+// harmless as the binary re-parses and validates the value. A flag advertising
+// completions is given them as an enum, and the description is prefixed so the
+// model understands the argument is an application-wide global present on every
+// command rather than a quirk of this one.
+func globalFlagSchema(f *fisk.FlagModel) map[string]any {
+	schema := f.RestrictedSchema()
+
+	if f.Help != "" {
+		schema["description"] = "Global flag: " + f.Help
+	} else {
+		schema["description"] = "Global flag"
+	}
+
+	if len(f.Completions) > 0 {
+		if typ, _ := schema["type"].(string); typ == "string" {
+			opts := make([]any, len(f.Completions))
+			for i, c := range f.Completions {
+				opts[i] = c
+			}
+			schema["enum"] = opts
+		}
+	}
+
+	return schema
 }
 
 // MissingRequired returns the names of the command's required parameters that the
@@ -319,12 +421,80 @@ func (t *Tool) argv(args json.RawMessage) ([]string, error) {
 		args = json.RawMessage("{}")
 	}
 
-	tail, err := t.Model.ArgsFromJSON(args)
+	globalTail, localArgs, err := t.splitGlobalArgs(args)
+	if err != nil {
+		return nil, err
+	}
+
+	tail, err := t.Model.ArgsFromJSON(localArgs)
 	if err != nil {
 		return nil, fmt.Errorf("building command line for %q: %w", t.Command(), err)
 	}
 
-	return append(append([]string{}, t.Path...), tail...), nil
+	// Global flags are placed after the command path and ahead of the command's own
+	// flags and the "--" positional separator that ArgsFromJSON emits. fisk parses
+	// application-level flags at any position, and keeping them before "--" means
+	// they are always read as flags, never as positional values.
+	argv := append([]string{}, t.Path...)
+	argv = append(argv, globalTail...)
+	argv = append(argv, tail...)
+
+	return argv, nil
+}
+
+// splitGlobalArgs separates the model's argument object into the exposed global
+// flags and the command's own arguments. It renders the globals into command-line
+// tokens and returns the remaining arguments as a JSON object for the command's
+// own ArgsFromJSON. The globals must be rendered separately: the command's schema
+// does not know them, so ArgsFromJSON would reject them as unknown properties.
+//
+// The globals are rendered by a synthetic command carrying only the exposed global
+// flags, so fisk's own renderer decides the boolean, negatable and cumulative
+// forms rather than this package re-deriving them. A non-object input is passed
+// through unchanged for the command's ArgsFromJSON to reject with fisk's own error.
+func (t *Tool) splitGlobalArgs(args json.RawMessage) (globalTail []string, localArgs json.RawMessage, err error) {
+	if len(t.GlobalFlags) == 0 {
+		return nil, args, nil
+	}
+
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(args, &obj); err != nil {
+		return nil, args, nil
+	}
+
+	globalNames := make(map[string]bool, len(t.GlobalFlags))
+	for _, f := range t.GlobalFlags {
+		globalNames[f.Name] = true
+	}
+
+	globalObj := map[string]json.RawMessage{}
+	localObj := map[string]json.RawMessage{}
+	for k, v := range obj {
+		if globalNames[k] {
+			globalObj[k] = v
+			continue
+		}
+		localObj[k] = v
+	}
+
+	if len(globalObj) > 0 {
+		globalJSON, err := json.Marshal(globalObj)
+		if err != nil {
+			return nil, nil, fmt.Errorf("building global flags for %q: %w", t.Command(), err)
+		}
+		synthetic := &fisk.CmdModel{FlagGroupModel: &fisk.FlagGroupModel{Flags: t.GlobalFlags}}
+		globalTail, err = synthetic.ArgsFromJSON(globalJSON)
+		if err != nil {
+			return nil, nil, fmt.Errorf("building global flags for %q: %w", t.Command(), err)
+		}
+	}
+
+	localJSON, err := json.Marshal(localObj)
+	if err != nil {
+		return nil, nil, fmt.Errorf("building command line for %q: %w", t.Command(), err)
+	}
+
+	return globalTail, localJSON, nil
 }
 
 // CommandLine resolves the model's JSON arguments into the full command line a
@@ -528,9 +698,18 @@ func capOutput(s string) (string, bool) {
 // The model must come from a fisk introspection recent enough to precompute the
 // per-command schemas; if a leaf is missing its schema (an older fisk) it returns
 // an error rather than producing tools with empty schemas.
-func ApplicationTools(app *fisk.ApplicationModel) ([]*Tool, error) {
+//
+// globalFlags is the operator's allowlist of application global flags to expose to
+// the model (see config.Config.GlobalFlags). Every leaf tool carries the exposed
+// globals applicable to it; a name that matches no exposable global is an error.
+func ApplicationTools(app *fisk.ApplicationModel, globalFlags ...string) ([]*Tool, error) {
 	if app == nil {
 		return nil, fmt.Errorf("application model is nil")
+	}
+
+	exposed, err := resolveExposedGlobals(app, globalFlags)
+	if err != nil {
+		return nil, err
 	}
 
 	var tools []*Tool
@@ -546,9 +725,92 @@ func ApplicationTools(app *fisk.ApplicationModel) ([]*Tool, error) {
 		if t.Model.RestrictedSchema == nil {
 			return nil, fmt.Errorf("command %q has no precomputed schema; introspect the application with a current fisk", t.Command())
 		}
+		t.GlobalFlags = applicableGlobals(exposed, t.Model)
 	}
 
 	return tools, nil
+}
+
+// resolveExposedGlobals selects the application global flags to expose to the model
+// from the model's application-level flags. A flag is exposed when it is named in
+// the allowlist or when the application marks it required: a required global is
+// always exposed, listed or not, because the command cannot run without it. A name
+// that matches no global at all, or one that resolves to a framework flag (help,
+// version, ...) or a hidden flag, is an error, so a typo or an attempt to surface a
+// sensitive-by-omission flag fails loudly at load rather than silently exposing
+// nothing. The two error cases are distinguished so the operator is not sent
+// hunting for a typo that is not there.
+func resolveExposedGlobals(app *fisk.ApplicationModel, allowlist []string) ([]*fisk.FlagModel, error) {
+	byName := map[string]*fisk.FlagModel{}
+	if app.FlagGroupModel != nil {
+		for _, f := range app.Flags {
+			byName[f.Name] = f
+		}
+	}
+
+	var out []*fisk.FlagModel
+	seen := map[string]bool{}
+
+	for _, name := range allowlist {
+		f, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("global_flags entry %q matches no global flag of application %q; run `fisk-ai info` to list the exposable global flags", name, app.Name)
+		}
+		if frameworkGlobalFlags[f.Name] || f.Hidden {
+			return nil, fmt.Errorf("global_flags entry %q is a hidden or framework flag and cannot be exposed to the model; only application-defined global flags can be exposed", name)
+		}
+		if seen[f.Name] {
+			continue
+		}
+		seen[f.Name] = true
+		out = append(out, f)
+	}
+
+	// A required global is always exposed, listed or not: the command cannot run
+	// without it, so the model must be able to supply it.
+	if app.FlagGroupModel != nil {
+		for _, f := range app.Flags {
+			if !f.Required || seen[f.Name] || frameworkGlobalFlags[f.Name] {
+				continue
+			}
+			seen[f.Name] = true
+			out = append(out, f)
+		}
+	}
+
+	return out, nil
+}
+
+// applicableGlobals returns the exposed globals that do not collide with the
+// command's own flags or positional arguments. A command that already defines a
+// flag or argument of the same name keeps its own: the local one wins and the
+// global is skipped for that command, so a call can never be ambiguous.
+func applicableGlobals(exposed []*fisk.FlagModel, cmd *fisk.CmdModel) []*fisk.FlagModel {
+	if len(exposed) == 0 {
+		return nil
+	}
+
+	local := map[string]bool{}
+	if cmd.FlagGroupModel != nil {
+		for _, f := range cmd.Flags {
+			local[f.Name] = true
+		}
+	}
+	if cmd.ArgGroupModel != nil {
+		for _, a := range cmd.Args {
+			local[a.Name] = true
+		}
+	}
+
+	var out []*fisk.FlagModel
+	for _, f := range exposed {
+		if local[f.Name] {
+			continue
+		}
+		out = append(out, f)
+	}
+
+	return out
 }
 
 // commandTools recursively turns cmd and its subcommands into tools. prefix is
@@ -666,13 +928,13 @@ func matchesFilter(t *Tool, filter *config.ToolFilter, patterns []*regexp.Regexp
 // travels with the tools, so a tool that does not know how to run cannot be
 // produced. Use ApplicationTools directly only when an executable path is not
 // needed (for example to inspect or filter the command tree).
-func ToolsForApp(appPath string) ([]*Tool, error) {
+func ToolsForApp(appPath string, globalFlags ...string) ([]*Tool, error) {
 	model, err := FetchFiskAppModel(appPath)
 	if err != nil {
 		return nil, fmt.Errorf("introspecting %q: %w", appPath, err)
 	}
 
-	tools, err := ApplicationTools(model)
+	tools, err := ApplicationTools(model, globalFlags...)
 	if err != nil {
 		return nil, err
 	}
@@ -698,4 +960,51 @@ func FetchFiskAppModel(appPath string) (*fisk.ApplicationModel, error) {
 	}
 
 	return &appDef, nil
+}
+
+// GlobalFlagInfo describes an application global flag for display by the info
+// command: its name and help, whether the current configuration exposes it to the
+// model, and whether the application marks it required (which exposes it
+// regardless of the allowlist).
+type GlobalFlagInfo struct {
+	Name     string
+	Help     string
+	Exposed  bool
+	Required bool
+}
+
+// AppGlobalFlags introspects the application at cfg.ApplicationPath and returns its
+// exposable global flags: every application-level flag that is not hidden or a
+// framework flag (help, version, ...). Each is marked with whether cfg exposes it,
+// either by naming it under global_flags or because the application marks it
+// required. It backs the info command's listing of which globals exist and which
+// the operator has allowlisted.
+func AppGlobalFlags(cfg *config.Config) ([]GlobalFlagInfo, error) {
+	model, err := FetchFiskAppModel(cfg.ApplicationPath)
+	if err != nil {
+		return nil, fmt.Errorf("introspecting %q: %w", cfg.ApplicationPath, err)
+	}
+
+	allow := map[string]bool{}
+	for _, name := range cfg.GlobalFlagNames() {
+		allow[name] = true
+	}
+
+	var out []GlobalFlagInfo
+	if model.FlagGroupModel == nil {
+		return out, nil
+	}
+	for _, f := range model.Flags {
+		if f.Hidden || frameworkGlobalFlags[f.Name] {
+			continue
+		}
+		out = append(out, GlobalFlagInfo{
+			Name:     f.Name,
+			Help:     f.Help,
+			Exposed:  allow[f.Name] || f.Required,
+			Required: f.Required,
+		})
+	}
+
+	return out, nil
 }

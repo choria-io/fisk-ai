@@ -153,6 +153,15 @@ func newLive(screen tcell.Screen, meta Meta, noColor bool, suspend func()) *Live
 	// it, so the static transcript viewer never shows a card. A resumed session skips it
 	// too: its restored transcript is drawn at once, so the card would only flash and go.
 	if !meta.Resume {
+		// Seed the body with the prompt the run is acting on, styled like a chat follow-up,
+		// so once the startup card lifts the operator's request stays as the first line above
+		// the response, matching how the resumed run and static viewer replay message zero. A
+		// resumed session already carries this line in its restored transcript, so it is only
+		// added on a fresh run. Pre-draw appendLine just buffers the line; the first draw
+		// renders it at the real width.
+		if q := strings.TrimSpace(meta.Query); q != "" {
+			l.v.appendLine(Line{Kind: LinePrompt, Text: q})
+		}
 		l.v.enableSplash(meta)
 	}
 	l.v.app.SetScreen(screen)

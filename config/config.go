@@ -50,6 +50,18 @@ type Config struct {
 	Exclude *ToolFilter `json:"exclude,omitempty" yaml:"exclude,omitempty"`
 	// Include restricts tools to a specific set; it can never include `ai:deny`.
 	Include *ToolFilter `json:"include,omitempty" yaml:"include,omitempty"`
+	// GlobalFlags is an allowlist of the wrapped application's global (application-
+	// level) flag names to expose to the model as an argument on every leaf command
+	// tool. It is how an operator surfaces a safe global such as nats's --context,
+	// which selects a stored connection profile, while keeping sensitive globals such
+	// as --user and --password hidden from the model. A name is the long flag name,
+	// with or without the leading dashes; each is validated against the application's
+	// real global flags when tools are loaded, and a name matching no exposable global
+	// is an error. Hidden and framework flags (help, version, ...) cannot be exposed. A
+	// name that collides with a command's own flag or argument is skipped for that
+	// command. A global the application marks required is always exposed, listed here
+	// or not, since the command cannot run without it.
+	GlobalFlags []string `json:"global_flags,omitempty" yaml:"global_flags,omitempty"`
 	// RemoteAgents are remote agents we can talk to using a2a-like behaviors.
 	RemoteAgents []RemoteAgent `json:"remote_agents,omitempty" yaml:"remote_agents,omitempty"`
 	// RemoteTools are remote agents we pull in all the tools of.
@@ -611,6 +623,7 @@ func (c *Config) prepare() error {
 	}
 
 	c.Harness.ConfirmTags = normalizeTags(c.Harness.ConfirmTags)
+	c.GlobalFlags = normalizeGlobalFlags(c.GlobalFlags)
 
 	if c.Expose != nil && c.Expose.Agent != nil && c.Expose.Agent.MCP != nil {
 		mode, err := normalizeConfirmOverMCP(c.Expose.Agent.MCP.ConfirmOverMCP)
@@ -642,6 +655,36 @@ func normalizeConfirmOverMCP(v string) (string, error) {
 	default:
 		return "", fmt.Errorf("invalid confirm_over_mcp %q: must be auto, always or never", v)
 	}
+}
+
+// GlobalFlagNames returns the configured allowlist of application global flag
+// names to expose to the model. prepare normalizes the stored slice (trim, strip
+// leading dashes, de-duplicate, drop empties). It is nil when none are set.
+func (c *Config) GlobalFlagNames() []string {
+	return c.GlobalFlags
+}
+
+// normalizeGlobalFlags trims each global flag name, strips its leading dashes so
+// an operator can write the name as they type it on the command line (--context
+// or context), drops empties, and removes duplicates while preserving first-seen
+// order.
+func normalizeGlobalFlags(names []string) []string {
+	if len(names) == 0 {
+		return names
+	}
+
+	seen := make(map[string]bool, len(names))
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimLeft(strings.TrimSpace(name), "-")
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+
+	return out
 }
 
 // normalizeTags trims surrounding whitespace from each tag, drops empties, and

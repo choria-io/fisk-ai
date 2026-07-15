@@ -219,7 +219,7 @@ func TruncateString(s string, max int) string {
 // applying the configured include and exclude filters. The unconditional first
 // pass is what enforces ai:deny even when neither filter is set.
 func LoadTools(cfg *config.Config) ([]*Tool, error) {
-	tools, err := ToolsForApp(cfg.ApplicationPath)
+	tools, err := ToolsForApp(cfg.ApplicationPath, cfg.GlobalFlagNames()...)
 	if err != nil {
 		return nil, err
 	}

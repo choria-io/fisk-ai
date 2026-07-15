@@ -303,9 +303,9 @@ func newViewer(meta Meta, lines []Line, noColor, follow bool) *viewer {
 	v.repaintStatus()
 
 	main := tview.NewFlex().SetDirection(tview.FlexRow)
-	// A header band above the viewport shows the build version and a preview of the
-	// query, framing the transcript against the statusbar below. It is omitted when
-	// there is nothing to show so a bare viewer keeps its original two-band layout.
+	// A header band above the viewport shows the build version and, in a chat run, a
+	// [chat] marker, framing the transcript against the statusbar below. It is omitted
+	// when there is nothing to show so a bare viewer keeps its original two-band layout.
 	if header := headerText(meta); header != "" {
 		bar := tview.NewTextView().SetDynamicColors(true)
 		bar.SetTextColor(tcell.ColorWhite)
@@ -1433,14 +1433,10 @@ func styleLine(kind LineKind, escaped string) string {
 	}
 }
 
-// headerQueryLen bounds the query preview in the header bar; the rest is truncated.
-const headerQueryLen = 80
-
-// headerText is the top bar: the build version and a preview of the query the agent
-// was run with. It returns "" when neither is set so the caller can drop the band.
-// The query is model-adjacent untrusted text, so it is sanitized, collapsed to a
-// single line, truncated on rune boundaries, and escaped, matching the defenses the
-// rest of the bars use.
+// headerText is the top bar: the build version and, in a chat run, a [chat] marker. The
+// prompt itself is no longer shown here; it leads the transcript body as a prompt line so
+// it stays with the response rather than sitting truncated in the bar. It returns "" when
+// nothing is set so the caller can drop the band.
 func headerText(meta Meta) string {
 	parts := []string{"o(((c"}
 	if meta.Version != "" {
@@ -1450,10 +1446,6 @@ func headerText(meta Meta) string {
 		// The header has dynamic colors on, so a bracketed word would be read as a tag;
 		// escape it so the brackets render literally.
 		parts = append(parts, tview.Escape("[chat]"))
-	}
-	if meta.Query != "" {
-		q := strings.Join(strings.Fields(util.SanitizeForDisplay(meta.Query)), " ")
-		parts = append(parts, "query: "+tview.Escape(truncateRunes(q, headerQueryLen)))
 	}
 	if len(parts) == 0 {
 		return ""

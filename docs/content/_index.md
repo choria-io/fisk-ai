@@ -26,11 +26,6 @@ Built-in tools for HITL and Memory complements those from Fisk.
 {{% card title="Supports Local Models" %}}
 Host local models using ollama, llama.cpp, LM Studio and any other provider that supports the Anthropic API
 {{% /card %}}
-{{% card title="NATS-Based A2A" %}}
-Agents can cooperate, share Tools and collaborate using a NATS-based Agent-to-Agent protocol. 
-
-Choria Protocol support planned for when Authentication, Authorization and Auditing matters. 
-{{% /card %}}
 {{% card title="Loves App Builder" %}}
 Fisk AI is tailor-made to create AI Agents using just YAML files and utilities you already have by targeting [App Builder](https://choria-io.github.io/appbuilder/) as tool provider
 

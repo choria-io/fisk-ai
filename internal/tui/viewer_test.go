@@ -266,21 +266,22 @@ var _ = Describe("transcript viewer", func() {
 	})
 
 	Describe("header", func() {
-		It("Should show just the logo when there is no version or query", func() {
+		It("Should show just the logo when there is no version", func() {
 			h := headerText(Meta{Title: "run-1", Model: "opus"})
 			Expect(h).To(ContainSubstring("o(((c"))
 			Expect(h).NotTo(ContainSubstring("fisk-ai "))
-			Expect(h).NotTo(ContainSubstring("query:"))
 		})
 
-		It("Should show the version and a query preview", func() {
-			h := headerText(Meta{Version: "v1.2.3", Query: "delete the orders stream"})
+		It("Should show the version and the chat marker", func() {
+			h := headerText(Meta{Version: "v1.2.3", Interactive: true})
 			Expect(h).To(ContainSubstring("fisk-ai v1.2.3"))
-			Expect(h).To(ContainSubstring("query: delete the orders stream"))
+			Expect(h).To(ContainSubstring("chat"))
 		})
 
-		It("Should collapse a multi-line query onto one line", func() {
-			Expect(headerText(Meta{Query: "line one\n\tline two"})).To(ContainSubstring("query: line one line two"))
+		It("Should never carry the query in the header, that leads the body instead", func() {
+			h := headerText(Meta{Version: "v1.2.3", Query: "delete the orders stream"})
+			Expect(h).NotTo(ContainSubstring("query"))
+			Expect(h).NotTo(ContainSubstring("delete the orders stream"))
 		})
 
 		It("Should truncate on rune boundaries, never splitting a character", func() {
@@ -289,10 +290,23 @@ var _ = Describe("transcript viewer", func() {
 			Expect(truncateRunes("héllo", 2)).To(Equal("hé..."))
 		})
 
-		It("Should draw the header band and render query markup literally", func() {
-			text := drawViewer(Meta{Version: "v9", Query: "see [red]this"}, []Line{{Kind: LineNarration, Text: "hi"}})
+		It("Should draw the header band without the query", func() {
+			text := drawViewer(Meta{Version: "v9", Query: "see this"}, []Line{{Kind: LineNarration, Text: "hi"}})
 			Expect(text).To(ContainSubstring("fisk-ai v9"))
-			Expect(text).To(ContainSubstring("[red]this"))
+			Expect(text).NotTo(ContainSubstring("see this"))
+		})
+	})
+
+	Describe("prompt line", func() {
+		It("Should render a prompt line with the marker and escape markup literally", func() {
+			text := drawViewer(Meta{}, []Line{{Kind: LinePrompt, Text: "see [red]this"}})
+			Expect(text).To(ContainSubstring("> see [red]this"))
+		})
+
+		It("Should collapse nothing but sanitize a multi-line prompt", func() {
+			text := drawViewer(Meta{}, []Line{{Kind: LinePrompt, Text: "line one\nline two"}})
+			Expect(text).To(ContainSubstring("> line one"))
+			Expect(text).To(ContainSubstring("line two"))
 		})
 	})
 
