@@ -778,3 +778,179 @@ var _ = Describe("MissingRequired", func() {
 		Expect(msg).To(Equal(`tool "do" was called without required parameter(s): subject. required: subject; optional: level`))
 	})
 })
+
+var _ = Describe("Global flags", func() {
+	// globalApp builds an application with a leaf command "server ls", a mix of
+	// global flags, and returns its introspected model. The command carries its own
+	// flag so collisions can be exercised.
+	globalApp := func() *fisk.Application {
+		app := fisk.New("nats", "nats app")
+		app.Flag("context", "Configuration context").String()
+		app.Flag("user", "Username or Token").String()
+		srv := app.Command("server", "server commands")
+		srv.Command("ls", "list servers").Flag("expand", "expand output").Bool()
+		return app
+	}
+
+	It("Should expose only allowlisted globals and inject them into every leaf schema", func() {
+		tools, err := ApplicationTools(introspect(globalApp()), "context")
+		Expect(err).NotTo(HaveOccurred())
+
+		tool := toolsByName(tools)["server_ls"]
+		Expect(tool).NotTo(BeNil())
+
+		props, ok := tool.InputSchema()["properties"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(props).To(HaveKey("context"))
+		Expect(props).NotTo(HaveKey("user"))
+		Expect(props).To(HaveKey("expand"))
+
+		ctx, ok := props["context"].(map[string]any)
+		Expect(ok).To(BeTrue())
+		Expect(ctx).To(HaveKeyWithValue("type", "string"))
+		Expect(ctx).To(HaveKeyWithValue("description", "Global flag: Configuration context"))
+	})
+
+	It("Should not mutate the shared command schema when injecting globals", func() {
+		model := introspect(globalApp())
+		tools, err := ApplicationTools(model, "context")
+		Expect(err).NotTo(HaveOccurred())
+		tool := toolsByName(tools)["server_ls"]
+
+		// The precomputed schema on the model must not gain the global property, and
+		// two InputSchema calls must agree, so the injection is a copy each time.
+		_ = tool.InputSchema()
+		second := tool.InputSchema()
+		Expect(second["properties"]).To(HaveKey("context"))
+
+		modelProps, _ := tool.Model.RestrictedSchema["properties"].(map[string]any)
+		Expect(modelProps).NotTo(HaveKey("context"))
+	})
+
+	It("Should render an exposed global onto the command line after the command path", func() {
+		tools, err := ApplicationTools(introspect(globalApp()), "context")
+		Expect(err).NotTo(HaveOccurred())
+		tool := toolsByName(tools)["server_ls"]
+
+		cmdline, err := tool.CommandLine(json.RawMessage(`{"context":"prod","expand":true}`))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cmdline).To(Equal("server ls --context=prod --expand"))
+	})
+
+	It("Should place a global ahead of the positional separator", func() {
+		app := fisk.New("nats", "nats app")
+		app.Flag("context", "Configuration context").String()
+		pub := app.Command("pub", "publish")
+		pub.Arg("subject", "the subject").Required().String()
+
+		tools, err := ApplicationTools(introspect(app), "context")
+		Expect(err).NotTo(HaveOccurred())
+		tool := toolsByName(tools)["pub"]
+
+		cmdline, err := tool.CommandLine(json.RawMessage(`{"context":"prod","subject":"orders"}`))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cmdline).To(Equal("pub --context=prod -- orders"))
+	})
+
+	It("Should omit a global the model does not supply", func() {
+		tools, err := ApplicationTools(introspect(globalApp()), "context")
+		Expect(err).NotTo(HaveOccurred())
+		tool := toolsByName(tools)["server_ls"]
+
+		cmdline, err := tool.CommandLine(json.RawMessage(`{"expand":true}`))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cmdline).To(Equal("server ls --expand"))
+	})
+
+	It("Should render a negatable boolean global using fisk's own form", func() {
+		app := fisk.New("nats", "nats app")
+		app.Flag("trace", "trace protocol").Bool()
+		app.Command("ping", "ping servers")
+
+		tools, err := ApplicationTools(introspect(app), "trace")
+		Expect(err).NotTo(HaveOccurred())
+		tool := toolsByName(tools)["ping"]
+
+		on, err := tool.CommandLine(json.RawMessage(`{"trace":true}`))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(on).To(Equal("ping --trace"))
+
+		off, err := tool.CommandLine(json.RawMessage(`{"trace":false}`))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(off).To(Equal("ping --no-trace"))
+	})
+
+	It("Should surface flag completions as a schema enum", func() {
+		app := fisk.New("nats", "nats app")
+		app.Flag("context", "Configuration context").HintOptions("prod", "dev").String()
+		app.Command("ping", "ping servers")
+
+		tools, err := ApplicationTools(introspect(app), "context")
+		Expect(err).NotTo(HaveOccurred())
+		tool := toolsByName(tools)["ping"]
+
+		props, _ := tool.InputSchema()["properties"].(map[string]any)
+		ctx, _ := props["context"].(map[string]any)
+		Expect(ctx).To(HaveKeyWithValue("enum", ConsistOf("prod", "dev")))
+	})
+
+	It("Should always expose a required global and mark it required in the schema", func() {
+		app := fisk.New("nats", "nats app")
+		app.Flag("account", "the account").Required().String()
+		app.Command("ping", "ping servers")
+
+		// Not listed under global_flags, yet exposed because it is required.
+		tools, err := ApplicationTools(introspect(app))
+		Expect(err).NotTo(HaveOccurred())
+		tool := toolsByName(tools)["ping"]
+
+		props, _ := tool.InputSchema()["properties"].(map[string]any)
+		Expect(props).To(HaveKey("account"))
+		Expect(schemaRequired(tool.InputSchema()["required"])).To(ContainElement("account"))
+		Expect(tool.MissingRequired(json.RawMessage(`{}`))).To(ContainElement("account"))
+	})
+
+	It("Should keep the command's own argument when a global collides by name", func() {
+		// fisk forbids a leaf flag that shadows a global flag, so the reachable
+		// collision is a positional argument sharing the global's name.
+		app := fisk.New("nats", "nats app")
+		app.Flag("context", "global context").String()
+		save := app.Command("save", "save a thing")
+		save.Arg("context", "the local context").Required().String()
+
+		tools, err := ApplicationTools(introspect(app), "context")
+		Expect(err).NotTo(HaveOccurred())
+		tool := toolsByName(tools)["save"]
+		Expect(tool).NotTo(BeNil())
+		Expect(tool.GlobalFlags).To(BeEmpty())
+
+		// The local argument renders normally; the global is not double-added.
+		cmdline, err := tool.CommandLine(json.RawMessage(`{"context":"local"}`))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cmdline).To(Equal("save -- local"))
+	})
+
+	It("Should error when an allowlisted name matches no global flag", func() {
+		_, err := ApplicationTools(introspect(globalApp()), "contxt")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`entry "contxt" matches no global flag`))
+	})
+
+	It("Should error when an allowlisted name is a framework flag", func() {
+		// Introspection strips the framework flags (help, version, ...) from the
+		// model, so they cannot be exposed and resolve as no such global flag.
+		_, err := ApplicationTools(introspect(globalApp()), "help")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring(`entry "help" matches no global flag`))
+	})
+
+	It("Should error when an allowlisted name is a hidden global", func() {
+		app := fisk.New("nats", "nats app")
+		app.Flag("secret", "a hidden global").Hidden().String()
+		app.Command("ping", "ping servers")
+
+		_, err := ApplicationTools(introspect(app), "secret")
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("hidden or framework flag"))
+	})
+})

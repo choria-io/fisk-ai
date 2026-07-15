@@ -72,20 +72,29 @@ func infoAction(_ *fisk.ParseContext) error {
 	tbl.SetOutputMirror(os.Stdout)
 	tbl.SetStyle(table.StyleRounded)
 	tbl.SuppressTrailingSpaces()
-	tbl.AppendHeader(table.Row{"Tool", "Source", "Description", "Tags"})
+	tbl.AppendHeader(table.Row{"Tool", "Source", "Confirm", "Description", "Tags"})
+	// The Confirm column marks the commands a run would gate behind operator
+	// confirmation, so an author can see confirm_tags resolves to the commands they
+	// expect rather than discovering a typo (an unmatched tag) only mid-run. Only the
+	// introspected local tools carry tags; the built-ins and remote tools are not gated
+	// here, so their cell stays blank.
 	for _, t := range tools {
-		tbl.AppendRow(table.Row{t.Name(), "local", util.TruncateString(t.Description(), maxInfoDescriptionLen), strings.Join(t.Tags(), ", ")})
+		confirm := ""
+		if t.NeedsConfirm(cfg.ConfirmTags()) {
+			confirm = "Yes"
+		}
+		tbl.AppendRow(table.Row{t.Name(), "local", confirm, util.TruncateString(t.Description(), maxInfoDescriptionLen), strings.Join(t.Tags(), ", ")})
 	}
 	// Built-in human-in-the-loop tools are not introspected from the application,
 	// so list them too when enabled, to show the full tool set a run would expose.
 	// They carry no tags.
 	for _, b := range util.HITLTools(cfg) {
-		tbl.AppendRow(table.Row{b.Name(), "local", util.TruncateString(b.Description(), maxInfoDescriptionLen), ""})
+		tbl.AppendRow(table.Row{b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), ""})
 	}
 	// Built-in memory tools are likewise not introspected from the application, so
 	// list them when enabled to show the full tool set a run would expose.
 	for _, b := range util.MemoryTools(cfg, nil) {
-		tbl.AppendRow(table.Row{b.Name(), "local", util.TruncateString(b.Description(), maxInfoDescriptionLen), ""})
+		tbl.AppendRow(table.Row{b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), ""})
 	}
 	// Imported remote tools are listed with the host alias as their source, so the
 	// provenance of a tool the prompt may reference is clear.
@@ -99,29 +108,42 @@ func infoAction(_ *fisk.ParseContext) error {
 			// local rows.
 			desc, tags := splitRemoteDescription(rt.Description())
 			desc = strings.ReplaceAll(desc, "\n", " ")
-			tbl.AppendRow(table.Row{rt.Name(), alias, util.TruncateString(desc, maxInfoDescriptionLen), tags})
+			tbl.AppendRow(table.Row{rt.Name(), alias, "", util.TruncateString(desc, maxInfoDescriptionLen), tags})
 		}
 	}
 	tbl.Render()
 
 	printRemoteToolStatus(cfg, imports)
 
-	// Surface which commands a run would gate behind operator confirmation, so an
-	// author can confirm confirm_tags resolves to the commands they expect rather
-	// than discovering a typo (an unmatched tag) only mid-run.
-	var gated []string
-	for _, t := range tools {
-		if t.NeedsConfirm(cfg.ConfirmTags()) {
-			gated = append(gated, t.Name())
-		}
+	// List the application's exposable global flags so an operator can see which
+	// exist and which they have allowlisted under global_flags, closing the loop
+	// between "what can I expose" and the error a bad name would raise at load.
+	globals, err := util.AppGlobalFlags(cfg)
+	if err != nil {
+		return err
 	}
-	if len(gated) > 0 {
-		label := "ai:confirm"
-		if len(cfg.ConfirmTags()) > 0 {
-			label += ", " + strings.Join(cfg.ConfirmTags(), ", ")
+	if len(globals) > 0 {
+		fmt.Println()
+		fmt.Println("Exposable application global flags (add names under global_flags to expose to the model):")
+		keys := make([]string, len(globals))
+		width := 0
+		for i, g := range globals {
+			marker := ""
+			switch {
+			case g.Required:
+				marker = " [exposed, required]"
+			case g.Exposed:
+				marker = " [exposed]"
+			}
+			keys[i] = g.Name + marker
+			if len(keys[i]) > width {
+				width = len(keys[i])
+			}
 		}
 		fmt.Println()
-		fmt.Printf("Commands requiring confirmation (tags: %s): %s\n", label, strings.Join(gated, ", "))
+		for i, g := range globals {
+			fmt.Printf("  %*s: %s\n", width, keys[i], util.TruncateString(g.Help, maxInfoDescriptionLen))
+		}
 	}
 
 	fmt.Println()

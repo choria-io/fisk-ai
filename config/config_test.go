@@ -189,6 +189,23 @@ harness:
 			Expect(cfg.ConfirmTags()).To(Equal([]string{"impact:rw", "admin"}))
 		})
 
+		It("Should normalize global_flags, stripping dashes and de-duplicating", func() {
+			cfg, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+global_flags:
+  - "--context"
+  - "context"
+  - " server "
+  - ""
+`))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.GlobalFlagNames()).To(Equal([]string{"context", "server"}))
+		})
+
 		It("Should normalize confirm_over_mcp case and whitespace", func() {
 			cfg, err := ParseConfig([]byte(`
 identity: agent1

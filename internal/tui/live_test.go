@@ -54,6 +54,38 @@ var _ = Describe("Live", func() {
 		Expect(text).To(ContainSubstring("all done"))
 	})
 
+	It("Should lead a fresh run's body with the prompt so it stays once the card lifts", func() {
+		sim := tcell.NewSimulationScreen("")
+		l := newLive(sim, Meta{Title: "run", Query: "delete the orders stream"}, true, nil)
+
+		done := make(chan error, 1)
+		go func() { done <- l.v.app.Run() }()
+
+		dismissSplash(l, sim)
+		text := screenTextOf(l, sim)()
+
+		l.v.app.Stop()
+		Eventually(done, time.Second).Should(Receive(BeNil()))
+
+		Expect(text).To(ContainSubstring("> delete the orders stream"))
+	})
+
+	It("Should not lead a resumed run's body with the prompt, the transcript replays it", func() {
+		sim := tcell.NewSimulationScreen("")
+		l := newLive(sim, Meta{Title: "run", Query: "delete the orders stream", Resume: true}, true, nil)
+
+		done := make(chan error, 1)
+		go func() { done <- l.v.app.Run() }()
+
+		l.v.app.QueueUpdateDraw(func() {})
+		text := screenText(sim)
+
+		l.v.app.Stop()
+		Eventually(done, time.Second).Should(Receive(BeNil()))
+
+		Expect(text).NotTo(ContainSubstring("> delete the orders stream"))
+	})
+
 	Describe("Run", func() {
 		It("Should show the run output, stay up until quit, and restore stderr", func() {
 			orig := os.Stderr
