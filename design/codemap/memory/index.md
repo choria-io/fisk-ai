@@ -61,5 +61,5 @@ Memory is untrusted data, not instructions. The system note, the index framing, 
 {{% /notice %}}
 
 {{% notice style="tip" title="Next" %}}
-Continue to [The Terminal UI]({{% relref "terminal-ui" %}}) for how a run is presented to an operator.
+Continue to [Knowledge and RAG]({{% relref "knowledge" %}}) for the other opt-in, agent-only data store: a searchable document index.
 {{% /notice %}}
