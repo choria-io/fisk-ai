@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync/atomic"
 	"testing"
@@ -1005,5 +1006,50 @@ var _ = Describe("runner", func() {
 			Expect(rs.Counters.CacheReadTokens).To(Equal(int64(100)))
 			Expect(rs.Counters.CacheCreateTokens).To(Equal(int64(40)))
 		})
+	})
+})
+
+var _ = Describe("Run tool availability guard", func() {
+	// The guard must count every tool source the model can address (application,
+	// built-in and remote), not just the filtered application tools; otherwise a run
+	// whose only tools are native (for example knowledge_search) is wrongly aborted.
+
+	// emptyAppCfg points at a fake fisk application that introspects to zero
+	// commands, so LoadTools succeeds with an empty tool set and the run reaches the
+	// availability guard rather than failing earlier in introspection.
+	emptyAppCfg := func() *config.Config {
+		dir := GinkgoT().TempDir()
+		app := filepath.Join(dir, "fakeapp")
+		Expect(os.WriteFile(app, []byte("#!/bin/sh\necho '{}'\n"), 0o755)).To(Succeed())
+
+		cfg := &config.Config{ApplicationPath: app}
+		cfg.LLM.Model = "test-model"
+		cfg.LLM.Budget.MaxIterations = 1
+		return cfg
+	}
+
+	It("aborts when no application, built-in, or remote tool is available", func() {
+		cfg := emptyAppCfg()
+
+		_, err := Run(context.Background(), Options{Config: cfg, ConfigFile: "agent.yaml"}, nopEvents{}, nil)
+		Expect(err).To(MatchError(ContainSubstring("no tools available after filtering")))
+	})
+
+	It("proceeds past the guard when only a native tool (knowledge_search) is enabled", func() {
+		cfg := emptyAppCfg()
+		cfg.Harness.RAG = &config.RAGConfig{Enabled: true, Directory: GinkgoT().TempDir()}
+
+		// The guard now passes on the knowledge_search built-in, so the run continues
+		// to the model call, which fails fast against an unreachable local endpoint.
+		// The point is only that it is not the "no tools" abort.
+		opts := Options{
+			Config:     cfg,
+			ConfigFile: "agent.yaml",
+			APIKey:     "test",
+			BaseURL:    "http://127.0.0.1:1",
+		}
+		_, err := Run(context.Background(), opts, nopEvents{}, nil)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).ToNot(ContainSubstring("no tools available after filtering"))
 	})
 })

@@ -8,13 +8,14 @@ A quick index into the codebase: what each command does, where each package live
 
 ## Command surface
 
-`main.go` registers six commands on the `fisk-ai` root. Each is defined in its own `*_command.go` file.
+`main.go` registers seven commands on the `fisk-ai` root. Each is defined in its own `*_command.go` file.
 
 | Command | What it does | File |
 |---------|--------------|------|
 | `run` | Drives the agent loop against a prompt; the default face. Flags include `--checkpoint`, `--resume`, `--chat`, `--no-tui`, `--tool-output`. | `run_command.go` |
 | `session` | Lists, shows, and removes checkpointed sessions (`ls`, `show`, `rm`); `show --transcript` opens the viewer. | `session_command.go` |
 | `info` | Prints the resolved tool table, gated commands, and prompt without calling the model. | `info_command.go` |
+| `knowledge` | Builds and inspects the local RAG index behind `knowledge_search` (`index`, `search`, `show`, `sources`, `rm`, `reset`, `doctor`, `stats`); aliased `rag` and `k`. | `rag_command.go` |
 | `mcp` | Serves the tools over MCP for an external client. | `mcp_command.go` |
 | `a2a` | Serves the tools over NATS for peer agents. | `a2a_command.go` |
 | `discover` | Sends an A2A discovery request and prints a peer's agent card. | `discover_command.go` |
@@ -23,12 +24,13 @@ A quick index into the codebase: what each command does, where each package live
 
 | Package | Responsibility | Key files |
 |---------|----------------|-----------|
-| `main` (root) | CLI wiring, flag parsing, mode and UI selection, signal contract. | `main.go`, `run_command.go`, `run_events.go`, `run_tui_events.go`, `resume_replay.go` |
+| `main` (root) | CLI wiring, flag parsing, mode and UI selection, signal contract. | `main.go`, `run_command.go`, `run_events.go`, `run_tui_events.go`, `resume_replay.go`, `rag_command.go` |
 | `config` | The single `agent.yaml` schema, mode-based validation, accessors. | `config.go` |
-| `internal/util` | The shared core: introspection, tool params, built-ins, confirm gate, prompter, LLM call, stats. | `fisk.go`, `anthropic.go`, `builtin.go`, `builtin_memory.go`, `confirm.go`, `prompter.go`, `llm.go` |
+| `internal/util` | The shared core: introspection, tool params, built-ins, confirm gate, prompter, LLM call, stats. | `fisk.go`, `anthropic.go`, `builtin.go`, `builtin_memory.go`, `builtin_rag.go`, `confirm.go`, `prompter.go`, `llm.go` |
 | `internal/agent` | The agentic loop: setup, iteration, events. | `agent.go`, `runner.go`, `events.go` |
 | `internal/runstate` | Durable sessions: records, fold, store, fingerprint, locking. | `record.go`, `state.go`, `store.go`, `filestore.go`, `fingerprint.go` |
 | `internal/memory` | The pluggable memory store and file backend. | `store.go`, `file.go`, `frontmatter.go`, `key.go` |
+| `internal/rag` | The local RAG index: SQLite store, chunking, hybrid search, embeddings, doctor, write lock. | `store.go`, `chunk.go`, `index.go`, `search.go`, `embed.go`, `doctor.go`, `vec.go`, `lock_unix.go` |
 | `internal/tui` | The full-screen runner and transcript viewer. | `viewer.go`, `live.go`, `prompter.go`, `splash.go` |
 | `internal/mcpserver` | Serving tools over MCP. | `mcpserver.go` |
 | `a2a` | Transport-agnostic A2A protocol types. | `messages.go`, `block.go`, `header.go`, `types.go`, `schemas.go` |
@@ -46,6 +48,7 @@ A quick index into the codebase: what each command does, where each package live
 | `runstate.RunState` | The folded, resumable state of a run. | [Sessions and Resume]({{% relref "sessions" %}}) |
 | `runstate.Fingerprint` | The configuration hash that guards a resume. | [Sessions and Resume]({{% relref "sessions" %}}) |
 | `memory.Store` | The pluggable key/value backend interface. | [Memory]({{% relref "memory" %}}) |
+| `rag.Store` | The SQLite-backed knowledge index: chunk, embed, hybrid search. | [Knowledge and RAG]({{% relref "knowledge" %}}) |
 | `tui.Live` | The full-screen live-run controller. | [The Terminal UI]({{% relref "terminal-ui" %}}) |
 | `a2a.Header` | The self-describing framing on every A2A message. | [Interoperability]({{% relref "interop" %}}) |
 
@@ -63,6 +66,12 @@ A quick index into the codebase: what each command does, where each package live
   <dt>Identity</dt><dd>An agent's logical name, defaulting to the binary base name, used for the memory directory and the A2A subjects.</dd>
   <dt>Elicitation</dt><dd>The MCP mechanism by which a served command asks the calling client to approve it.</dd>
   <dt>Agent card</dt><dd>An A2A agent's self-description: name, version, protocols, and tools.</dd>
+  <dt>RAG</dt><dd>Retrieval-augmented generation: searching a local document index and feeding the matches to the model as grounding.</dd>
+  <dt>Chunk</dt><dd>A heading-delimited, size-packed slice of a document, the unit that is indexed, ranked, and cited.</dd>
+  <dt>Lexical tier</dt><dd>The always-on FTS5/BM25 full-text search over chunks; needs no model or server.</dd>
+  <dt>Vector tier</dt><dd>The opt-in semantic search: chunk embeddings in sqlite-vec, matched by nearest neighbor.</dd>
+  <dt>RRF</dt><dd>Reciprocal Rank Fusion: combining the lexical and vector rankings by rank rather than score, with constant K=60.</dd>
+  <dt>Citation</dt><dd>A `relpath#ordinal` token naming a chunk, resolvable back to full text by `knowledge show`.</dd>
 </dl>
 
 {{% notice style="tip" title="Back to the start" %}}

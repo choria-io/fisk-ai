@@ -59,6 +59,10 @@ func infoAction(_ *fisk.ParseContext) error {
 	for _, b := range util.MemoryTools(cfg, nil) {
 		taken[b.Name()] = true
 	}
+	// The knowledge_search tool is likewise enumerated with a nil store.
+	for _, b := range util.RAGTools(cfg, nil) {
+		taken[b.Name()] = true
+	}
 
 	// Discover remote tools best-effort: info must stay usable offline and when a
 	// remote agent is down, so a connection or discovery failure is reported as a
@@ -94,6 +98,10 @@ func infoAction(_ *fisk.ParseContext) error {
 	// Built-in memory tools are likewise not introspected from the application, so
 	// list them when enabled to show the full tool set a run would expose.
 	for _, b := range util.MemoryTools(cfg, nil) {
+		tbl.AppendRow(table.Row{b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), ""})
+	}
+	// The built-in knowledge_search tool, likewise, when RAG is enabled.
+	for _, b := range util.RAGTools(cfg, nil) {
 		tbl.AppendRow(table.Row{b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), ""})
 	}
 	// Imported remote tools are listed with the host alias as their source, so the

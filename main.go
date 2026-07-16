@@ -54,6 +54,7 @@ func main() {
 	registerRunCommand(cmd)
 	registerSessionCommand(cmd)
 	registerInfoAction(cmd)
+	registerRAGCommand(cmd)
 	registerMcpAction(cmd)
 	registerA2AAction(cmd)
 	registerDiscoverAction(cmd)

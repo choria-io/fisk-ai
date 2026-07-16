@@ -7,7 +7,7 @@ description = "A guided deep-dive into the Fisk AI codebase: architecture, subsy
 Fisk AI turns any [fisk](https://github.com/choria-io/fisk)-based command-line application into a safety-first LLM agent. It introspects the application's command tree, exposes the allowed commands as tools, and runs an agent loop against the Anthropic API that calls those tools to satisfy a prompt. This code map explains how that is built.
 
 {{% notice style="note" title="Snapshot" %}}
-Generated 2026-07-14 against commit `7d46134` on branch `main`. Commits after this one may make parts of this map stale.
+Generated 2026-07-16 against commit `e92647e` on branch `main`. Commits after this one may make parts of this map stale.
 
 Create a Code Map for your code using the [Choria Codemap Plugin for Claude Code](https://github.com/choria-io/agent-plugins)
 {{% /notice %}}
@@ -74,8 +74,6 @@ The default `run` face drives the loop until the model produces a final answer o
 </div>
 
 ## Explore
-
-{{% children description="true" %}}
 
 {{% notice style="tip" title="Next" %}}
 Start with [Architecture]({{% relref "architecture" %}}) for the package layering, then follow the subsystem pages in menu order.

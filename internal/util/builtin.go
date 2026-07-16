@@ -83,6 +83,22 @@ func (b *BuiltinTool) TraceLine(input json.RawMessage) string {
 // Description is the tool description presented to the model.
 func (b *BuiltinTool) Description() string { return b.description }
 
+// InputSchema returns the tool's JSON-schema input definition, for a caller that
+// registers the built-in outside the Anthropic tool path (the MCP server, which
+// consumes the raw schema directly).
+func (b *BuiltinTool) InputSchema() map[string]any { return b.schema }
+
+// Call runs the built-in in-process and returns its JSON result string. It is the
+// direct handler seam for a non-agent caller (the MCP server); the agent path uses
+// ExecuteBuiltinUse. The prompter is the operator path a handler uses for a
+// question; a caller with no operator (MCP) passes DefaultDenyPrompter so any
+// unexpected prompt fails closed rather than hanging. A returned error is an
+// invocation failure; an outcome the caller should reason about is carried in the
+// string.
+func (b *BuiltinTool) Call(ctx context.Context, input json.RawMessage, prompter Prompter) (string, error) {
+	return b.handler(ctx, input, prompter)
+}
+
 // ToolParam renders the built-in as an Anthropic tool definition. It is never
 // deferred: built-in tools are few and always relevant, and deferring one behind
 // the tool-search tool could leave it undiscovered.
