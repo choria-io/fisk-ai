@@ -3,7 +3,7 @@ title = "Reference"
 description = "Configuration Reference"
 toc = true
 weight = 30
-pre = "<b>3. </b>"
+pre = "<b>4. </b>"
 +++
 
 A Fisk AI agent is described by a single YAML configuration file. It names the application to drive, selects which of

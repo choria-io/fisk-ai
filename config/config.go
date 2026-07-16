@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -107,6 +108,69 @@ type HarnessConfig struct {
 	// a key/value store that survives across runs. Agent mode only; like the
 	// human-in-the-loop tools it is not exposed over MCP.
 	Memory *MemoryConfig `json:"memory,omitempty" yaml:"memory,omitempty"`
+	// RAG, when enabled, gives the model a built-in knowledge_search tool over a
+	// locally-built index of the operator's markdown/text documents. The user-facing
+	// name is "knowledge" (the config block, the CLI command, and the tool); the Go
+	// identifiers keep the rag prefix since RAG is the technique. It has two tiers: a
+	// lexical FTS5 baseline that is always on when enabled, and an opt-in vector tier
+	// active only when the embeddings sub-block is present.
+	RAG *RAGConfig `json:"knowledge,omitempty" yaml:"knowledge,omitempty"`
+}
+
+// RAGConfig configures the built-in knowledge_search tool and the backing SQLite
+// index. It is written by the operator as harness.knowledge. The lexical tier is
+// always available when enabled; the vector tier turns on only when Embeddings is
+// present. The index stores verbatim document text UNENCRYPTED on disk (file mode
+// 0600), the same posture as the memory feature, so do not index secrets.
+type RAGConfig struct {
+	// Enabled turns the knowledge_search tool on. The block being absent, or present
+	// with enabled false, leaves it off.
+	Enabled bool `json:"enabled" yaml:"enabled"`
+	// Paths are the default index roots used by knowledge index when no explicit path
+	// is given. It is not an error for this to be empty, but then knowledge index
+	// requires an explicit path argument.
+	Paths []string `json:"paths,omitempty" yaml:"paths,omitempty"`
+	// Directory is where the SQLite index lives. It is resolved relative to the
+	// working directory when not absolute, and defaults to knowledge/<identity>,
+	// mirroring harness.memory's directory. It is project-local and excluded from its
+	// own index walk.
+	Directory string `json:"directory,omitempty" yaml:"directory,omitempty"`
+	// TopK is the default number of chunks knowledge_search returns when the model
+	// does not request a specific count. It defaults to 5 and is clamped to a hard
+	// ceiling of 20.
+	TopK int `json:"top_k,omitempty" yaml:"top_k,omitempty"`
+	// MaxInjectedTokens caps the total retrieved text fed to the model in one search
+	// result. It defaults to 6000.
+	MaxInjectedTokens int `json:"max_injected_tokens,omitempty" yaml:"max_injected_tokens,omitempty"`
+	// Embeddings, when present, turns on the hybrid vector tier. Its absence leaves
+	// the feature lexical-only, needing no model and no external service.
+	Embeddings *RAGEmbeddingsConfig `json:"embeddings,omitempty" yaml:"embeddings,omitempty"`
+}
+
+// RAGEmbeddingsConfig configures the optional vector tier: a local
+// OpenAI-compatible embeddings server contacted only when this block is present.
+// The model is user-chosen; we make no assumptions about its dimension or prefix
+// needs and pin whatever it emits in the index manifest.
+type RAGEmbeddingsConfig struct {
+	// BaseURL is the OpenAI-compatible base; embeddings are POSTed to
+	// <base_url>/embeddings. A non-loopback base_url must use https.
+	BaseURL string `json:"base_url" yaml:"base_url"`
+	// Model is the embedding model name passed to the server.
+	Model string `json:"model" yaml:"model"`
+	// APIKeyEnv is the NAME of an environment variable holding a bearer token, never
+	// the secret itself. When set the token is sent as Authorization: Bearer.
+	APIKeyEnv string `json:"api_key_env,omitempty" yaml:"api_key_env,omitempty"`
+	// TimeoutString is the per-request timeout as a duration string, e.g. 30s. It
+	// defaults to 30s.
+	TimeoutString string `json:"timeout,omitempty" yaml:"timeout,omitempty"`
+	// TimeoutParsed is the parsed form of TimeoutString.
+	TimeoutParsed time.Duration `json:"-" yaml:"-"`
+	// QueryPrefix is prepended to a query before embedding. Default empty, since the
+	// model is user-chosen and a wrong prefix is worse than none.
+	QueryPrefix string `json:"query_prefix,omitempty" yaml:"query_prefix,omitempty"`
+	// DocumentPrefix is prepended to each chunk before embedding; it supports a
+	// {title} placeholder filled from the chunk's heading. Default empty.
+	DocumentPrefix string `json:"document_prefix,omitempty" yaml:"document_prefix,omitempty"`
 }
 
 // MemoryConfig configures the built-in memory tools and the backing store. The
@@ -146,6 +210,13 @@ const (
 	// approval UI and want to avoid a second prompt.
 	ConfirmOverMCPNever = "never"
 )
+
+// KnowledgeSearchToolName is the name of the read-only knowledge_search built-in
+// tool. It is the only built-in that may be served over MCP. It is defined here,
+// the lowest layer, so config can validate the expose.agent.mcp.builtins allowlist
+// without importing the util package that implements the tool; util references this
+// same constant so the two never drift.
+const KnowledgeSearchToolName = "knowledge_search"
 
 // HumanInTheLoopConfig configures the built-in human-in-the-loop tools, which let
 // the model ask the operator a question at the terminal during an agent run.
@@ -281,6 +352,14 @@ type ExposedMCPConfig struct {
 	// be asked, and "never" never asks and runs it ungated, delegating approval to
 	// the client's own UI.
 	ConfirmOverMCP string `json:"confirm_over_mcp,omitempty" yaml:"confirm_over_mcp,omitempty"`
+	// Builtins additionally exposes the agent's built-in tools (currently only
+	// knowledge_search) over MCP. The agent's wrapped CLI tools are always exposed;
+	// the built-ins are off by default and must be listed here because they are
+	// otherwise agent-run-only. Only the read-only knowledge_search is exposable;
+	// the memory and human_in_the_loop built-ins are never exposable and listing one
+	// is a config error. Any client that can reach the port can then query the
+	// knowledge base, so this is an explicit, security-relevant opt-in.
+	Builtins []string `json:"builtins,omitempty" yaml:"builtins,omitempty"`
 }
 
 // RemoteAgent is a remote agent we can talk to using a2a-like behaviors.
@@ -536,6 +615,20 @@ func (c *Config) MemoryRawOptions() json.RawMessage {
 	return c.Harness.Memory.Options
 }
 
+// RAGEnabled reports whether the built-in knowledge_search tool is enabled. Like
+// the other harness tools it is only ever active in agent mode. It is the
+// block-only gate for the lexical baseline; the vector tier has its own gate.
+func (c *Config) RAGEnabled() bool {
+	return c.Harness.RAG != nil && c.Harness.RAG.Enabled
+}
+
+// RAGVectorEnabled reports whether the opt-in vector tier is on: RAG enabled and
+// an embeddings sub-block present. It is the second, independent gate; a lexical
+// index needs neither a model nor a server.
+func (c *Config) RAGVectorEnabled() bool {
+	return c.RAGEnabled() && c.Harness.RAG.Embeddings != nil
+}
+
 // ConfirmTags returns the extra confirmation gate tags configured under the
 // harness block, additive to the always-on ai:confirm tag. It is nil when none
 // are set; prepare normalizes the stored slice (trim, de-duplicate, drop empties).
@@ -616,6 +709,24 @@ func (c *Config) MCPEnabled() bool {
 	return c.Expose != nil && c.Expose.Agent != nil && c.Expose.Agent.MCP != nil
 }
 
+// MCPBuiltins returns the built-in tools opted in to MCP exposure via
+// expose.agent.mcp.builtins, normalized and validated by prepare. It is nil when
+// none are set.
+func (c *Config) MCPBuiltins() []string {
+	if c.Expose == nil || c.Expose.Agent == nil || c.Expose.Agent.MCP == nil {
+		return nil
+	}
+
+	return c.Expose.Agent.MCP.Builtins
+}
+
+// MCPExposesKnowledgeSearch reports whether the read-only knowledge_search
+// built-in is allowlisted for MCP exposure. It is the gate mcp_command uses to
+// decide whether to open the knowledge store and serve the tool.
+func (c *Config) MCPExposesKnowledgeSearch() bool {
+	return slices.Contains(c.MCPBuiltins(), KnowledgeSearchToolName)
+}
+
 // prepare fills in default budgets and parses all duration strings.
 func (c *Config) prepare() error {
 	if c.Identity == "" && c.ApplicationPath != "" {
@@ -631,11 +742,48 @@ func (c *Config) prepare() error {
 			return err
 		}
 		c.Expose.Agent.MCP.ConfirmOverMCP = mode
+
+		builtins, err := c.normalizeMCPBuiltins(c.Expose.Agent.MCP.Builtins)
+		if err != nil {
+			return err
+		}
+		c.Expose.Agent.MCP.Builtins = builtins
 	}
 
 	if err := c.LLM.Budget.prepare(); err != nil {
 		return err
 	}
+
+	if c.Harness.RAG != nil && c.Harness.RAG.Embeddings != nil {
+		if err := c.Harness.RAG.Embeddings.prepare(); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// defaultRAGEmbedTimeout is the per-request embeddings timeout applied when
+// harness.knowledge.embeddings.timeout is unset.
+const defaultRAGEmbedTimeout = 30 * time.Second
+
+// prepare parses the embeddings request timeout, defaulting it when unset. A
+// malformed duration fails loudly at parse time rather than on the first embed.
+// The base_url and model are validated later at rag.Open, before the agent loop.
+func (e *RAGEmbeddingsConfig) prepare() error {
+	if e.TimeoutString == "" {
+		e.TimeoutParsed = defaultRAGEmbedTimeout
+		return nil
+	}
+
+	d, err := time.ParseDuration(e.TimeoutString)
+	if err != nil {
+		return fmt.Errorf("invalid knowledge.embeddings.timeout %q: %w", e.TimeoutString, err)
+	}
+	if d <= 0 {
+		return fmt.Errorf("invalid knowledge.embeddings.timeout %q: must be positive", e.TimeoutString)
+	}
+	e.TimeoutParsed = d
 
 	return nil
 }
@@ -655,6 +803,38 @@ func normalizeConfirmOverMCP(v string) (string, error) {
 	default:
 		return "", fmt.Errorf("invalid confirm_over_mcp %q: must be auto, always or never", v)
 	}
+}
+
+// normalizeMCPBuiltins trims and de-duplicates the expose.agent.mcp.builtins
+// allowlist and validates every entry. Only the read-only knowledge_search may be
+// exposed over MCP: any other name (a typo, or a real but unexposable built-in
+// such as a memory or human_in_the_loop tool) is rejected with a message that
+// names the exposable set and why the others are excluded. A non-empty allowlist
+// with knowledge disabled is also rejected, since there would be nothing to serve.
+func (c *Config) normalizeMCPBuiltins(names []string) ([]string, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+
+	seen := make(map[string]bool, len(names))
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		if name != KnowledgeSearchToolName {
+			return nil, fmt.Errorf("expose.agent.mcp.builtins: %q cannot be exposed over MCP; the only exposable built-in is the read-only %s (the memory and human_in_the_loop built-ins are never exposable because they need operator state or interaction)", name, KnowledgeSearchToolName)
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+
+	if len(out) > 0 && !c.RAGEnabled() {
+		return nil, fmt.Errorf("expose.agent.mcp.builtins lists %s but knowledge is not enabled; add a harness.knowledge block with 'enabled: true' or remove %s from builtins", KnowledgeSearchToolName, KnowledgeSearchToolName)
+	}
+
+	return out, nil
 }
 
 // GlobalFlagNames returns the configured allowlist of application global flag

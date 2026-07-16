@@ -21,6 +21,7 @@ require (
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	github.com/segmentio/ksuid v1.0.4
 	golang.org/x/term v0.45.0
+	modernc.org/sqlite v1.53.0
 )
 
 require (
@@ -49,6 +50,7 @@ require (
 	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
 	github.com/google/pprof v0.0.0-20260709232956-b9395ee17fa0 // indirect
+	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
@@ -64,7 +66,9 @@ require (
 	github.com/nats-io/jwt/v2 v2.8.2 // indirect
 	github.com/nats-io/nkeys v0.4.16 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
+	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
@@ -89,4 +93,7 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.48.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
+	modernc.org/libc v1.73.4 // indirect
+	modernc.org/mathutil v1.7.1 // indirect
+	modernc.org/memory v1.11.0 // indirect
 )

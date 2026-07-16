@@ -4,7 +4,10 @@
 
 package util
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 // ConfirmChoice is the operator's three-way answer to a confirm-gate approval:
 // decline, allow once, or allow for the rest of the session. It is deliberately
@@ -69,4 +72,37 @@ type Prompter interface {
 	// what they entered (which may be empty). It returns an error on an interrupt,
 	// EOF, or canceled ctx.
 	Input(ctx context.Context, question, def string) (string, error)
+}
+
+// errNoOperator is the denial every DefaultDenyPrompter method returns: there is
+// no operator on this path to answer.
+var errNoOperator = errors.New("no operator is available to answer on this path")
+
+// denyPrompter is a Prompter with no operator behind it: every method fails closed,
+// returning both a denial value and an error. It backs the MCP builtin dispatch,
+// where there is no terminal and the concurrent path must never reach a real
+// prompter (see the Prompter doc). It is defense in depth only: the real gate is
+// the expose.agent.mcp.builtins allowlist, which serves only knowledge_search, a
+// tool that never prompts. Should a prompting built-in ever be wired here by
+// mistake, this makes it deny rather than hang or panic.
+type denyPrompter struct{}
+
+// DefaultDenyPrompter returns a Prompter whose every method fails closed. Use it
+// wherever a BuiltinTool must be invoked with no operator reachable.
+func DefaultDenyPrompter() Prompter { return denyPrompter{} }
+
+func (denyPrompter) ApproveCommand(context.Context, GateRequest) (ConfirmChoice, error) {
+	return ConfirmNo, errNoOperator
+}
+
+func (denyPrompter) Confirm(context.Context, string) (bool, error) {
+	return false, errNoOperator
+}
+
+func (denyPrompter) Select(context.Context, string, []string) (int, error) {
+	return -1, errNoOperator
+}
+
+func (denyPrompter) Input(context.Context, string, string) (string, error) {
+	return "", errNoOperator
 }

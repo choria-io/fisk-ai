@@ -27,6 +27,7 @@ import (
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/a2anats"
 	"github.com/choria-io/fisk-ai/internal/memory"
+	"github.com/choria-io/fisk-ai/internal/rag"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/util"
@@ -124,9 +125,6 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 	if err != nil {
 		return res, err
 	}
-	if len(tools) == 0 {
-		return res, fmt.Errorf("no tools available after filtering; check include/exclude in %q", opts.ConfigFile)
-	}
 
 	byName := make(map[string]*util.Tool, len(tools))
 	for _, t := range tools {
@@ -183,6 +181,30 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 		}
 	}
 
+	// The built-in knowledge_search tool is added here in the agent run path too,
+	// tracked in its own slice like the memory tools. rag.Open validates the config
+	// (a bad embeddings block fails before the loop) but treats a missing index file
+	// as a soft empty state, so a first run never fails to start. The store is opened
+	// read-only; knowledge index is the writer.
+	var ragStore *rag.Store
+	var ragBuiltins []*util.BuiltinTool
+	if cfg.RAGEnabled() {
+		ragStore, err = rag.Open(cfg)
+		if err != nil {
+			return res, err
+		}
+		defer ragStore.Close()
+
+		ragBuiltins = util.RAGTools(cfg, ragStore)
+		for _, b := range ragBuiltins {
+			if taken[b.Name()] {
+				return res, fmt.Errorf("knowledge adds a built-in tool %q but the application already exposes a tool with that name; exclude or rename it", b.Name())
+			}
+			builtinByName[b.Name()] = b
+			taken[b.Name()] = true
+		}
+	}
+
 	// Import remote tools, if any, before building the request tool set. A run is
 	// strict: a named remote agent that cannot be reached or imported aborts the
 	// run rather than silently dropping tools the prompt may depend on. The
@@ -204,14 +226,25 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 		events.RemoteHostNotes(imports)
 	}
 
+	// The run needs at least one callable tool, counting every source the model can
+	// address: filtered application tools, the built-in HITL/memory/knowledge_search
+	// tools, and imported remote tools. Checking only the application tools would
+	// abort a run whose sole tools are native (e.g. knowledge_search) or remote.
+	if len(tools)+len(builtins)+len(memBuiltins)+len(ragBuiltins)+len(remoteTools) == 0 {
+		return res, fmt.Errorf("no tools available after filtering; check include/exclude in %q", opts.ConfigFile)
+	}
+
 	// Large tool sets are deferred and discovered via the tool search tool; small
 	// ones are sent directly. Deferral is decided over the combined local and
 	// remote set. Built-in tools are appended after, never deferred.
-	toolParams := util.BuildToolParams(tools, remoteTools, len(builtins)+len(memBuiltins))
+	toolParams := util.BuildToolParams(tools, remoteTools, len(builtins)+len(memBuiltins)+len(ragBuiltins))
 	for _, b := range builtins {
 		toolParams = append(toolParams, b.ToolParam())
 	}
 	for _, b := range memBuiltins {
+		toolParams = append(toolParams, b.ToolParam())
+	}
+	for _, b := range ragBuiltins {
 		toolParams = append(toolParams, b.ToolParam())
 	}
 
@@ -302,6 +335,9 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 		system = append(system, anthropic.TextBlockParam{Text: note})
 	}
 	if note := util.MemorySystemNote(cfg); note != "" {
+		system = append(system, anthropic.TextBlockParam{Text: note})
+	}
+	if note := util.RAGSystemNote(cfg); note != "" {
 		system = append(system, anthropic.TextBlockParam{Text: note})
 	}
 

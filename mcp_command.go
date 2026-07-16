@@ -13,6 +13,7 @@ import (
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/mcpserver"
+	"github.com/choria-io/fisk-ai/internal/rag"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
@@ -57,7 +58,23 @@ func mcpAction(_ *fisk.ParseContext) error {
 	if err != nil {
 		return err
 	}
-	if len(tools) == 0 {
+
+	ragBuiltins, ragStore, err := mcpKnowledgeBuiltins(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	// Close after Serve returns (Serve below is the final call, so this deferred
+	// close runs only once graceful shutdown has drained in-flight tool calls),
+	// never concurrently with a live query.
+	if ragStore != nil {
+		defer ragStore.Close()
+	}
+
+	if err := checkMCPBuiltinCollisions(tools, ragBuiltins); err != nil {
+		return err
+	}
+
+	if len(tools)+len(ragBuiltins) == 0 {
 		return fmt.Errorf("no tools available after filtering; check include/exclude in %q", configFile)
 	}
 
@@ -76,5 +93,64 @@ func mcpAction(_ *fisk.ParseContext) error {
 		Instructions: cfg.MCPInstructions(),
 		ConfirmTags:  cfg.ConfirmTags(),
 		ConfirmMode:  mcpserver.ConfirmMode(cfg.ConfirmOverMCPMode()),
+		Builtins:     ragBuiltins,
 	})
+}
+
+// mcpKnowledgeBuiltins opens the knowledge store read-only and returns the
+// knowledge_search built-in (and the open store, for the caller to close after the
+// server stops) when it is allowlisted in expose.agent.mcp.builtins. The store is
+// opened only when allowlisted, so an agent-only knowledge config never opens the
+// index over MCP; because the operator explicitly opted in, an index that cannot be
+// opened cleanly (a stale rag_meta, a bad embeddings block) fails the command
+// loudly rather than silently dropping the tool. It returns a nil store when
+// knowledge_search is not exposed, printing a discoverability note if knowledge is
+// enabled but simply not allowlisted.
+func mcpKnowledgeBuiltins(ctx context.Context, cfg *config.Config) ([]*util.BuiltinTool, *rag.Store, error) {
+	if !cfg.MCPExposesKnowledgeSearch() {
+		if cfg.RAGEnabled() {
+			fmt.Fprintln(os.Stderr, "note: knowledge is enabled but not exposed over MCP; add knowledge_search to expose.agent.mcp.builtins to let MCP clients search your knowledge base")
+		}
+		return nil, nil, nil
+	}
+
+	store, err := rag.Open(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot expose knowledge_search over MCP: %w", err)
+	}
+
+	line, err := store.TierLine(ctx)
+	if err != nil {
+		store.Close()
+		return nil, nil, err
+	}
+	fmt.Fprintf(os.Stderr, "knowledge %s\n", line)
+	if !store.Built() {
+		fmt.Fprintln(os.Stderr, "note: the knowledge index is not built yet; knowledge_search will return index_not_built until you run: fisk-ai knowledge index")
+	}
+
+	return util.RAGTools(cfg, store), store, nil
+}
+
+// checkMCPBuiltinCollisions refuses to start when a wrapped command tool already
+// exposes a name a built-in would use. The model addresses every tool by one flat
+// name, so a collision would silently shadow one with the other; the allowlist is a
+// deliberate security opt-in, so this is a hard error naming the fix rather than a
+// skipped tool.
+func checkMCPBuiltinCollisions(tools []*util.Tool, builtins []*util.BuiltinTool) error {
+	if len(builtins) == 0 {
+		return nil
+	}
+
+	names := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		names[t.Name()] = true
+	}
+	for _, b := range builtins {
+		if names[b.Name()] {
+			return fmt.Errorf("cannot expose built-in %q over MCP: a wrapped command already exposes a tool with that name; exclude or rename it", b.Name())
+		}
+	}
+
+	return nil
 }

@@ -99,6 +99,12 @@ type Options struct {
 	// never be the JSON-RPC stream, and may be written concurrently from multiple
 	// client sessions, so it must be safe for concurrent use (os.Stderr is).
 	LogOutput io.Writer
+	// Builtins are fisk-ai's own in-process tools to serve alongside the wrapped-CLI
+	// tools (today only the read-only knowledge_search). They are registered with
+	// their own schema and dispatched in-process; they carry no confirm tags and so
+	// skip the elicitation gate, and they are invoked with a default-deny prompter
+	// since there is no operator on the MCP path. Empty means none.
+	Builtins []*util.BuiltinTool
 }
 
 func (o *Options) applyDefaults() {
@@ -143,6 +149,7 @@ func BuildServer(tools []*util.Tool, opts Options) (*mcp.Server, []string) {
 	policy := confirmPolicy{tags: opts.ConfirmTags, mode: opts.ConfirmMode, serverName: opts.Name}
 
 	var registered []string
+	taken := make(map[string]bool)
 	var confirmCount int
 	for _, t := range tools {
 		if !toolNamePattern.MatchString(t.Name()) {
@@ -157,10 +164,36 @@ func BuildServer(tools []*util.Tool, opts Options) (*mcp.Server, []string) {
 			Annotations: toolAnnotations(t),
 		}, toolHandler(t, policy, sem, opts.CallTimeout, opts.LogOutput))
 		registered = append(registered, t.Name())
+		taken[t.Name()] = true
 
 		if t.NeedsConfirm(opts.ConfirmTags) {
 			confirmCount++
 		}
+	}
+
+	// Built-in tools register after the wrapped-CLI tools so a name already taken by
+	// a command tool wins and the built-in is skipped rather than double-registered
+	// (mcp_command refuses such a collision up front; this is the library-level
+	// backstop). They share the concurrency semaphore and per-call timeout and skip
+	// the confirm gate, since a built-in carries no confirm tags.
+	for _, b := range opts.Builtins {
+		if !toolNamePattern.MatchString(b.Name()) {
+			fmt.Fprintf(opts.LogOutput, "warning: skipping built-in %q: not a valid MCP tool name\n", b.Name())
+			continue
+		}
+		if taken[b.Name()] {
+			fmt.Fprintf(opts.LogOutput, "warning: skipping built-in %q: a wrapped command already exposes that name\n", b.Name())
+			continue
+		}
+
+		srv.AddTool(&mcp.Tool{
+			Name:        b.Name(),
+			Description: b.Description(),
+			InputSchema: builtinInputSchema(b),
+			Annotations: &mcp.ToolAnnotations{Title: b.Name()},
+		}, builtinHandler(b, sem, opts.CallTimeout, opts.LogOutput))
+		registered = append(registered, b.Name())
+		taken[b.Name()] = true
 	}
 
 	if confirmCount > 0 {
@@ -310,6 +343,58 @@ func inputSchema(t *util.Tool) json.RawMessage {
 	}
 
 	return data
+}
+
+// builtinInputSchema renders a built-in tool's JSON-schema input as raw JSON for
+// MCP, mirroring inputSchema for command tools: passed through verbatim, with an
+// empty object schema as the fallback.
+func builtinInputSchema(b *util.BuiltinTool) json.RawMessage {
+	schema := b.InputSchema()
+	if schema == nil {
+		return json.RawMessage(`{"type":"object"}`)
+	}
+
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return json.RawMessage(`{"type":"object"}`)
+	}
+
+	return data
+}
+
+// builtinHandler runs a built-in tool for a tools/call request. Like toolHandler it
+// bounds the call with the shared concurrency semaphore and the per-call timeout,
+// and logs a single sanitized line naming what ran (the built-in's own trace, never
+// the raw client-supplied arguments). It invokes the built-in with a default-deny
+// prompter, since there is no operator on the MCP path, and returns the built-in's
+// JSON result verbatim as text content: the string is already JSON, so it is not
+// re-encoded. A handler error becomes an IsError result rather than a Go error, so
+// the client can reason about it, matching the command-tool mapping.
+func builtinHandler(b *util.BuiltinTool, sem chan struct{}, timeout time.Duration, logOut io.Writer) mcp.ToolHandler {
+	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		select {
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
+		case <-ctx.Done():
+			return errorResult(ctx.Err().Error()), nil
+		}
+
+		callCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+
+		if line := b.TraceLine(req.Params.Arguments); line != "" {
+			fmt.Fprintf(logOut, "Running %s\n", line)
+		}
+
+		out, err := b.Call(callCtx, req.Params.Arguments, util.DefaultDenyPrompter())
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: out}},
+		}, nil
+	}
 }
 
 // confirmPolicy carries the confirm-gating configuration a handler needs: the tags
