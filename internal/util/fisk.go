@@ -980,6 +980,12 @@ type GlobalFlagInfo struct {
 // required. It backs the info command's listing of which globals exist and which
 // the operator has allowlisted.
 func AppGlobalFlags(cfg *config.Config) ([]GlobalFlagInfo, error) {
+	// With no wrapped application there is nothing to introspect and so no global
+	// flags to report.
+	if cfg.ApplicationPath == "" {
+		return nil, nil
+	}
+
 	model, err := FetchFiskAppModel(cfg.ApplicationPath)
 	if err != nil {
 		return nil, fmt.Errorf("introspecting %q: %w", cfg.ApplicationPath, err)

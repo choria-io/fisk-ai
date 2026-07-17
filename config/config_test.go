@@ -304,15 +304,61 @@ llm:
 			Expect(err.Error()).To(ContainSubstring("is invalid"))
 		})
 
-		It("Should return a validation error for an incomplete config", func() {
+		It("Should accept an agent config without application_path and default the identity", func() {
+			cfg, err := ParseConfig([]byte(`
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+`))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.ApplicationPath).To(BeEmpty())
+			Expect(cfg.Identity).To(Equal("fisk-ai"))
+		})
+
+		It("Should keep an explicit identity when application_path is unset", func() {
 			cfg, err := ParseConfig([]byte(`
 identity: agent1
 system_prompt: do the thing
 llm:
   model: claude-sonnet-4-6
 `))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Identity).To(Equal("agent1"))
+		})
+
+		It("Should return a validation error when llm.model is missing", func() {
+			cfg, err := ParseConfig([]byte(`
+identity: agent1
+system_prompt: do the thing
+`))
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("application_path is required"))
+			Expect(err.Error()).To(ContainSubstring("llm.model is required"))
+			Expect(cfg).To(BeNil())
+		})
+
+		It("Should reject global_flags without an application_path", func() {
+			cfg, err := ParseConfig([]byte(`
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+global_flags:
+  - context
+`))
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("global_flags is set but application_path is not"))
+			Expect(cfg).To(BeNil())
+		})
+
+		It("Should require application_path for the a2a server mode", func() {
+			cfg, err := ParseConfigForMode([]byte(`
+identity: agent1
+nats_context: ctx
+expose:
+  agent:
+    agent_to_agent: true
+`), ModeServer)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("application_path is required for the a2a server"))
 			Expect(cfg).To(BeNil())
 		})
 
@@ -502,11 +548,25 @@ application_path: /usr/bin/nats
 			Expect(err.Error()).To(ContainSubstring("config is nil"))
 		})
 
-		It("Should fail when application_path is missing", func() {
+		It("Should pass in agent mode when application_path is missing", func() {
 			cfg.ApplicationPath = ""
+			Expect(Validate(cfg)).To(Succeed())
+		})
+
+		It("Should fail in a2a server mode when application_path is missing", func() {
+			cfg.ApplicationPath = ""
+			cfg.NatsContext = "ctx"
+			err := ValidateForMode(cfg, ModeServer)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("application_path is required for the a2a server"))
+		})
+
+		It("Should fail when global_flags is set without application_path", func() {
+			cfg.ApplicationPath = ""
+			cfg.GlobalFlags = []string{"context"}
 			err := Validate(cfg)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("application_path is required"))
+			Expect(err.Error()).To(ContainSubstring("global_flags is set but application_path is not"))
 		})
 
 		It("Should fail when identity is missing and not exposed over MCP", func() {

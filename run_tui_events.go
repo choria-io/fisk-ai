@@ -52,6 +52,10 @@ func (e *tcellEvents) Warn(w agent.Warning) {
 }
 
 func (e *tcellEvents) Starting(info agent.RunInfo) {
+	if info.NoApplication {
+		e.live.Append(tui.Line{Kind: tui.LineMeta, Text: "running without a wrapped application; built-in and remote tools only"})
+	}
+
 	if !e.verbose {
 		return
 	}

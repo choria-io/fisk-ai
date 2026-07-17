@@ -113,6 +113,9 @@ type RunInfo struct {
 	SessionID string
 	// Resumed is true when continuing an existing session rather than starting one.
 	Resumed bool
+	// NoApplication is true when the run wraps no application (application_path is
+	// unset), so it runs on built-in and remote tools alone.
+	NoApplication bool
 }
 
 // ToolKind distinguishes how a traced tool call is dispatched.

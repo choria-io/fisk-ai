@@ -46,6 +46,10 @@ func mcpAction(_ *fisk.ParseContext) error {
 		return fmt.Errorf("fisk-ai mcp requires an expose.agent.mcp block in %q; add expose.agent.mcp (optionally with a port) to serve tools over MCP", configFile)
 	}
 
+	if cfg.ApplicationPath == "" {
+		fmt.Fprintln(os.Stderr, "note: no wrapped application configured (application_path unset); serving built-in tools only")
+	}
+
 	if cfg.HumanInTheLoopEnabled() {
 		fmt.Fprintln(os.Stderr, "warning: human_in_the_loop has no effect over MCP; built-in human-in-the-loop tools are never exposed to MCP clients")
 	}
