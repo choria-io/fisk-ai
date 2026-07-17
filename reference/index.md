@@ -40,19 +40,45 @@ system_prompt: |
 
 Everything after this point expands on those blocks and adds the optional ones.
 
+### A knowledge-only agent
+
+`application_path` is optional. Leave it out to run an agent with no wrapped application, on the built-in tools alone.
+This is useful for a knowledge agent that answers from an indexed corpus over [knowledge](../knowledge/):
+
+```yaml
+# agent.yaml - answer questions from a local knowledge base, no wrapped app
+
+llm:
+  model: claude-sonnet-4-6
+
+system_prompt: |
+  You answer questions using the knowledge_search tool over the indexed docs.
+
+harness:
+  knowledge:
+    enabled: true
+```
+
+With no `application_path`, the identity defaults to `fisk-ai`; set an explicit `identity` to keep the
+`knowledge/<identity>` and `memory/<identity>` stores separate when you run more than one such agent in a directory.
+
 ## Identity and application
 
 ```yaml
 # The name of the agent. Used in discovery and reused as a NATS queue
 # group, so it must contain only letters, digits, "-" or "_". If you
-# leave it out it defaults to the application binary's base name; set it
-# explicitly when that name carries a dot, a space, or other characters,
-# which are rejected.
+# leave it out it defaults to the application binary's base name, or to
+# "fisk-ai" when no application_path is set; set it explicitly when the
+# derived name carries a dot, a space, or other characters, which are
+# rejected, or to keep memory/knowledge stores separate between agents.
 identity: nats
 
-# Path to the Fisk application binary to introspect and run. REQUIRED.
-# The binary is introspected once at startup to obtain its command tree
-# and per-command JSON schemas.
+# Path to the Fisk application binary to introspect and run. OPTIONAL.
+# When set, the binary is introspected once at startup to obtain its
+# command tree and per-command JSON schemas. Leave it out to run an agent
+# on the built-in tools (knowledge, memory, human_in_the_loop) and any
+# remote tools alone, with no wrapped application. Required only for "a2a"
+# mode, which serves the wrapped application's tools.
 application_path: /usr/local/bin/nats
 
 # The system prompt describing what the agent should do. REQUIRED for a
@@ -66,9 +92,11 @@ system_prompt: |
 [agent-to-agent](#agent-to-agent), and the default memory directory is `memory/<identity>`. Keep it to the safe
 character set so those uses stay valid.
 
-`application_path` is the one field every mode needs. The target must be built with a current
+`application_path` is optional for `run` and `mcp` modes and required only for `a2a`, which serves the wrapped
+application's tools and cannot serve the built-ins. When set, the target must be built with a current
 [Fisk](https://github.com/choria-io/fisk) (v0.9.0 or newer) that supports `--fisk-introspect` and precomputed
-per-command schemas.
+per-command schemas. When it is left out, Fisk AI skips introspection entirely and the agent runs on its built-in and
+remote tools alone; see [a knowledge-only agent](#a-knowledge-only-agent) below.
 
 ## Tool selection
 
@@ -378,8 +406,9 @@ The MCP server port also reads `FISK_AI_MCP_PORT`, which `--port` overrides and 
 
 ## Safety
 
-The configuration is the boundary on what the model can reach: `application_path` fixes the one binary it can drive,
-`include`/`exclude` and `ai:deny` fix which of its commands become tools, and nothing outside that set is callable.
+The configuration is the boundary on what the model can reach: `application_path` fixes the one binary it can drive
+(and with no `application_path` set the agent can drive no external binary at all), `include`/`exclude` and `ai:deny`
+fix which of its commands become tools, and nothing outside that set is callable.
 Commands run as an argument vector rather than through a shell, their arguments are bound to each command's schema, the
 `ANTHROPIC_API_KEY` is stripped from their environment, output is capped at 64 KiB, and `LLMFORMAT=1` is set. The
 [Agents](../agents/#safety) and [MCP](../mcp/#safety) guides describe the full threat model for each mode.

@@ -10,7 +10,9 @@ Below it are three drivers. `internal/agent` runs the agentic loop for `run`. `i
 
 The core is `internal/util` plus `config`. `util` owns command-tree introspection, translation of tools into Anthropic API parameters, the built-in tools, the confirm gate, the prompter contract, the model call, and run statistics. `config` is the single `agent.yaml` schema and its mode-based validation.
 
-The bottom tier is durable state and protocol types: `internal/runstate` journals a run, `internal/memory` persists model notes, and the `a2a` package holds the transport-agnostic protocol messages that `internal/a2anats` binds to NATS. `internal/remotetools` sits beside the core as the import-policy layer for tools pulled from a peer agent.
+The bottom tier is durable state and protocol types: `internal/runstate` journals a run, `internal/memory` persists model notes, `internal/rag` holds the SQLite knowledge index behind the `knowledge_search` tool, and the `a2a` package holds the transport-agnostic protocol messages that `internal/a2anats` binds to NATS. `internal/remotetools` sits beside the core as the import-policy layer for tools pulled from a peer agent.
+
+Like memory, `internal/rag` is reached only through a built-in tool in the core: `internal/util/builtin_rag.go` opens a `rag.Store` and wraps it as `knowledge_search`. The agent and MCP drivers open the store read-only while the `knowledge` command is its single writer, so an index can be rebuilt while an agent runs. It is the one package in this tier that reaches an external system of its own, an optional local embeddings server, and only when the vector tier is on.
 
 <figure class="cm-diagram">
   <svg viewBox="0 0 760 334" role="img" aria-label="Five layers from CLI commands down to external systems, each depending on the one below">
@@ -22,7 +24,7 @@ The bottom tier is durable state and protocol types: `internal/runstate` journal
     <!-- layer 1: CLI -->
     <rect class="cm-svg-box" x="70" y="16" width="620" height="46" rx="8"/>
     <text class="cm-svg-label" x="380" y="42" text-anchor="middle">CLI commands (package main)</text>
-    <text class="cm-svg-sub"   x="380" y="59" text-anchor="middle">run, session, info, mcp, a2a, discover</text>
+    <text class="cm-svg-sub"   x="380" y="59" text-anchor="middle">run, session, info, knowledge, mcp, a2a, discover</text>
     <!-- layer 2: drivers -->
     <rect class="cm-svg-box" x="70" y="78" width="620" height="46" rx="8"/>
     <text class="cm-svg-label" x="380" y="104" text-anchor="middle">Drivers</text>
@@ -34,11 +36,11 @@ The bottom tier is durable state and protocol types: `internal/runstate` journal
     <!-- layer 4: persistence and protocol -->
     <rect class="cm-svg-box" x="70" y="210" width="620" height="46" rx="8"/>
     <text class="cm-svg-label" x="380" y="236" text-anchor="middle">Persistence and protocol</text>
-    <text class="cm-svg-sub"   x="380" y="253" text-anchor="middle">internal/runstate, internal/memory, a2a</text>
+    <text class="cm-svg-sub"   x="380" y="253" text-anchor="middle">internal/runstate, internal/memory, internal/rag, a2a</text>
     <!-- layer 5: externals -->
     <rect class="cm-svg-box" x="70" y="272" width="620" height="46" rx="8"/>
     <text class="cm-svg-label" x="380" y="298" text-anchor="middle">External systems</text>
-    <text class="cm-svg-sub"   x="380" y="315" text-anchor="middle">fisk binaries (exec), Anthropic API, NATS</text>
+    <text class="cm-svg-sub"   x="380" y="315" text-anchor="middle">fisk binaries (exec), Anthropic API, NATS, embeddings server</text>
     <!-- downward dependency arrows -->
     <line x1="380" y1="62"  x2="380" y2="76"  stroke="var(--cm-faint)" stroke-width="1.5" marker-end="url(#ad)"/>
     <line x1="380" y1="124" x2="380" y2="138" stroke="var(--cm-faint)" stroke-width="1.5" marker-end="url(#ad)"/>
@@ -57,6 +59,7 @@ The tiers stay independent because the boundaries between them are narrow interf
   <dt>Prompter</dt><dd>`internal/util/prompter.go`. The only path allowed to read the terminal. A line implementation (`survey_prompter.go`) and a full-screen one (`internal/tui/prompter.go`) satisfy it; deny-by-default lives at the caller, never in the prompter.</dd>
   <dt>Store / Journal</dt><dd>`internal/runstate/store.go`. A run is an append-only record stream. The file backend is the only one today; the interface is shaped for a JetStream backend next. `Fold` turns records into resumable state with no IO.</dd>
   <dt>memory.Store</dt><dd>`internal/memory/store.go`. A pluggable key/value store; the `file` backend exists, a NATS KV backend is the planned second.</dd>
+  <dt>rag.Embedder</dt><dd>`internal/rag/embed.go`. The knowledge vector-tier seam; the OpenAI-compatible client is the only implementation, tests mock it, and a nil embedder is the lexical-only path, so the vector tier is fully optional.</dd>
   <dt>RemoteInvoker</dt><dd>`internal/util/remote.go`. A one-method interface so `util` depends only on `a2a` types, not the NATS binding, which avoids an import cycle and lets tests supply a fake.</dd>
 </dl>
 
