@@ -954,3 +954,17 @@ var _ = Describe("Global flags", func() {
 		Expect(err.Error()).To(ContainSubstring("hidden or framework flag"))
 	})
 })
+
+var _ = Describe("Application-less config", func() {
+	It("LoadTools should return no tools and not introspect when application_path is unset", func() {
+		tools, err := LoadTools(&config.Config{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(tools).To(BeEmpty())
+	})
+
+	It("AppGlobalFlags should return nothing and not introspect when application_path is unset", func() {
+		globals, err := AppGlobalFlags(&config.Config{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(globals).To(BeEmpty())
+	})
+})

@@ -1035,6 +1035,15 @@ var _ = Describe("Run tool availability guard", func() {
 		Expect(err).To(MatchError(ContainSubstring("no tools available after filtering")))
 	})
 
+	It("aborts with an application-less message when no application_path and no tools are set", func() {
+		cfg := &config.Config{}
+		cfg.LLM.Model = "test-model"
+		cfg.LLM.Budget.MaxIterations = 1
+
+		_, err := Run(context.Background(), Options{Config: cfg, ConfigFile: "agent.yaml"}, nopEvents{}, nil)
+		Expect(err).To(MatchError(ContainSubstring("this agent wraps no application")))
+	})
+
 	It("proceeds past the guard when only a native tool (knowledge_search) is enabled", func() {
 		cfg := emptyAppCfg()
 		cfg.Harness.RAG = &config.RAGConfig{Enabled: true, Directory: GinkgoT().TempDir()}

@@ -72,12 +72,12 @@ A client that takes a JSON server map uses:
 ## Configuration
 
 MCP mode uses only the parts of the [configuration](../reference/) that describe the application and the tool set. An
-`identity`, if set, becomes the MCP server name; `system_prompt`, `llm.model`, and the agent-only harness settings are
-ignored.
+`identity` becomes the MCP server name, defaulting to `fisk-ai` when unset; `system_prompt`, `llm.model`, and the
+agent-only harness settings are ignored.
 
 | Field                                | Description                                                                          |
 |--------------------------------------|--------------------------------------------------------------------------------------|
-| `application_path`                   | path to the Fisk application binary to introspect and serve (required)               |
+| `application_path`                   | path to the Fisk application binary to introspect and serve; optional, omit it to serve only allowlisted built-ins such as `knowledge_search` |
 | `expose.agent.mcp`                   | the opt-in block that enables MCP serving; must be present                           |
 | `expose.agent.mcp.port`              | default listen port when `--port` and `FISK_AI_MCP_PORT` are unset, default `8080`   |
 | `expose.agent.mcp.instructions`      | free-text guidance sent to clients on connect                                        |

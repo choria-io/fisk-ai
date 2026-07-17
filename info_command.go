@@ -40,6 +40,10 @@ func infoAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
+	if cfg.ApplicationPath == "" && cfg.AppToolFiltersConfigured() {
+		fmt.Fprintln(os.Stderr, "warning: include/exclude have no effect without application_path; they filter the wrapped application's tools")
+	}
+
 	tools, err := util.LoadTools(cfg)
 	if err != nil {
 		return err
@@ -120,6 +124,11 @@ func infoAction(_ *fisk.ParseContext) error {
 		}
 	}
 	tbl.Render()
+
+	if cfg.ApplicationPath == "" {
+		fmt.Println()
+		fmt.Println("No wrapped application configured (application_path unset); built-in and remote tools only.")
+	}
 
 	printRemoteToolStatus(cfg, imports)
 

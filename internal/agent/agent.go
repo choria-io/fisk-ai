@@ -231,6 +231,9 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 	// tools, and imported remote tools. Checking only the application tools would
 	// abort a run whose sole tools are native (e.g. knowledge_search) or remote.
 	if len(tools)+len(builtins)+len(memBuiltins)+len(ragBuiltins)+len(remoteTools) == 0 {
+		if cfg.ApplicationPath == "" {
+			return res, fmt.Errorf("no tools available: this agent wraps no application (application_path unset) and enables no built-in or remote tools; set application_path, or enable harness.knowledge, harness.memory, human_in_the_loop, or remote_tools in %q", opts.ConfigFile)
+		}
 		return res, fmt.Errorf("no tools available after filtering; check include/exclude in %q", opts.ConfigFile)
 	}
 
@@ -365,6 +368,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 		ConfirmTools:    confirmTools,
 		ConfirmTags:     confirmTags,
 		TraceFile:       opts.TraceFile,
+		NoApplication:   cfg.ApplicationPath == "",
 	}
 
 	var (

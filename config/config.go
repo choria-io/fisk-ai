@@ -23,6 +23,12 @@ import (
 // else that would form an invalid or wildcard-bearing subject.
 var identityPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
+// defaultIdentity is the identity used when neither an explicit identity nor an
+// application_path (whose basename would otherwise supply one) is set. It keeps
+// the identity a legal NATS token and the memory/knowledge store paths stable for
+// an application-less agent.
+const defaultIdentity = "fisk-ai"
+
 // Default budget values applied wherever a config leaves a value unset.
 const (
 	defaultLLMMaxTokens     = 200000
@@ -482,18 +488,24 @@ func Validate(cfg *Config) error {
 	return ValidateForMode(cfg, ModeAgent)
 }
 
-// ValidateForMode checks that the fields required by mode are set. Every mode
-// needs application_path; ModeMCP needs nothing more, since it serves tools and
-// uses neither a prompt nor a model. ModeServer needs a valid identity and a NATS
-// context but, like MCP, no prompt or model. ModeAgent additionally needs a
-// model, and a prompt and identity unless the agent is also exposed over MCP.
+// ValidateForMode checks that the fields required by mode are set. application_path
+// is optional for ModeAgent and ModeMCP, which can run on built-in and remote tools
+// alone; ModeServer still requires it, since a2a serves only the wrapped
+// application's tools and never the built-ins. ModeMCP needs nothing more, since it
+// serves tools and uses neither a prompt nor a model. ModeServer needs a valid
+// identity and a NATS context but, like MCP, no prompt or model. ModeAgent
+// additionally needs a model, and a prompt and identity unless the agent is also
+// exposed over MCP.
 func ValidateForMode(cfg *Config, mode Mode) error {
 	if cfg == nil {
 		return fmt.Errorf("config is nil")
 	}
 
-	if cfg.ApplicationPath == "" {
-		return fmt.Errorf("application_path is required")
+	// global_flags names flags on the wrapped application, so it has nothing to
+	// attach to without one. GlobalFlags is normalized by prepare, so an empty
+	// slice here means no usable flag was configured.
+	if len(cfg.GlobalFlags) > 0 && cfg.ApplicationPath == "" {
+		return fmt.Errorf("global_flags is set but application_path is not: global flags are the wrapped application's own globals and have nothing to attach to without an application; remove global_flags or set application_path")
 	}
 
 	// The identity doubles as the discovery queue group, so when set it must be a
@@ -511,8 +523,10 @@ func ValidateForMode(cfg *Config, mode Mode) error {
 	}
 
 	if mode == ModeServer {
-		if cfg.Identity == "" {
-			return fmt.Errorf("identity is required for the a2a server")
+		// a2a serves only the wrapped application's tools, never the built-ins, so an
+		// application-less a2a server could never have anything to serve.
+		if cfg.ApplicationPath == "" {
+			return fmt.Errorf("application_path is required for the a2a server: a2a serves the wrapped application's tools and cannot serve the built-in tools")
 		}
 		if cfg.NatsContext == "" {
 			return fmt.Errorf("nats_context is required for the a2a server")
@@ -729,8 +743,12 @@ func (c *Config) MCPExposesKnowledgeSearch() bool {
 
 // prepare fills in default budgets and parses all duration strings.
 func (c *Config) prepare() error {
-	if c.Identity == "" && c.ApplicationPath != "" {
-		c.Identity = filepath.Base(c.ApplicationPath)
+	if c.Identity == "" {
+		if c.ApplicationPath != "" {
+			c.Identity = filepath.Base(c.ApplicationPath)
+		} else {
+			c.Identity = defaultIdentity
+		}
 	}
 
 	c.Harness.ConfirmTags = normalizeTags(c.Harness.ConfirmTags)
@@ -835,6 +853,21 @@ func (c *Config) normalizeMCPBuiltins(names []string) ([]string, error) {
 	}
 
 	return out, nil
+}
+
+// AppToolFiltersConfigured reports whether the top-level include or exclude tool
+// filters carry any patterns or tags. They only ever narrow the wrapped
+// application's tools, so with no application_path they match nothing; callers use
+// this to warn rather than silently ignore an operator's filter.
+func (c *Config) AppToolFiltersConfigured() bool {
+	if c.Include != nil && (len(c.Include.Tools) > 0 || len(c.Include.Tags) > 0) {
+		return true
+	}
+	if c.Exclude != nil && (len(c.Exclude.Tools) > 0 || len(c.Exclude.Tags) > 0) {
+		return true
+	}
+
+	return false
 }
 
 // GlobalFlagNames returns the configured allowlist of application global flag

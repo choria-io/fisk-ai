@@ -86,6 +86,10 @@ func (c *cliEvents) Starting(info agent.RunInfo) {
 		}
 	}
 
+	if info.NoApplication {
+		fmt.Fprintln(os.Stderr, "running without a wrapped application; built-in and remote tools only")
+	}
+
 	if info.TraceFile != "" {
 		fmt.Fprintf(os.Stderr, "tracing session to %s\n", info.TraceFile)
 	}
