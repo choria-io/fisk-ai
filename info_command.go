@@ -13,6 +13,7 @@ import (
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/util"
+	"github.com/choria-io/ui/columns"
 	"github.com/jedib0t/go-pretty/v6/table"
 )
 
@@ -76,10 +77,7 @@ func infoAction(_ *fisk.ParseContext) error {
 		fmt.Fprintf(os.Stderr, "warning: cannot connect to NATS context %q to discover remote tools: %v\n", cfg.NatsContext, err)
 	}
 
-	tbl := table.NewWriter()
-	tbl.SetOutputMirror(os.Stdout)
-	tbl.SetStyle(table.StyleRounded)
-	tbl.SuppressTrailingSpaces()
+	tbl := util.NewTable(os.Stdout)
 	tbl.AppendHeader(table.Row{"Tool", "Source", "Confirm", "Description", "Tags"})
 	// The Confirm column marks the commands a run would gate behind operator
 	// confirmation, so an author can see confirm_tags resolves to the commands they
@@ -125,12 +123,14 @@ func infoAction(_ *fisk.ParseContext) error {
 	}
 	tbl.Render()
 
+	c := columns.New()
+	defer c.WriteTo(os.Stdout)
+
 	if cfg.ApplicationPath == "" {
-		fmt.Println()
-		fmt.Println("No wrapped application configured (application_path unset); built-in and remote tools only.")
+		c.Print("No wrapped application configured (application_path unset); built-in and remote tools only.")
 	}
 
-	printRemoteToolStatus(cfg, imports)
+	printRemoteToolStatus(c, cfg, imports)
 
 	// List the application's exposable global flags so an operator can see which
 	// exist and which they have allowlisted under global_flags, closing the loop
@@ -139,37 +139,39 @@ func infoAction(_ *fisk.ParseContext) error {
 	if err != nil {
 		return err
 	}
+
 	if len(globals) > 0 {
-		fmt.Println()
-		fmt.Println("Exposable application global flags (add names under global_flags to expose to the model):")
-		keys := make([]string, len(globals))
-		width := 0
-		for i, g := range globals {
-			marker := ""
-			switch {
-			case g.Required:
-				marker = " [exposed, required]"
-			case g.Exposed:
-				marker = " [exposed]"
+		c.Blank()
+		c.Section("Exposable application global flags (add names under global_flags to expose to the model)", func(c *columns.Document) {
+			keys := make([]string, len(globals))
+			for i, g := range globals {
+				marker := ""
+				switch {
+				case g.Required:
+					marker = " [exposed, required]"
+				case g.Exposed:
+					marker = " [exposed]"
+				}
+				keys[i] = g.Name + marker
 			}
-			keys[i] = g.Name + marker
-			if len(keys[i]) > width {
-				width = len(keys[i])
+			c.Blank()
+
+			for i, g := range globals {
+				c.Item(keys[i], g.Help)
 			}
-		}
-		fmt.Println()
-		for i, g := range globals {
-			fmt.Printf("  %*s: %s\n", width, keys[i], util.TruncateString(g.Help, maxInfoDescriptionLen))
-		}
+		})
 	}
 
-	fmt.Println()
-	fmt.Println("Prompt:")
-	fmt.Println()
-	fmt.Println(util.RenderAnswer(cfg.SystemPrompt, noColor))
+	c.Section("Prompt", func(c *columns.Document) {
+		if len(cfg.SystemPrompt) > 0 {
+			c.Print(util.RenderAnswer(cfg.SystemPrompt, noColor))
+		} else {
+			c.Print("No system_prompt defined")
+		}
+	})
 
-	fmt.Println()
-	fmt.Printf("These tools can also be served over MCP with: fisk-ai mcp --config %s\n", configFile)
+	c.Blank()
+	c.Printf("These tools can also be served over MCP with: {bold}fisk-ai mcp --config %s{/bold}", configFile)
 
 	return nil
 }

@@ -11,12 +11,13 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 
 	"github.com/choria-io/fisk"
+	"github.com/jedib0t/go-pretty/v6/table"
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/rag"
+	"github.com/choria-io/fisk-ai/internal/util"
 )
 
 var (
@@ -392,13 +393,14 @@ func knowledgeSourcesAction(_ *fisk.ParseContext) error {
 		return nil
 	}
 
-	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "PATH\tCHUNKS\tLAST INDEXED")
+	tbl := util.NewTable(os.Stdout)
+	tbl.AppendHeader(table.Row{"Path", "Chunks", "Last Indexed"})
 	for _, s := range sources {
-		fmt.Fprintf(tw, "%s\t%d\t%s\n", s.Path, s.Chunks, s.MTime.Format("2006-01-02 15:04"))
+		tbl.AppendRow(table.Row{s.Path, s.Chunks, s.MTime.Format("2006-01-02 15:04")})
 	}
+	tbl.Render()
 
-	return tw.Flush()
+	return nil
 }
 
 func knowledgeDoctorAction(_ *fisk.ParseContext) error {

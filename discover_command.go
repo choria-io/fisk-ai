@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/a2anats"
 	"github.com/choria-io/fisk-ai/internal/util"
+	"github.com/choria-io/ui/columns"
 	"github.com/jedib0t/go-pretty/v6/table"
 )
 
@@ -58,25 +58,20 @@ func discoverAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	fmt.Printf("Agent: %s\n", card.Name)
-	fmt.Printf("Version: %s\n", card.Version)
-	if card.Description != "" {
-		fmt.Printf("Description: %s\n", card.Description)
-	}
-	if len(card.Protocols) > 0 {
-		fmt.Printf("Protocols: %s\n", strings.Join(card.Protocols, ", "))
-	}
-	fmt.Println()
+	c := columns.New()
+	c.Headingf("Agent Card for {bold}%s{/bold}", discoverAgent)
+	c.Item("Agent", card.Name)
+	c.Item("Version", card.Version)
+	c.ItemUnlessZero("Description", card.Description)
+	c.ItemUnlessZero("Protocols", card.Protocols)
+	fmt.Println(c.String())
 
 	if len(card.Tools) == 0 {
 		fmt.Println("The agent exposes no tools.")
 		return nil
 	}
 
-	tbl := table.NewWriter()
-	tbl.SetOutputMirror(os.Stdout)
-	tbl.SetStyle(table.StyleRounded)
-	tbl.SuppressTrailingSpaces()
+	tbl := util.NewTable(os.Stdout)
 	tbl.AppendHeader(table.Row{"Tool", "Description"})
 	for _, t := range card.Tools {
 		tbl.AppendRow(table.Row{t.Name, util.TruncateString(t.Description, maxDiscoverDescriptionLen)})

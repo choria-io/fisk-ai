@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/rag"
@@ -41,6 +42,42 @@ func RAGTools(cfg *config.Config, store *rag.Store) []*BuiltinTool {
 	}
 
 	return []*BuiltinTool{knowledgeSearchTool(store)}
+}
+
+// MCPKnowledgeBuiltins opens the knowledge store read-only and returns the
+// knowledge_search built-in (and the open store, for the caller to close after it
+// is done serving) when it is allowlisted in expose.agent.mcp.builtins. The store
+// is opened only when allowlisted, so an agent-only knowledge config never opens
+// the index over MCP; because the operator explicitly opted in, an index that
+// cannot be opened cleanly (a stale rag_meta, a bad embeddings block) returns an
+// error rather than silently dropping the tool. It returns a nil store when
+// knowledge_search is not exposed. Operator-facing progress and discoverability
+// notes are written to notes (typically os.Stderr); it is never the MCP protocol
+// stream.
+func MCPKnowledgeBuiltins(ctx context.Context, cfg *config.Config, notes io.Writer) ([]*BuiltinTool, *rag.Store, error) {
+	if !cfg.MCPExposesKnowledgeSearch() {
+		if cfg.RAGEnabled() {
+			fmt.Fprintln(notes, "note: knowledge is enabled but not exposed over MCP; add knowledge_search to expose.agent.mcp.builtins to let MCP clients search your knowledge base")
+		}
+		return nil, nil, nil
+	}
+
+	store, err := rag.Open(cfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("cannot expose knowledge_search over MCP: %w", err)
+	}
+
+	line, err := store.TierLine(ctx)
+	if err != nil {
+		store.Close()
+		return nil, nil, err
+	}
+	fmt.Fprintf(notes, "knowledge %s\n", line)
+	if !store.Built() {
+		fmt.Fprintln(notes, "note: the knowledge index is not built yet; knowledge_search will return index_not_built until you run: fisk-ai knowledge index")
+	}
+
+	return RAGTools(cfg, store), store, nil
 }
 
 // RAGSystemNote returns the system-prompt note telling the model the knowledge

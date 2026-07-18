@@ -173,8 +173,8 @@ func BuildServer(tools []*util.Tool, opts Options) (*mcp.Server, []string) {
 
 	// Built-in tools register after the wrapped-CLI tools so a name already taken by
 	// a command tool wins and the built-in is skipped rather than double-registered
-	// (mcp_command refuses such a collision up front; this is the library-level
-	// backstop). They share the concurrency semaphore and per-call timeout and skip
+	// (Serve refuses such a collision up front via checkBuiltinCollisions; this is
+	// the library-level backstop). They share the concurrency semaphore and per-call timeout and skip
 	// the confirm gate, since a built-in carries no confirm tags.
 	for _, b := range opts.Builtins {
 		if !toolNamePattern.MatchString(b.Name()) {
@@ -201,6 +201,31 @@ func BuildServer(tools []*util.Tool, opts Options) (*mcp.Server, []string) {
 	}
 
 	return srv, registered
+}
+
+// checkBuiltinCollisions refuses to serve when a wrapped command tool already
+// exposes a name a built-in would use. The model addresses every tool by one flat
+// name, so a collision would silently shadow one with the other; a built-in is a
+// deliberate allowlist opt-in, so this is a hard error naming the fix rather than
+// the silently skipped registration BuildServer falls back to. Serve calls it up
+// front; the skip in BuildServer remains the library-level backstop for callers
+// that do not.
+func checkBuiltinCollisions(tools []*util.Tool, builtins []*util.BuiltinTool) error {
+	if len(builtins) == 0 {
+		return nil
+	}
+
+	names := make(map[string]bool, len(tools))
+	for _, t := range tools {
+		names[t.Name()] = true
+	}
+	for _, b := range builtins {
+		if names[b.Name()] {
+			return fmt.Errorf("cannot expose built-in %q over MCP: a wrapped command already exposes a tool with that name; exclude or rename it", b.Name())
+		}
+	}
+
+	return nil
 }
 
 // confirmModeSummary describes, for the startup note, how confirm-tagged tools are
@@ -233,6 +258,10 @@ func toolAnnotations(t *util.Tool) *mcp.ToolAnnotations {
 // a clean shutdown via ctx returns nil.
 func Serve(ctx context.Context, tools []*util.Tool, opts Options) error {
 	opts.applyDefaults()
+
+	if err := checkBuiltinCollisions(tools, opts.Builtins); err != nil {
+		return err
+	}
 
 	srv, registered := BuildServer(tools, opts)
 	if len(registered) == 0 {

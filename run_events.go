@@ -100,7 +100,7 @@ func (c *cliEvents) Starting(info agent.RunInfo) {
 
 func (c *cliEvents) RemoteHostNotes(imports []remotetools.HostImport) {
 	for _, imp := range imports {
-		warnHostNotes(imp)
+		warnHostNotes(nil, imp)
 		if len(imp.Tools) == 0 {
 			fmt.Fprintf(os.Stderr, "warning: remote agent %q contributed no tools after filtering; check the include/exclude for that host\n", imp.Host.Name)
 		}

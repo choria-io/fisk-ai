@@ -9,9 +9,10 @@ import (
 	"fmt"
 	"os"
 	"sort"
-	"text/tabwriter"
 
 	"github.com/choria-io/fisk"
+	"github.com/choria-io/ui/columns"
+	"github.com/jedib0t/go-pretty/v6/table"
 
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/tui"
@@ -60,15 +61,16 @@ func sessionLsAction(_ *fisk.ParseContext) error {
 		return infos[i].Updated.After(infos[j].Updated)
 	})
 
-	tw := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(tw, "ID\tMODEL\tSTATUS\tUPDATED\tPROMPT")
+	tbl := util.NewTable(os.Stdout)
+	tbl.AppendHeader(table.Row{"ID", "Model", "Status", "Updated", "Prompt"})
 	for _, info := range infos {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
+		tbl.AppendRow(table.Row{
 			info.RunID, info.Model, sessionStatus(info.Terminal),
-			info.Updated.Format("2006-01-02 15:04"), truncatePrompt(info.Prompt, 50))
+			info.Updated.Format("2006-01-02 15:04"), truncatePrompt(info.Prompt, 50)})
 	}
+	tbl.Render()
 
-	return tw.Flush()
+	return nil
 }
 
 func sessionShowAction(_ *fisk.ParseContext) error {
@@ -84,7 +86,10 @@ func sessionShowAction(_ *fisk.ParseContext) error {
 
 	// Without --transcript, show only the session's counters and prompt.
 	if !sessionTranscript {
-		printSessionMeta(rs)
+		c := columns.New()
+		printSessionMeta(c, rs)
+		fmt.Println(c.String())
+
 		return nil
 	}
 
@@ -103,7 +108,11 @@ func sessionShowAction(_ *fisk.ParseContext) error {
 	// --no-tui asks for a plain line transcript, where the verbose tool result output
 	// is more noise than help, so it is omitted; a fallback taken only because there is
 	// no terminal (piped or redirected, --no-tui unset) still includes it.
-	printSessionMeta(rs)
+
+	c := columns.New()
+	printSessionMeta(c, rs)
+	fmt.Println(c.String())
+
 	fmt.Printf("\n--- transcript ---\n\n")
 	dumpTranscript(os.Stdout, rs, noColor, !noTUI)
 
@@ -111,18 +120,23 @@ func sessionShowAction(_ *fisk.ParseContext) error {
 }
 
 // printSessionMeta writes the session's counters and prompt to stdout.
-func printSessionMeta(rs *runstate.RunState) {
-	fmt.Printf("Session %s\n\n", rs.RunID)
-	fmt.Printf("  Status:       %s\n", sessionStatus(terminalReason(rs)))
-	fmt.Printf("  Model:        %s\n", rs.Fingerprint.Model)
-	fmt.Printf("  Next iter:    %d\n", rs.NextIteration)
-	fmt.Printf("  LLM calls:    %d\n", rs.Counters.LlmCalls)
-	fmt.Printf("  Tool calls:   %d (remote %d)\n", rs.Counters.ToolCalls, rs.Counters.RemoteToolCalls)
-	fmt.Printf("  Tokens:       %d in / %d out\n", rs.Counters.InTokens, rs.Counters.OutTokens)
+func printSessionMeta(c *columns.Document, rs *runstate.RunState) {
+	c.Headingf("Session {bold}%s{/bold}", rs.RunID)
+
+	c.Item("Status", sessionStatus(terminalReason(rs)))
+	c.Item("Model", rs.Fingerprint.Model)
+	c.Item("Next iter", rs.NextIteration)
+	c.Item("LLM calls", rs.Counters.LlmCalls)
+	c.Item("Tool calls", fmt.Sprintf("%d (remote %d)", rs.Counters.ToolCalls, rs.Counters.RemoteToolCalls))
+	c.Item("Tokens", fmt.Sprintf("%d in / %d out", rs.Counters.InTokens, rs.Counters.OutTokens))
+
 	if rs.Pending != nil {
-		fmt.Printf("  Pending:      an in-flight tool batch will resume first\n")
+		c.ItemUnlessZero("Pending", "an in-flight tool batch will resume first")
 	}
-	fmt.Printf("  Prompt:       %s\n", truncatePrompt(rs.Prompt, 200))
+	c.Blank()
+	c.Section("Prompt", func(c *columns.Document) {
+		c.Print(truncatePrompt(rs.Prompt, 200))
+	})
 }
 
 // showTranscriptTUI renders the session in the full-screen viewer. It reports
