@@ -5,10 +5,8 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/signal"
 
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
@@ -31,7 +29,7 @@ func registerA2AAction(cmd *fisk.Application) {
 // operator confirmation (which a served agent has no operator to satisfy) are never
 // exposed; use ai:deny to keep a command off entirely.
 func a2aAction(_ *fisk.ParseContext) error {
-	ctx, cancel = signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	cfg, err := config.ParseConfigFileForMode(configFile, config.ModeServer)

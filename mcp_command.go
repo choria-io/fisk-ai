@@ -5,10 +5,8 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/signal"
 
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
@@ -33,7 +31,7 @@ func registerMcpAction(cmd *fisk.Application) {
 // expose.agent.tools when set. All progress goes to stderr; the MCP protocol owns
 // the HTTP response bodies.
 func mcpAction(_ *fisk.ParseContext) error {
-	ctx, cancel = signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	cfg, err := config.ParseConfigFileForMode(configFile, config.ModeMCP)

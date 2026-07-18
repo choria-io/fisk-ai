@@ -5,10 +5,8 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/signal"
 
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
@@ -39,7 +37,7 @@ func registerDiscoverAction(cmd *fisk.Application) {
 // before wiring it into remote_tools. The NATS context comes from --context when
 // given, otherwise from nats_context in the config file.
 func discoverAction(_ *fisk.ParseContext) error {
-	ctx, cancel = signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancel := interruptContext()
 	defer cancel()
 
 	contextName, sender, err := discoverContext()

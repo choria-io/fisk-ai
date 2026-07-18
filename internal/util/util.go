@@ -215,6 +215,13 @@ func TruncateString(s string, max int) string {
 	return string(r[:max]) + "..."
 }
 
+// TruncateLine collapses s to a single line, folding every run of whitespace to
+// one space, then truncates it with TruncateString. It is used for one-line
+// listings where a chatty multi-line value would otherwise wrap.
+func TruncateLine(s string, max int) string {
+	return TruncateString(strings.Join(strings.Fields(s), " "), max)
+}
+
 // LoadTools introspects the application, then always strips ai:deny tools before
 // applying the configured include and exclude filters. The unconditional first
 // pass is what enforces ai:deny even when neither filter is set.
