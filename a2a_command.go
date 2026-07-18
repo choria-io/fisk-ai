@@ -14,6 +14,7 @@ import (
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/a2anats"
 	"github.com/choria-io/fisk-ai/internal/util"
+	"github.com/choria-io/ui/columns"
 )
 
 func registerA2AAction(cmd *fisk.Application) {
@@ -66,14 +67,16 @@ func a2aAction(_ *fisk.ParseContext) error {
 	}
 
 	discovery, tool := srv.Subjects()
-	fmt.Fprintf(os.Stderr, "Serving %d tools over a2a as %s/%s on NATS context %s\n", len(exposed), cfg.Identity, util.Version(), cfg.NatsContext)
-	fmt.Fprintf(os.Stderr, "  discovery: %s\n", discovery)
-	fmt.Fprintf(os.Stderr, "  tools:     %s\n", tool)
-	for _, name := range exposed {
-		fmt.Fprintf(os.Stderr, "  %s\n", name)
-	}
+	c := columns.New()
+	c.Headingf("Serving {bold}%d{/bold} tools over a2a as {bold}%s{/bold}/{bold}%s{/bold} on NATS context {bold}%s{/bold}", len(exposed), cfg.Identity, util.Version(), cfg.NatsContext)
+	c.Item("Discovery", discovery)
+	c.Item("Tools", tool)
+	c.Values("Exposed", exposed)
+
+	fmt.Fprintln(os.Stderr, c.String())
 
 	<-ctx.Done()
+	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "a2a server stopped")
 
 	return nil

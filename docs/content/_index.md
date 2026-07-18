@@ -29,7 +29,7 @@ Built-in tools for HITL and Memory complement those from Fisk.
 Host local models using ollama, llama.cpp, LM Studio and any other provider that supports the Anthropic API.
 {{% /card %}}
 {{% card title="Single binary RAG" %}}
-Fisk AI includes a zero dependency, single binary, RAG system to create local knowledge bases for your Markdown data.
+Fisk AI includes a zero dependency, single binary, RAG system to create [local knowledge bases]({{% relref "knowledge" %}}) for your Markdown data.
 
 Zero to full-text and vector search in under 1 minute for 1000s of Markdown files.
 {{% /card %}}

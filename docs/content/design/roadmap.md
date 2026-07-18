@@ -19,9 +19,9 @@ The current focus is the day-to-day operator who automates tasks with LLMs on a 
 
 ## Roadmap
 
-* A `fisk-ai` native RAG database that integrates with local LLMs to create embeddings. The initial scope is Markdown
+* ~A `fisk-ai` native RAG database that integrates with local LLMs to create embeddings. The initial scope is Markdown
   files, allowing local knowledge bases that agents can interact with. These databases can also be exposed to systems
-  like Claude Code.
+  like Claude Code.~ Released in version 0.0.2 See [Knowledge]({{% relref "knowledge" %}})
 * Choria Protocol A2A system
     * Identity
     * Auditing
