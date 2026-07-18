@@ -145,6 +145,12 @@ func (s *Store) walkRoot(ctx context.Context, root string, opts IndexOptions, st
 			return err
 		}
 
+		// Observe cancellation between files so an interrupt is prompt even across
+		// the CPU-bound chunking that sits between the ctx-aware embed and DB calls.
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
 		if d.IsDir() {
 			return s.skipDir(path, d, storeDir)
 		}

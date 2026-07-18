@@ -66,7 +66,7 @@ func sessionLsAction(_ *fisk.ParseContext) error {
 	for _, info := range infos {
 		tbl.AppendRow(table.Row{
 			info.RunID, info.Model, sessionStatus(info.Terminal),
-			info.Updated.Format("2006-01-02 15:04"), truncatePrompt(info.Prompt, 50)})
+			info.Updated.Format("2006-01-02 15:04"), util.TruncateString(info.Prompt, 50)})
 	}
 	tbl.Render()
 
@@ -135,7 +135,7 @@ func printSessionMeta(c *columns.Document, rs *runstate.RunState) {
 	}
 	c.Blank()
 	c.Section("Prompt", func(c *columns.Document) {
-		c.Print(truncatePrompt(rs.Prompt, 200))
+		c.Print(util.TruncateString(rs.Prompt, 200))
 	})
 }
 
@@ -186,12 +186,4 @@ func terminalReason(rs *runstate.RunState) runstate.TerminalReason {
 	}
 
 	return rs.Terminal.Reason
-}
-
-func truncatePrompt(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-
-	return s[:max-3] + "..."
 }

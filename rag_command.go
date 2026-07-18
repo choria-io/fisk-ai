@@ -92,7 +92,8 @@ func printTierLine(ctx context.Context, store *rag.Store) error {
 }
 
 func knowledgeIndexAction(_ *fisk.ParseContext) error {
-	ctx := context.Background()
+	ctx, cancel := interruptContext()
+	defer cancel()
 
 	cfg, err := knowledgeConfig()
 	if err != nil {
@@ -136,6 +137,13 @@ func knowledgeIndexAction(_ *fisk.ParseContext) error {
 	}
 
 	stats, err := store.Index(ctx, roots, opts)
+	if errors.Is(err, context.Canceled) {
+		// The index is incremental by content hash, so the files embedded before
+		// the interrupt are committed and re-running skips them; say so rather than
+		// dumping a raw cancellation error or exiting silently.
+		fmt.Fprintln(os.Stderr, "\nindex canceled; already-indexed files are skipped on re-run")
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -185,7 +193,8 @@ func printIndexStats(stats *rag.IndexStats, dryRun bool) {
 }
 
 func knowledgeSearchAction(_ *fisk.ParseContext) error {
-	ctx := context.Background()
+	ctx, cancel := interruptContext()
+	defer cancel()
 
 	cfg, err := knowledgeConfig()
 	if err != nil {
@@ -232,7 +241,7 @@ func knowledgeSearchAction(_ *fisk.ParseContext) error {
 		if knowledgeFull {
 			fmt.Printf("\n%s\n", h.Content)
 		} else {
-			fmt.Printf("  %s\n", oneLineSnippet(h.Content, 100))
+			fmt.Printf("  %s\n", util.TruncateLine(h.Content, 100))
 		}
 	}
 
@@ -240,7 +249,8 @@ func knowledgeSearchAction(_ *fisk.ParseContext) error {
 }
 
 func knowledgeShowAction(_ *fisk.ParseContext) error {
-	ctx := context.Background()
+	ctx, cancel := interruptContext()
+	defer cancel()
 
 	cfg, err := knowledgeConfig()
 	if err != nil {
@@ -275,7 +285,8 @@ func knowledgeShowAction(_ *fisk.ParseContext) error {
 }
 
 func knowledgeRmAction(_ *fisk.ParseContext) error {
-	ctx := context.Background()
+	ctx, cancel := interruptContext()
+	defer cancel()
 
 	cfg, err := knowledgeConfig()
 	if err != nil {
@@ -321,7 +332,8 @@ func knowledgeRmAction(_ *fisk.ParseContext) error {
 }
 
 func knowledgeResetAction(_ *fisk.ParseContext) error {
-	ctx := context.Background()
+	ctx, cancel := interruptContext()
+	defer cancel()
 
 	cfg, err := knowledgeConfig()
 	if err != nil {
@@ -363,7 +375,8 @@ func knowledgeResetAction(_ *fisk.ParseContext) error {
 }
 
 func knowledgeSourcesAction(_ *fisk.ParseContext) error {
-	ctx := context.Background()
+	ctx, cancel := interruptContext()
+	defer cancel()
 
 	cfg, err := knowledgeConfig()
 	if err != nil {
@@ -404,7 +417,8 @@ func knowledgeSourcesAction(_ *fisk.ParseContext) error {
 }
 
 func knowledgeDoctorAction(_ *fisk.ParseContext) error {
-	ctx := context.Background()
+	ctx, cancel := interruptContext()
+	defer cancel()
 
 	cfg, err := knowledgeConfig()
 	if err != nil {
@@ -444,7 +458,8 @@ func knowledgeDoctorAction(_ *fisk.ParseContext) error {
 }
 
 func knowledgeStatsAction(_ *fisk.ParseContext) error {
-	ctx := context.Background()
+	ctx, cancel := interruptContext()
+	defer cancel()
 
 	cfg, err := knowledgeConfig()
 	if err != nil {
@@ -504,17 +519,6 @@ func parseCitation(citation string) (string, int, error) {
 	}
 
 	return relPath, ordinal, nil
-}
-
-// oneLineSnippet collapses content to a single line and truncates it for a search
-// listing.
-func oneLineSnippet(s string, max int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if len([]rune(s)) <= max {
-		return s
-	}
-
-	return string([]rune(s)[:max]) + "..."
 }
 
 // humanBytes renders a byte count in KiB/MiB for the stats output.

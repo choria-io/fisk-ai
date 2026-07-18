@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"unicode/utf8"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	. "github.com/onsi/ginkgo/v2"
@@ -184,5 +185,39 @@ var _ = Describe("PrintText", func() {
 
 		Expect(stdout).To(BeEmpty())
 		Expect(stderr).To(BeEmpty())
+	})
+})
+
+var _ = Describe("TruncateString", func() {
+	It("Should return a short string unchanged", func() {
+		Expect(TruncateString("hello", 10)).To(Equal("hello"))
+	})
+
+	It("Should keep a string of exactly max runes unchanged", func() {
+		Expect(TruncateString("hello", 5)).To(Equal("hello"))
+	})
+
+	It("Should cut and append an ellipsis when longer than max", func() {
+		Expect(TruncateString("hello world", 5)).To(Equal("hello..."))
+	})
+
+	It("Should count runes so multibyte text is never split mid-character", func() {
+		out := TruncateString("héllo wörld", 5)
+		Expect(out).To(Equal("héllo..."))
+		Expect(utf8.ValidString(out)).To(BeTrue())
+	})
+})
+
+var _ = Describe("TruncateLine", func() {
+	It("Should collapse runs of whitespace to single spaces", func() {
+		Expect(TruncateLine("a\n\tb   c", 20)).To(Equal("a b c"))
+	})
+
+	It("Should collapse first, then truncate on the collapsed length", func() {
+		Expect(TruncateLine("one  two  three  four", 7)).To(Equal("one two..."))
+	})
+
+	It("Should trim leading and trailing whitespace", func() {
+		Expect(TruncateLine("   spaced   ", 20)).To(Equal("spaced"))
 	})
 })

@@ -7,6 +7,8 @@ package main
 import (
 	"context"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/choria-io/fisk"
 
@@ -40,10 +42,17 @@ var (
 	stateDirFlag      string
 	sessionArgID      string
 	sessionTranscript bool
-
-	ctx    context.Context
-	cancel context.CancelFunc
 )
+
+// interruptContext returns a context canceled on the first Ctrl-C (SIGINT) or
+// SIGTERM, the shared interrupt contract for the one-shot commands. SIGTERM is
+// included so a server (mcp, a2a) shuts down cleanly under systemd or a
+// container stop; a second signal falls through to the default disposition and
+// terminates the process. The run command keeps its own signal handling because
+// it layers a graceful-suspend contract on top.
+func interruptContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
 
 func main() {
 	util.SetVersion(version)
