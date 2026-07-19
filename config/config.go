@@ -346,6 +346,11 @@ type ExposedToolSelection struct {
 type ExposedMCPConfig struct {
 	// Port is the TCP port the MCP server listens on.
 	Port int `json:"port" yaml:"port"`
+	// Address is the host or IP the MCP server binds to. It defaults to loopback
+	// (127.0.0.1) so the server is not reachable off the host unless an address is
+	// set explicitly; use "0.0.0.0" to listen on all interfaces. It combines with
+	// Port to form the listen address.
+	Address string `json:"address,omitempty" yaml:"address,omitempty"`
 	// Instructions is optional free text sent to clients at connection time to
 	// describe how to use the server and its tools. Clients may pass it to the
 	// LLM as a hint, so it is a place to add orientation that the individual tool
@@ -684,6 +689,17 @@ func (c *Config) MCPPort() int {
 	}
 
 	return c.Expose.Agent.MCP.Port
+}
+
+// MCPAddress returns the host or IP the MCP server binds to as configured under
+// expose.agent.mcp, or "" if none is set. Callers layer their own flag override
+// and loopback default on top.
+func (c *Config) MCPAddress() string {
+	if c.Expose == nil || c.Expose.Agent == nil || c.Expose.Agent.MCP == nil {
+		return ""
+	}
+
+	return c.Expose.Agent.MCP.Address
 }
 
 // MCPInstructions returns the optional instructions configured under

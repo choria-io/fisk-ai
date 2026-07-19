@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/choria-io/fisk"
+	"github.com/choria-io/ui/columns"
 	"github.com/choria-io/ui/table"
 
 	"github.com/choria-io/fisk-ai/config"
@@ -81,12 +82,17 @@ func knowledgeConfig() (*config.Config, error) {
 }
 
 // printTierLine prints the canonical tier line for a store to stdout.
-func printTierLine(ctx context.Context, store *rag.Store) error {
+func printTierLine(ctx context.Context, c *columns.Document, store *rag.Store) error {
 	line, err := store.TierLine(ctx)
 	if err != nil {
 		return err
 	}
-	fmt.Println(line)
+
+	if c == nil {
+		fmt.Println(line)
+	} else {
+		c.Print(line)
+	}
 
 	return nil
 }
@@ -116,7 +122,7 @@ func knowledgeIndexAction(_ *fisk.ParseContext) error {
 	}
 	defer store.Close()
 
-	if err := printTierLine(ctx, store); err != nil {
+	if err := printTierLine(ctx, nil, store); err != nil {
 		return err
 	}
 
@@ -212,37 +218,38 @@ func knowledgeSearchAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
+	c := columns.New()
+	defer c.WriteTo(os.Stdout)
+
 	if res.Degraded {
-		fmt.Println(rag.DegradedTierLine(res.DegradeReason))
-	} else if err := printTierLine(ctx, store); err != nil {
+		c.Print(rag.DegradedTierLine(res.DegradeReason))
+	} else if err := printTierLine(ctx, c, store); err != nil {
 		return err
 	}
 
 	switch res.Status {
 	case rag.StatusIndexNotBuilt:
-		fmt.Println("the knowledge index has not been built yet; run: fisk-ai knowledge index")
+		c.Print("the knowledge index has not been built yet; run: fisk-ai knowledge index")
 		return nil
 	case rag.StatusIndexEmpty:
-		fmt.Println("the knowledge index is empty, or the query had no searchable terms")
+		c.Print("the knowledge index is empty, or the query had no searchable terms")
 		return nil
 	}
 
 	if len(res.Hits) == 0 {
-		fmt.Println("no results")
+		c.Print("no results")
 		return nil
 	}
 
 	for _, h := range res.Hits {
-		fmt.Println()
-		fmt.Printf("%s\n", h.Citation)
-		if h.HeadingPath != "" {
-			fmt.Printf("  section: %s\n", h.HeadingPath)
-		}
-		if knowledgeFull {
-			fmt.Printf("\n%s\n", h.Content)
-		} else {
-			fmt.Printf("  %s\n", util.TruncateLine(h.Content, 100))
-		}
+		c.Section(h.Citation, func(c *columns.Document) {
+			c.ItemUnlessZero("Section", h.HeadingPath)
+			if knowledgeFull {
+				c.Item("Chunk", h.Content)
+			} else {
+				c.Item("Chunk", util.TruncateLine(h.Content, 100))
+			}
+		})
 	}
 
 	return nil
@@ -308,7 +315,7 @@ func knowledgeRmAction(_ *fisk.ParseContext) error {
 	}
 	defer store.Close()
 
-	if err := printTierLine(ctx, store); err != nil {
+	if err := printTierLine(ctx, nil, store); err != nil {
 		return err
 	}
 
@@ -389,7 +396,7 @@ func knowledgeSourcesAction(_ *fisk.ParseContext) error {
 	}
 	defer store.Close()
 
-	if err := printTierLine(ctx, store); err != nil {
+	if err := printTierLine(ctx, nil, store); err != nil {
 		return err
 	}
 
@@ -437,17 +444,20 @@ func knowledgeDoctorAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	fmt.Println(report.TierLine)
-	fmt.Println()
-	for _, c := range report.Checks {
-		mark := "ok"
-		if !c.OK {
-			mark = "FAIL"
+	c := columns.New()
+	defer c.WriteTo(os.Stdout)
+
+	c.Heading(report.TierLine)
+
+	for _, check := range report.Checks {
+		mark := " {green}ok{/green} "
+		if !check.OK {
+			mark = "{red}FAIL{/red}"
 		}
-		if c.Detail != "" {
-			fmt.Printf("  [%s] %s: %s\n", mark, c.Name, c.Detail)
+		if check.Detail != "" {
+			c.Item(check.Name, columns.Style(fmt.Sprintf("[%s] %s", mark, check.Detail)))
 		} else {
-			fmt.Printf("  [%s] %s\n", mark, c.Name)
+			c.Item(check.Name, columns.Style(fmt.Sprintf("[%s]", mark)))
 		}
 	}
 
@@ -473,7 +483,10 @@ func knowledgeStatsAction(_ *fisk.ParseContext) error {
 	}
 	defer store.Close()
 
-	if err := printTierLine(ctx, store); err != nil {
+	c := columns.New()
+	defer c.WriteTo(os.Stdout)
+
+	if err := printTierLine(ctx, c, store); err != nil {
 		return err
 	}
 
@@ -482,26 +495,25 @@ func knowledgeStatsAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	fmt.Println()
+	c.Blank()
+
 	if !st.Built {
-		fmt.Printf("store:      %s (not built; run: fisk-ai knowledge index)\n", st.StorePath)
+		c.Item("Store", fmt.Sprintf("%s (not built; run: fisk-ai knowledge index)", st.StorePath))
 		return nil
 	}
 
-	fmt.Printf("store:      %s\n", st.StorePath)
-	fmt.Printf("documents:  %d\n", st.Documents)
-	fmt.Printf("chunks:     %d\n", st.Chunks)
-	fmt.Printf("vectors:    %d\n", st.Vectors)
+	c.Item("Store", st.StorePath)
+	c.Item("Documents", st.Documents)
+	c.Item("Chunks", st.Chunks)
+	c.Item("Vectors", st.Vectors)
 	if st.VectorTier {
-		fmt.Printf("model:      %s\n", st.Meta.Model)
-		fmt.Printf("dimension:  %d\n", st.Meta.Dimension)
-		fmt.Printf("normalized: %v\n", st.Meta.Normalized)
+		c.Item("Model", st.Meta.Model)
+		c.Item("Dimension", st.Meta.Dimension)
+		c.Item("Normalized", st.Meta.Normalized)
 	}
-	fmt.Printf("db size:    %s\n", humanBytes(st.DBSize))
-	fmt.Printf("wal size:   %s\n", humanBytes(st.WALSize))
-	if !st.LastModified.IsZero() {
-		fmt.Printf("modified:   %s\n", st.LastModified.Format("2006-01-02 15:04"))
-	}
+	c.Item("DB size", columns.IBytes(st.DBSize))
+	c.Item("WAL size", columns.IBytes(st.WALSize))
+	c.ItemUnlessZero("Modified", st.LastModified)
 
 	return nil
 }
@@ -520,16 +532,4 @@ func parseCitation(citation string) (string, int, error) {
 	}
 
 	return relPath, ordinal, nil
-}
-
-// humanBytes renders a byte count in KiB/MiB for the stats output.
-func humanBytes(n int64) string {
-	switch {
-	case n >= 1<<20:
-		return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
-	case n >= 1<<10:
-		return fmt.Sprintf("%.1f KiB", float64(n)/(1<<10))
-	default:
-		return fmt.Sprintf("%d B", n)
-	}
 }

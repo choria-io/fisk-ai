@@ -74,7 +74,8 @@ type Options struct {
 	Name string
 	// Version is the server version reported to clients.
 	Version string
-	// Addr is the TCP address the HTTP server listens on, e.g. ":8080".
+	// Addr is the TCP address the HTTP server listens on, e.g. ":8080" to bind all
+	// interfaces or "127.0.0.1:8080" to bind a specific host.
 	Addr string
 	// Instructions is optional free text sent to clients at connection time, via
 	// the MCP initialize response. Clients may add it to the LLM's system prompt

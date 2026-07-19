@@ -28,6 +28,7 @@ var (
 	httpDebug  bool
 	noColor    bool
 	mcpPort    int
+	mcpAddress string
 	verbose    bool
 	noTUI      bool
 	chatMode   bool

@@ -186,9 +186,9 @@ func (s *Store) Doctor(ctx context.Context, paths []string) (*DoctorReport, erro
 	}
 
 	if s.db == nil {
-		add("store present", false, false, fmt.Sprintf("no index file at %s; run: fisk-ai knowledge index", s.dbPath))
+		add("Store present", false, false, fmt.Sprintf("no index file at %s; run: fisk-ai knowledge index", s.dbPath))
 	} else {
-		add("store present", true, false, s.dbPath)
+		add("Store present", true, false, s.dbPath)
 		s.doctorDBChecks(ctx, add)
 	}
 
@@ -215,24 +215,24 @@ func (s *Store) doctorDBChecks(ctx context.Context, add func(string, bool, bool,
 	}
 
 	if fi, err := os.Stat(s.dbPath); err != nil {
-		add("index writable", false, true, err.Error())
+		add("Index writable", false, true, err.Error())
 	} else {
 		writable := fi.Mode().Perm()&0o200 != 0
-		add("index writable", writable, false, fi.Mode().Perm().String())
+		add("Index writable", writable, false, fi.Mode().Perm().String())
 	}
 }
 
 // doctorPathChecks confirms each configured index path resolves on disk.
 func (s *Store) doctorPathChecks(paths []string, add func(string, bool, bool, string)) {
 	if len(paths) == 0 {
-		add("index paths resolve", true, false, "no paths configured (pass a path to knowledge index)")
+		add("Index paths resolve", true, false, "no paths configured (pass a path to knowledge index)")
 		return
 	}
 	for _, p := range paths {
 		if _, err := os.Stat(p); err != nil {
-			add("index path "+p, false, false, err.Error())
+			add("Index path "+p, false, false, err.Error())
 		} else {
-			add("index path "+p, true, false, "")
+			add("Index path "+p, true, false, "")
 		}
 	}
 }
@@ -242,36 +242,36 @@ func (s *Store) doctorPathChecks(paths []string, add func(string, bool, bool, st
 // informational lexical-only line. None of these are fatal.
 func (s *Store) doctorEmbeddingChecks(ctx context.Context, add func(string, bool, bool, string)) {
 	if s.emb == nil {
-		add("embeddings", true, false, "not configured (lexical-only)")
+		add("Embeddings", true, false, "not configured (lexical-only)")
 		return
 	}
 
 	dim, err := s.emb.Dim(ctx)
 	if err != nil {
-		add("embeddings reachable", false, false, err.Error())
+		add("Embeddings reachable", false, false, err.Error())
 		return
 	}
-	add("embeddings reachable", true, false, fmt.Sprintf("model=%s dim=%d", s.emb.Model(), dim))
+	add("Embeddings reachable", true, false, fmt.Sprintf("model=%s dim=%d", s.emb.Model(), dim))
 
 	if s.db == nil {
 		return
 	}
 	meta, err := s.readMeta(ctx)
 	if err != nil {
-		add("manifest matches model", false, false, err.Error())
+		add("Manifest matches model", false, false, err.Error())
 		return
 	}
 	if meta.Model == "" {
-		add("manifest matches model", false, false, "index is lexical-only; run: fisk-ai knowledge index --reindex")
+		add("Manifest matches model", false, false, "index is lexical-only; run: fisk-ai knowledge index --reindex")
 		return
 	}
 	mismatch := meta.Model != s.emb.Model() || meta.Dimension != dim ||
 		meta.QueryPrefix != s.emb.QueryPrefix() || meta.DocumentPrefix != s.emb.DocumentPrefix()
 	if mismatch {
-		add("manifest matches model", false, false,
+		add("Manifest matches model", false, false,
 			fmt.Sprintf("index built with model=%s dim=%d; config requests model=%s dim=%d; run: fisk-ai knowledge index --reindex",
 				meta.Model, meta.Dimension, s.emb.Model(), dim))
 		return
 	}
-	add("manifest matches model", true, false, "")
+	add("Manifest matches model", true, false, "")
 }
