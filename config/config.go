@@ -809,6 +809,18 @@ func (c *Config) A2AEnabled() bool {
 	return c.Expose != nil && c.Expose.Agent != nil && c.Expose.Agent.AgentToAgent
 }
 
+// A2ATransportName is the a2a transport binding in use. It is fixed to NATS until
+// a second transport lands, at which point it becomes a configurable field; see
+// A2ATransport.
+const A2ATransportName = "nats"
+
+// A2ATransport returns the name of the a2a transport binding to use, looked up in
+// the a2a transport registry. It is fixed to NATS for now; a transport: config
+// field is deferred until a second transport exists.
+func (c *Config) A2ATransport() string {
+	return A2ATransportName
+}
+
 // MCPEnabled reports whether this agent opts in to serving its tools over MCP.
 // Presence of the expose.agent.mcp block is the switch; it also carries the
 // listen port. Like a2a, a config that says nothing exposes nothing.

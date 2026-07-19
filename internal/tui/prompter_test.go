@@ -8,11 +8,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/gdamore/tcell/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/choria-io/fisk-ai/internal/util"
 )
 
 var _ = Describe("tcellPrompter", func() {
@@ -51,10 +50,10 @@ var _ = Describe("tcellPrompter", func() {
 	}
 
 	Describe("ApproveCommand", func() {
-		call := func(ctx context.Context) chan util.ConfirmChoice {
-			out := make(chan util.ConfirmChoice, 1)
+		call := func(ctx context.Context) chan toolkit.ConfirmChoice {
+			out := make(chan toolkit.ConfirmChoice, 1)
 			go func() {
-				c, _ := l.prompter.ApproveCommand(ctx, util.GateRequest{Command: "stream rm", Display: "stream rm ORDERS", Tag: "ai:confirm"})
+				c, _ := l.prompter.ApproveCommand(ctx, toolkit.GateRequest{Command: "stream rm", Display: "stream rm ORDERS", Tag: "ai:confirm"})
 				out <- c
 			}()
 			return out
@@ -65,7 +64,7 @@ var _ = Describe("tcellPrompter", func() {
 			awaitPrompt()
 
 			inject(tcell.KeyEsc, 0)
-			Eventually(out, time.Second).Should(Receive(Equal(util.ConfirmNo)))
+			Eventually(out, time.Second).Should(Receive(Equal(toolkit.ConfirmNo)))
 		})
 
 		It("Should return the operator's Always choice", func() {
@@ -76,7 +75,7 @@ var _ = Describe("tcellPrompter", func() {
 			inject(tcell.KeyRight, 0)
 			inject(tcell.KeyRight, 0)
 			inject(tcell.KeyEnter, 0)
-			Eventually(out, time.Second).Should(Receive(Equal(util.ConfirmAlways)))
+			Eventually(out, time.Second).Should(Receive(Equal(toolkit.ConfirmAlways)))
 		})
 
 		It("Should deny when the run is canceled while the prompt is up", func() {
@@ -85,12 +84,12 @@ var _ = Describe("tcellPrompter", func() {
 			awaitPrompt()
 
 			cancel()
-			Eventually(out, time.Second).Should(Receive(Equal(util.ConfirmNo)))
+			Eventually(out, time.Second).Should(Receive(Equal(toolkit.ConfirmNo)))
 			Eventually(front, time.Second).Should(Equal("main"))
 		})
 
 		It("Should show an injected color tag in the command literally", func() {
-			go l.prompter.ApproveCommand(context.Background(), util.GateRequest{Command: "run", Display: "run [red]x", Tag: "ai:confirm"})
+			go l.prompter.ApproveCommand(context.Background(), toolkit.GateRequest{Command: "run", Display: "run [red]x", Tag: "ai:confirm"})
 			awaitPrompt()
 
 			var text string

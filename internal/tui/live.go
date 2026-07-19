@@ -18,10 +18,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
-
-	"github.com/choria-io/fisk-ai/internal/util"
 )
 
 // spinnerFrames animates a working indicator in the statusbar. ASCII, so it needs no
@@ -178,7 +177,7 @@ func (l *Live) ExpandToolOutput() {
 
 // Prompter returns the native prompter that puts a run's interactive decisions to
 // the operator through tview widgets, for injection into agent.Run.
-func (l *Live) Prompter() util.Prompter {
+func (l *Live) Prompter() toolkit.Prompter {
 	return l.prompter
 }
 

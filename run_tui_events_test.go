@@ -8,13 +8,13 @@ import (
 	"encoding/json"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/agent"
 	"github.com/choria-io/fisk-ai/internal/tui"
-	"github.com/choria-io/fisk-ai/internal/util"
 )
 
 var _ = Describe("tcellEvents mapping", func() {
@@ -113,7 +113,7 @@ var _ = Describe("tcellEvents mapping", func() {
 			Expect(line.Text).To(Equal("(error)"))
 		})
 
-		mustResult := func(res util.CommandResult) string {
+		mustResult := func(res toolkit.CommandResult) string {
 			GinkgoHelper()
 			data, err := json.Marshal(res)
 			Expect(err).ToNot(HaveOccurred())
@@ -121,25 +121,25 @@ var _ = Describe("tcellEvents mapping", func() {
 		}
 
 		It("Should unwrap a CommandResult envelope to just its output", func() {
-			line := toolResultLine(mustResult(util.CommandResult{Command: "tools memory_read --key=x", Output: "the stored note\nsecond line"}), false)
+			line := toolResultLine(mustResult(toolkit.CommandResult{Command: "tools memory_read --key=x", Output: "the stored note\nsecond line"}), false)
 			Expect(line.Kind).To(Equal(tui.LineToolResult))
 			Expect(line.Text).To(Equal("the stored note\nsecond line"))
 		})
 
 		It("Should show a silent successful command as (no output)", func() {
-			line := toolResultLine(mustResult(util.CommandResult{Command: "tools memory_write --key=x", Output: ""}), false)
+			line := toolResultLine(mustResult(toolkit.CommandResult{Command: "tools memory_write --key=x", Output: ""}), false)
 			Expect(line.Kind).To(Equal(tui.LineToolResult))
 			Expect(line.Text).To(Equal("(no output)"))
 		})
 
 		It("Should keep an exit marker when a command that ran exited non-zero", func() {
-			line := toolResultLine(mustResult(util.CommandResult{Command: "stream info missing", ExitCode: 1, Output: "no such stream"}), false)
+			line := toolResultLine(mustResult(toolkit.CommandResult{Command: "stream info missing", ExitCode: 1, Output: "no such stream"}), false)
 			Expect(line.Kind).To(Equal(tui.LineToolResult))
 			Expect(line.Text).To(Equal("(exit 1) no such stream"))
 		})
 
 		It("Should mark a silent non-zero exit with just the exit marker", func() {
-			line := toolResultLine(mustResult(util.CommandResult{ExitCode: 2}), false)
+			line := toolResultLine(mustResult(toolkit.CommandResult{ExitCode: 2}), false)
 			Expect(line.Kind).To(Equal(tui.LineToolResult))
 			Expect(line.Text).To(Equal("(exit 2)"))
 		})

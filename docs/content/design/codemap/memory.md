@@ -7,7 +7,7 @@ description = "A small key/value store that lets the model keep durable notes ac
 Memory gives the model a small key/value store that persists across runs, so it can keep durable notes and pick them up next time rather than rediscovering them. It is opt-in, agent-mode only, and never exposed over MCP.
 
 {{% notice style="note" title="Where it lives" %}}
-`internal/memory` holds the backend-agnostic core: the `Store` interface and the `New` factory in `store.go`, the backend registry in `registry.go`, key validation in `key.go`, and the shared write validation in `write.go`. The file backend lives in its own `internal/memory/file` package, with the backend and its options in `file.go` and the on-disk format in `frontmatter.go`. The four model-facing tools and the system-prompt index are in `internal/util/builtin_memory.go`.
+`internal/memory` holds the backend-agnostic core: the `Store` interface and the `New` factory in `store.go`, the backend registry in `registry.go`, key validation in `key.go`, and the shared write validation in `write.go`. The file backend lives in its own `internal/memory/file` package, with the backend and its options in `file.go` and the on-disk format in `frontmatter.go`. The four model-facing tools and the system-prompt index are in `../../../../internal/toolkit/builtin/builtin_memory.go`.
 {{% /notice %}}
 
 ## Four tools over one interface

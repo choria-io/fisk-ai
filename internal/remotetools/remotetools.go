@@ -3,7 +3,7 @@
 //  SPDX-License-Identifier: Apache-2.0
 
 // Package remotetools discovers, filters and names the tools an agent imports
-// from remote agents over A2A. It is the policy layer over a2anats transport:
+// from remote agents over A2A. It is the policy layer over the a2a transport:
 // given the configured hosts it decides which advertised tools survive each
 // host's include/exclude filters and what model-facing name each ends up with,
 // prefixing on clash. It returns its findings as data (HostImport); formatting
@@ -18,11 +18,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/choria-io/fisk-ai/a2a"
 	"github.com/choria-io/fisk-ai/config"
-	"github.com/choria-io/fisk-ai/internal/a2anats"
+	"github.com/choria-io/fisk-ai/internal/a2a"
+	_ "github.com/choria-io/fisk-ai/internal/a2a/nats"
 	"github.com/choria-io/fisk-ai/internal/conns"
-	"github.com/choria-io/fisk-ai/internal/util"
 )
 
 // remoteToolNamePattern is the character set an imported tool's local name must
@@ -41,7 +40,7 @@ type HostImport struct {
 	Discovered int
 	Version    string
 	Kept       []a2a.ToolDescriptor
-	Tools      []*util.RemoteTool
+	Tools      []*a2a.RemoteTool
 	Skipped    []string
 	// IgnoredIncludeTags is set when the host's include filter used tags, which
 	// discovery cannot carry, so the tag part of the filter was ignored.
@@ -55,7 +54,7 @@ type HostImport struct {
 // per-host outcomes so the caller can warn about ignored tag filters, skipped
 // tools, or a host that contributed nothing. The client stays owned by the
 // caller, which must keep it open for the run and close it afterwards.
-func ImportForRun(ctx context.Context, client *a2anats.Client, cfg *config.Config, taken map[string]bool) ([]*util.RemoteTool, map[string]*util.RemoteTool, []HostImport, error) {
+func ImportForRun(ctx context.Context, client *a2a.Client, cfg *config.Config, taken map[string]bool) ([]*a2a.RemoteTool, map[string]*a2a.RemoteTool, []HostImport, error) {
 	imports := importRemoteToolHosts(ctx, client, cfg.RemoteTools)
 
 	for _, imp := range imports {
@@ -69,7 +68,7 @@ func ImportForRun(ctx context.Context, client *a2anats.Client, cfg *config.Confi
 		return nil, nil, imports, err
 	}
 
-	var remoteTools []*util.RemoteTool
+	var remoteTools []*a2a.RemoteTool
 	for i := range imports {
 		remoteTools = append(remoteTools, imports[i].Tools...)
 	}
@@ -96,7 +95,12 @@ func DiscoverForInfo(cfg *config.Config, taken map[string]bool) ([]HostImport, e
 	}
 	defer provider.Close()
 
-	client, err := a2anats.NewClientFromProvider(provider, cfg.Identity, cfg.LLM.Budget.CallTimeoutParsed)
+	transport, err := a2a.NewTransport(cfg.A2ATransport(), provider, a2a.TransportConfig{Identity: cfg.Identity, Timeout: cfg.LLM.Budget.CallTimeoutParsed})
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := a2a.NewClient(transport, cfg.Identity)
 	if err != nil {
 		return nil, err
 	}
@@ -112,7 +116,7 @@ func DiscoverForInfo(cfg *config.Config, taken map[string]bool) ([]HostImport, e
 // caller can decide whether to fail (run) or warn (info). Naming the surviving
 // tools is a separate, global step (resolveRemoteTools), because the choice of
 // whether to prefix a tool depends on the whole set, not on one host.
-func importRemoteToolHosts(ctx context.Context, client *a2anats.Client, hosts []config.RemoteToolHost) []HostImport {
+func importRemoteToolHosts(ctx context.Context, client *a2a.Client, hosts []config.RemoteToolHost) []HostImport {
 	out := make([]HostImport, 0, len(hosts))
 
 	for _, host := range hosts {
@@ -125,7 +129,7 @@ func importRemoteToolHosts(ctx context.Context, client *a2anats.Client, hosts []
 // importHost discovers a single host and applies its include/exclude filters,
 // recording the surviving descriptors in Kept. It does not name or build tools;
 // that is done globally afterwards.
-func importHost(ctx context.Context, client *a2anats.Client, host config.RemoteToolHost) HostImport {
+func importHost(ctx context.Context, client *a2a.Client, host config.RemoteToolHost) HostImport {
 	result := HostImport{Host: host}
 
 	start := time.Now()
@@ -162,7 +166,7 @@ func importHost(ctx context.Context, client *a2anats.Client, host config.RemoteT
 // run path can fail closed. taken holds the names already claimed by local tools
 // and built-ins. The imports slice is updated in place with the built Tools and
 // any Skipped notes.
-func resolveRemoteTools(taken map[string]bool, imports []HostImport, invoker util.RemoteInvoker) (map[string]*util.RemoteTool, error) {
+func resolveRemoteTools(taken map[string]bool, imports []HostImport, invoker a2a.RemoteInvoker) (map[string]*a2a.RemoteTool, error) {
 	// Count bare names across every host so a name exposed by more than one host
 	// is prefixed for all of them, symmetrically.
 	bareCount := map[string]int{}
@@ -195,7 +199,7 @@ func resolveRemoteTools(taken map[string]bool, imports []HostImport, invoker uti
 		}
 	}
 
-	byName := map[string]*util.RemoteTool{}
+	byName := map[string]*a2a.RemoteTool{}
 	var collisions []string
 
 	for i := range imports {
@@ -216,7 +220,7 @@ func resolveRemoteTools(taken map[string]bool, imports []HostImport, invoker uti
 				continue
 			}
 
-			rt, err := util.NewRemoteTool(name, host.Name, d, invoker)
+			rt, err := a2a.NewRemoteTool(name, host.Name, d, invoker)
 			if err != nil {
 				imports[i].Skipped = append(imports[i].Skipped, fmt.Sprintf("%s (%v)", d.Name, err))
 				continue

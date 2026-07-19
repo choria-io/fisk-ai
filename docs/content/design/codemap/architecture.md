@@ -16,7 +16,7 @@ The core is `internal/util` plus `config`. `util` owns command-tree introspectio
 
 The bottom tier is durable state and protocol types: `internal/runstate` journals a run, `internal/memory` persists model notes, `internal/rag` holds the SQLite knowledge index behind the `knowledge_search` tool, and the `a2a` package holds the transport-agnostic protocol messages that `internal/a2anats` binds to NATS. `internal/remotetools` sits beside the core as the import-policy layer for tools pulled from a peer agent.
 
-Like memory, `internal/rag` is reached only through a built-in tool in the core: `internal/util/builtin_rag.go` opens a `rag.Store` and wraps it as `knowledge_search`. The agent and MCP drivers open the store read-only while the `knowledge` command is its single writer, so an index can be rebuilt while an agent runs. It is the one package in this tier that reaches an external system of its own, an optional local embeddings server, and only when the vector tier is on.
+Like memory, `internal/rag` is reached only through a built-in tool in the core: `../../../../internal/toolkit/builtin/builtin_rag.go` opens a `rag.Store` and wraps it as `knowledge_search`. The agent and MCP drivers open the store read-only while the `knowledge` command is its single writer, so an index can be rebuilt while an agent runs. It is the one package in this tier that reaches an external system of its own, an optional local embeddings server, and only when the vector tier is on.
 
 <figure class="cm-diagram">
   <svg viewBox="0 0 760 334" role="img" aria-label="Five layers from CLI commands down to external systems, each depending on the one below">

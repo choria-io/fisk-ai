@@ -7,7 +7,7 @@ description = "A local, in-process document index the model can search, lexical 
 Knowledge gives the model one tool, `knowledge_search`, over a locally built index of the operator's own markdown and text files, so it can ground an answer in project documentation instead of its training data. The whole retrieval system, index and search, lives in the one `fisk-ai` binary and one process. It is opt-in and off by default, agent-mode only, and served over MCP only through an explicit allowlist, the same posture as [Memory]({{% relref "memory" %}}).
 
 {{% notice style="note" title="Where it lives" %}}
-`internal/rag`: the SQLite store in `store.go`, chunking in `chunk.go`, indexing in `index.go`, hybrid search in `search.go`, the embeddings client in `embed.go`, health checks in `doctor.go`, and the cross-process write lock in `lock_unix.go` and `lock_windows.go`. The model-facing `knowledge_search` tool is in `internal/util/builtin_rag.go`; the `fisk-ai knowledge` CLI is in `rag_command.go`; the `harness.knowledge` schema is in `config/config.go`.
+`internal/rag`: the SQLite store in `store.go`, chunking in `chunk.go`, indexing in `index.go`, hybrid search in `search.go`, the embeddings client in `embed.go`, health checks in `doctor.go`, and the cross-process write lock in `lock_unix.go` and `lock_windows.go`. The model-facing `knowledge_search` tool is in `../../../../internal/toolkit/builtin/builtin_rag.go`; the `fisk-ai knowledge` CLI is in `rag_command.go`; the `harness.knowledge` schema is in `config/config.go`.
 {{% /notice %}}
 
 ## Two tiers, one search

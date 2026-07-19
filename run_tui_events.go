@@ -9,12 +9,12 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 
 	"github.com/choria-io/fisk-ai/internal/agent"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/tui"
-	"github.com/choria-io/fisk-ai/internal/util"
 )
 
 // tcellEvents satisfies agent.Events, the same contract cliEvents implements.
@@ -79,7 +79,7 @@ func (e *tcellEvents) RemoteHostNotes(imports []remotetools.HostImport) {
 	e.live.Append(lines...)
 }
 
-func (e *tcellEvents) ResumeTranscript(rs *runstate.RunState, _ map[string]*util.Tool) {
+func (e *tcellEvents) ResumeTranscript(rs *runstate.RunState, _ map[string]*fisk.FiskCommandTool) {
 	// A resumed run draws its restored transcript straight away, so the startup card has
 	// nothing to wait for; drop it before the transcript lines land.
 	e.live.HideSplash()

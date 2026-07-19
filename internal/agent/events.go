@@ -6,10 +6,10 @@ package agent
 
 import (
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"
-	"github.com/choria-io/fisk-ai/internal/util"
 )
 
 // Events receives a run's narration, tool traces and advisories as it happens, so
@@ -26,7 +26,7 @@ type Events interface {
 	// ResumeTranscript asks the caller to replay the prior conversation of a
 	// resumed run before it continues; tools is the registry used to render tool
 	// calls the way a live run does.
-	ResumeTranscript(rs *runstate.RunState, tools map[string]*util.Tool)
+	ResumeTranscript(rs *runstate.RunState, tools map[string]*fisk.FiskCommandTool)
 	// LLMRequest reports one request's summary; emitted only when verbose.
 	LLMRequest(summary string)
 	// ToolCall reports a tool invocation as it is dispatched.

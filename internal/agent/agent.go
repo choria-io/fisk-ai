@@ -22,10 +22,16 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
+	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
+	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 
-	"github.com/choria-io/fisk-ai/a2a"
 	"github.com/choria-io/fisk-ai/config"
-	"github.com/choria-io/fisk-ai/internal/a2anats"
+	"github.com/choria-io/fisk-ai/internal/a2a"
+	// Link the NATS a2a transport in so it registers itself; a2a.NewTransport
+	// resolves the configured transport from the registry, and this is the sole
+	// transport today.
+	_ "github.com/choria-io/fisk-ai/internal/a2a/nats"
 	"github.com/choria-io/fisk-ai/internal/conns"
 	"github.com/choria-io/fisk-ai/internal/memory"
 	// Link the file memory backend in so it registers itself; memory.New resolves
@@ -123,16 +129,16 @@ type Result struct {
 // per run so the concurrent MCP path never receives it. The returned Result is
 // non-nil even on error so the caller can always print the stats. The context
 // governs cancellation; a graceful suspend is requested via opts.SuspendRequested.
-func Run(ctx context.Context, opts Options, events Events, prompter util.Prompter) (*Result, error) {
+func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prompter) (*Result, error) {
 	cfg := opts.Config
 	res := &Result{}
 
-	tools, err := util.LoadTools(cfg)
+	tools, err := fisk.LoadTools(cfg)
 	if err != nil {
 		return res, err
 	}
 
-	byName := make(map[string]*util.Tool, len(tools))
+	byName := make(map[string]*fisk.FiskCommandTool, len(tools))
 	for _, t := range tools {
 		byName[t.Name()] = t
 	}
@@ -150,8 +156,8 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 	// path, so they are never reachable over MCP where there is no operator. They
 	// are never deferred, so enabling them neither hides them behind tool search
 	// nor changes how the application tools are presented.
-	builtins := util.HITLTools(cfg)
-	builtinByName := make(map[string]*util.BuiltinTool, len(builtins))
+	builtins := builtin.HITLTools(cfg)
+	builtinByName := make(map[string]*builtin.BuiltinTool, len(builtins))
 	for _, b := range builtins {
 		if taken[b.Name()] {
 			return res, fmt.Errorf("human_in_the_loop adds a built-in tool %q but the application already exposes a tool with that name; exclude or rename it", b.Name())
@@ -170,14 +176,14 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 	// they are not reachable over MCP. The store is built now so a misconfiguration
 	// (unknown backend, bad options, an unwritable directory) fails before the loop.
 	var memStore memory.Store
-	var memBuiltins []*util.BuiltinTool
+	var memBuiltins []*builtin.BuiltinTool
 	if cfg.MemoryEnabled() {
 		memStore, err = memory.New(cfg)
 		if err != nil {
 			return res, err
 		}
 
-		memBuiltins = util.MemoryTools(cfg, memStore)
+		memBuiltins = builtin.MemoryTools(cfg, memStore)
 		for _, b := range memBuiltins {
 			if taken[b.Name()] {
 				return res, fmt.Errorf("memory adds a built-in tool %q but the application already exposes a tool with that name; exclude or rename it", b.Name())
@@ -193,7 +199,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 	// as a soft empty state, so a first run never fails to start. The store is opened
 	// read-only; knowledge index is the writer.
 	var ragStore *rag.Store
-	var ragBuiltins []*util.BuiltinTool
+	var ragBuiltins []*builtin.BuiltinTool
 	if cfg.RAGEnabled() {
 		ragStore, err = rag.Open(cfg)
 		if err != nil {
@@ -201,7 +207,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 		}
 		defer ragStore.Close()
 
-		ragBuiltins = util.RAGTools(cfg, ragStore)
+		ragBuiltins = builtin.RAGTools(cfg, ragStore)
 		for _, b := range ragBuiltins {
 			if taken[b.Name()] {
 				return res, fmt.Errorf("knowledge adds a built-in tool %q but the application already exposes a tool with that name; exclude or rename it", b.Name())
@@ -215,8 +221,8 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 	// strict: a named remote agent that cannot be reached or imported aborts the
 	// run rather than silently dropping tools the prompt may depend on. The
 	// connection is held open for the whole run since each remote tool call uses it.
-	var remoteTools []*util.RemoteTool
-	remoteByName := map[string]*util.RemoteTool{}
+	var remoteTools []*a2a.RemoteTool
+	remoteByName := map[string]*a2a.RemoteTool{}
 	if len(cfg.RemoteTools) > 0 {
 		provider, err := conns.Connect(cfg.NatsContext, cfg.Identity)
 		if err != nil {
@@ -224,7 +230,12 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 		}
 		defer provider.Close()
 
-		client, err := a2anats.NewClientFromProvider(provider, cfg.Identity, cfg.LLM.Budget.CallTimeoutParsed)
+		transport, err := a2a.NewTransport(cfg.A2ATransport(), provider, a2a.TransportConfig{Identity: cfg.Identity, Timeout: cfg.LLM.Budget.CallTimeoutParsed})
+		if err != nil {
+			return res, err
+		}
+
+		client, err := a2a.NewClient(transport, cfg.Identity)
 		if err != nil {
 			return res, err
 		}
@@ -251,15 +262,22 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 	// Large tool sets are deferred and discovered via the tool search tool; small
 	// ones are sent directly. Deferral is decided over the combined local and
 	// remote set. Built-in tools are appended after, never deferred.
-	toolParams := util.BuildToolParams(tools, remoteTools, len(builtins)+len(memBuiltins)+len(ragBuiltins))
+	deferrable := make([]toolkit.Tool, 0, len(tools)+len(remoteTools))
+	for _, t := range tools {
+		deferrable = append(deferrable, t)
+	}
+	for _, rt := range remoteTools {
+		deferrable = append(deferrable, rt)
+	}
+	toolParams := util.BuildToolParams(deferrable, len(builtins)+len(memBuiltins)+len(ragBuiltins))
 	for _, b := range builtins {
-		toolParams = append(toolParams, b.ToolParam())
+		toolParams = append(toolParams, b.ToolParam(false))
 	}
 	for _, b := range memBuiltins {
-		toolParams = append(toolParams, b.ToolParam())
+		toolParams = append(toolParams, b.ToolParam(false))
 	}
 	for _, b := range ragBuiltins {
-		toolParams = append(toolParams, b.ToolParam())
+		toolParams = append(toolParams, b.ToolParam(false))
 	}
 
 	// The confirm gate enforces confirmation tags: a tool carrying ai:confirm (always
@@ -345,13 +363,13 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 	// silently end the run instead of calling a tool. It is constant across
 	// iterations, so build it once.
 	system := []anthropic.TextBlockParam{{Text: cfg.SystemPrompt}}
-	if note := util.HITLSystemNote(builtins); note != "" {
+	if note := builtin.HITLSystemNote(builtins); note != "" {
 		system = append(system, anthropic.TextBlockParam{Text: note})
 	}
-	if note := util.MemorySystemNote(cfg); note != "" {
+	if note := builtin.MemorySystemNote(cfg); note != "" {
 		system = append(system, anthropic.TextBlockParam{Text: note})
 	}
-	if note := util.RAGSystemNote(cfg); note != "" {
+	if note := builtin.RAGSystemNote(cfg); note != "" {
 		system = append(system, anthropic.TextBlockParam{Text: note})
 	}
 
@@ -545,8 +563,24 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 		if lerr != nil {
 			events.Warn(Warning{Kind: WarnMemoryIndex, Err: lerr})
 		} else {
-			system = append(system, anthropic.TextBlockParam{Text: util.MemoryIndexBlock(entries)})
+			system = append(system, anthropic.TextBlockParam{Text: builtin.MemoryIndexBlock(entries)})
 		}
+	}
+
+	// The runner dispatches over a single registry keyed by the unique name the model
+	// addresses each tool by. Names were made unique across the kinds as each was
+	// added (the taken set), so merging local, built-in and remote tools cannot
+	// shadow one another. The per-kind maps above are kept only where a consumer still
+	// needs the concrete kind: byName feeds the resume transcript renderer.
+	allTools := make(map[string]toolkit.Tool, len(byName)+len(builtinByName)+len(remoteByName))
+	for name, t := range byName {
+		allTools[name] = t
+	}
+	for name, b := range builtinByName {
+		allTools[name] = b
+	}
+	for name, rt := range remoteByName {
+		allTools[name] = rt
 	}
 
 	r := &runner{
@@ -559,9 +593,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 		maxOutputTokens: maxOutputTokens,
 		maxIter:         maxIter,
 		maxTokens:       maxTokens,
-		byName:          byName,
-		builtinByName:   builtinByName,
-		remoteByName:    remoteByName,
+		tools:           allTools,
 		confirmTags:     confirmTags,
 		gate:            gate,
 		verbose:         opts.Verbose,
