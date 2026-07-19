@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nats-io/jsm.go/natscontext"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/micro"
 
 	"github.com/choria-io/fisk-ai/a2a"
+	"github.com/choria-io/fisk-ai/internal/conns"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
@@ -89,7 +89,7 @@ type Server struct {
 	sem       chan struct{}
 	svc       micro.Service
 	nc        *nats.Conn
-	ownConn   bool
+	provider  *conns.Provider
 }
 
 // NewServer builds a Server over an existing NATS connection and registers its
@@ -160,36 +160,36 @@ func (s *Server) ExposedTools() []string {
 	return names
 }
 
-// Stop deregisters the service, stops its subscriptions, and closes the
-// connection when the server owns it.
+// Stop deregisters the service, stops its subscriptions, and releases the
+// connection through its Provider, which closes it only when the server
+// established it (Serve) and leaves a borrowed one (NewServer) open.
 func (s *Server) Stop() error {
 	var err error
 	if s.svc != nil {
 		err = s.svc.Stop()
 	}
 
-	if s.ownConn && s.nc != nil {
-		s.nc.Close()
-	}
+	s.provider.Close()
 
 	return err
 }
 
-// Serve connects to NATS using the named context, registers the a2a tool server,
-// and returns it. The returned server owns the connection and closes it on Stop.
-// The caller blocks until it wants to shut down, then calls Stop.
+// Serve establishes a NATS connection from the named context, registers the a2a
+// tool server, and returns it. The returned server owns the connection through
+// its Provider and releases it on Stop. The caller blocks until it wants to shut
+// down, then calls Stop.
 func Serve(contextName string, tools []*util.Tool, opts ServerOptions) (*Server, error) {
-	nc, err := natscontext.Connect(contextName, nats.Name(fmt.Sprintf("fisk-ai %s", opts.Identity)))
+	provider, err := conns.Connect(contextName, opts.Identity)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to NATS context %q: %w", contextName, err)
-	}
-
-	srv, err := NewServer(nc, tools, opts)
-	if err != nil {
-		nc.Close()
 		return nil, err
 	}
-	srv.ownConn = true
+
+	srv, err := NewServer(provider.Nats(), tools, opts)
+	if err != nil {
+		provider.Close()
+		return nil, err
+	}
+	srv.provider = provider
 
 	return srv, nil
 }

@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/nats-io/jsm.go/natscontext"
 	"github.com/nats-io/nats.go"
 
 	"github.com/choria-io/fisk-ai/a2a"
+	"github.com/choria-io/fisk-ai/internal/conns"
 )
 
 // defaultRequestTimeout bounds a discovery or tool request when the caller's
@@ -30,31 +30,26 @@ type Client struct {
 	sender    string
 	timeout   time.Duration
 	validator *a2a.Validator
-	ownConn   bool
 }
 
-// Connect dials NATS using the named context and returns a Client. sender is this
-// agent's identity, used as the Header.Sender on outgoing requests. The returned
-// Client owns the connection and closes it on Close.
-func Connect(contextName, sender string, timeout time.Duration) (*Client, error) {
-	nc, err := natscontext.Connect(contextName, nats.Name(fmt.Sprintf("fisk-ai %s", sender)))
-	if err != nil {
-		return nil, fmt.Errorf("connecting to NATS context %q: %w", contextName, err)
+// NewClientFromProvider wraps the shared NATS connection carried by p as a
+// Client. It borrows the connection: the Provider's owner establishes and closes
+// it, so the Client never does. sender is this agent's identity, used as the
+// Header.Sender on outgoing requests. It returns an error when p carries no NATS
+// connection, so a misconfigured wiring fails loudly rather than dereferencing a
+// nil connection.
+func NewClientFromProvider(p *conns.Provider, sender string, timeout time.Duration) (*Client, error) {
+	nc := p.Nats()
+	if nc == nil {
+		return nil, fmt.Errorf("a2a NATS client requires a NATS connection but none was provisioned")
 	}
 
-	c, err := NewClient(nc, sender, timeout)
-	if err != nil {
-		nc.Close()
-		return nil, err
-	}
-	c.ownConn = true
-
-	return c, nil
+	return NewClient(nc, sender, timeout)
 }
 
-// NewClient wraps an existing NATS connection as a Client. It does not take
-// ownership of the connection, so Close leaves it open; tests use this to drive
-// the client against a connection they manage.
+// NewClient wraps an existing NATS connection as a Client. It never takes
+// ownership of the connection; tests use it to drive the client against a
+// connection they manage, and NewClientFromProvider uses it for the shared one.
 func NewClient(nc *nats.Conn, sender string, timeout time.Duration) (*Client, error) {
 	validator, err := a2a.NewValidator()
 	if err != nil {
@@ -66,13 +61,6 @@ func NewClient(nc *nats.Conn, sender string, timeout time.Duration) (*Client, er
 	}
 
 	return &Client{nc: nc, sender: sender, timeout: timeout, validator: validator}, nil
-}
-
-// Close closes the underlying connection when the Client owns it.
-func (c *Client) Close() {
-	if c.ownConn && c.nc != nil {
-		c.nc.Close()
-	}
 }
 
 // Discover asks the named agent to describe itself and returns its agent card.

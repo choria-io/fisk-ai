@@ -11,6 +11,7 @@ import (
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/a2anats"
+	"github.com/choria-io/fisk-ai/internal/conns"
 	"github.com/choria-io/fisk-ai/internal/util"
 	"github.com/choria-io/ui/columns"
 	"github.com/choria-io/ui/table"
@@ -45,11 +46,16 @@ func discoverAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	client, err := a2anats.Connect(contextName, sender, 0)
+	provider, err := conns.Connect(contextName, sender)
 	if err != nil {
 		return err
 	}
-	defer client.Close()
+	defer provider.Close()
+
+	client, err := a2anats.NewClientFromProvider(provider, sender, 0)
+	if err != nil {
+		return err
+	}
 
 	card, err := client.Discover(ctx, discoverAgent)
 	if err != nil {

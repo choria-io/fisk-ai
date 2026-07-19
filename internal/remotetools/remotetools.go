@@ -21,6 +21,7 @@ import (
 	"github.com/choria-io/fisk-ai/a2a"
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/a2anats"
+	"github.com/choria-io/fisk-ai/internal/conns"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
@@ -89,11 +90,16 @@ func DiscoverForInfo(cfg *config.Config, taken map[string]bool) ([]HostImport, e
 		return nil, nil
 	}
 
-	client, err := a2anats.Connect(cfg.NatsContext, cfg.Identity, cfg.LLM.Budget.CallTimeoutParsed)
+	provider, err := conns.Connect(cfg.NatsContext, cfg.Identity)
 	if err != nil {
 		return nil, err
 	}
-	defer client.Close()
+	defer provider.Close()
+
+	client, err := a2anats.NewClientFromProvider(provider, cfg.Identity, cfg.LLM.Budget.CallTimeoutParsed)
+	if err != nil {
+		return nil, err
+	}
 
 	imports := importRemoteToolHosts(context.Background(), client, cfg.RemoteTools)
 	_, _ = resolveRemoteTools(taken, imports, nil)
