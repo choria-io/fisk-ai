@@ -74,6 +74,7 @@ agent-only harness settings are ignored.
 | `application_path`                   | path to the Fisk application binary to introspect and serve; optional, omit it to serve only allowlisted built-ins such as `knowledge_search` |
 | `expose.agent.mcp`                   | the opt-in block that enables MCP serving; must be present                           |
 | `expose.agent.mcp.port`              | default listen port when `--port` and `FISK_AI_MCP_PORT` are unset, default `8080`   |
+| `expose.agent.mcp.address`           | host or IP to bind when `--address` and `FISK_AI_MCP_ADDRESS` are unset, default `127.0.0.1` (loopback); use `0.0.0.0` to listen on all interfaces |
 | `expose.agent.mcp.instructions`      | free-text guidance sent to clients on connect                                        |
 | `expose.agent.mcp.confirm_over_mcp` | how confirmation-gated commands behave when a client cannot be asked                 |
 | `include` / `exclude`                | select which commands become tools, matched on tool name (regex) or tag              |
