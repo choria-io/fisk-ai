@@ -24,7 +24,8 @@ A quick index into the codebase: what each command does, where each package live
 | `config` | The single `agent.yaml` schema, mode-based validation, accessors. | `config.go` |
 | `internal/util` | The shared core: introspection, tool params, built-ins, confirm gate, prompter, LLM call, stats. | `fisk.go`, `anthropic.go`, `builtin.go`, `builtin_memory.go`, `builtin_rag.go`, `confirm.go`, `prompter.go`, `llm.go` |
 | `internal/agent` | The agentic loop: setup, iteration, events. | `agent.go`, `runner.go`, `events.go` |
-| `internal/runstate` | Durable sessions: records, fold, store, fingerprint, locking. | `record.go`, `state.go`, `store.go`, `filestore.go`, `fingerprint.go` |
+| `internal/runstate` | The backend-agnostic session store: records, fold, `Store`/`Journal` interfaces, backend registry, id and append validation, fingerprint. | `record.go`, `state.go`, `store.go`, `registry.go`, `validate.go`, `fingerprint.go` |
+| `internal/runstate/file` | The file session backend, registered by import: one JSON-lines journal per run under a directory, with per-run locking. | `file.go`, `lock_unix.go` |
 | `internal/memory` | The backend-agnostic memory store: `Store` interface, backend registry, key and write validation. | `store.go`, `registry.go`, `key.go`, `write.go` |
 | `internal/memory/file` | The file memory backend, registered by import: one markdown file per key. | `file.go`, `frontmatter.go`, `nofollow.go` |
 | `internal/rag` | The local RAG index: SQLite store, chunking, hybrid search, embeddings, doctor, write lock. | `store.go`, `chunk.go`, `index.go`, `search.go`, `embed.go`, `doctor.go`, `vec.go`, `lock_unix.go` |
@@ -45,6 +46,7 @@ A quick index into the codebase: what each command does, where each package live
 | `runstate.RunState` | The folded, resumable state of a run. | [Sessions and Resume]({{% relref "sessions" %}}) |
 | `runstate.Fingerprint` | The configuration hash that guards a resume. | [Sessions and Resume]({{% relref "sessions" %}}) |
 | `memory.Store` | The pluggable key/value backend interface. | [Memory]({{% relref "memory" %}}) |
+| `runstate.Store` | The pluggable session store backend interface. | [Sessions and Resume]({{% relref "sessions" %}}) |
 | `rag.Store` | The SQLite-backed knowledge index: chunk, embed, hybrid search. | [Knowledge and RAG]({{% relref "knowledge" %}}) |
 | `tui.Live` | The full-screen live-run controller. | [The Terminal UI]({{% relref "terminal-ui" %}}) |
 | `a2a.Header` | The self-describing framing on every A2A message. | [Interoperability]({{% relref "interop" %}}) |
