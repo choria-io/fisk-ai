@@ -4,11 +4,11 @@
 
 //go:build !windows
 
-package memory
+package file
 
 import "syscall"
 
 // openNoFollow makes readFile refuse to open a symlink, so a symlink planted in
 // the memory directory cannot make the store return the contents of an unrelated
-// file. Windows has no O_NOFOLLOW; see file_windows.go for the fallback.
+// file. Windows has no O_NOFOLLOW; see windows.go for the fallback.
 const openNoFollow = syscall.O_NOFOLLOW

@@ -2,7 +2,7 @@
 //
 //  SPDX-License-Identifier: Apache-2.0
 
-package memory
+package file
 
 import (
 	"context"
@@ -14,13 +14,14 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/choria-io/fisk-ai/config"
+	"github.com/choria-io/fisk-ai/internal/memory"
 )
 
 var _ = Describe("fileStore", func() {
 	var (
 		ctx   context.Context
 		dir   string
-		store Store
+		store memory.Store
 	)
 
 	// create writes a new memory with the create-guard (overwrite off), the common
@@ -55,7 +56,7 @@ var _ = Describe("fileStore", func() {
 	It("Should refuse to create over an existing key and leave it untouched", func() {
 		Expect(create("k", "first", "one")).To(Succeed())
 
-		Expect(create("k", "second", "two")).To(MatchError(ErrExists))
+		Expect(create("k", "second", "two")).To(MatchError(memory.ErrExists))
 
 		_, content, _ := store.Read(ctx, "k")
 		Expect(content).To(Equal("one"))
@@ -79,7 +80,7 @@ var _ = Describe("fileStore", func() {
 
 	It("Should report ErrNotExist reading an absent key", func() {
 		_, _, err := store.Read(ctx, "nope")
-		Expect(err).To(MatchError(ErrNotExist))
+		Expect(err).To(MatchError(memory.ErrNotExist))
 	})
 
 	It("Should delete idempotently", func() {
@@ -94,19 +95,10 @@ var _ = Describe("fileStore", func() {
 		Expect(existed).To(BeFalse())
 	})
 
-	It("Should require a non-empty description, even after normalization", func() {
-		Expect(create("k", "   ", "c")).To(MatchError(ContainSubstring("description must not be empty")))
-	})
-
-	It("Should collapse a multi-line description to one line", func() {
+	It("Should collapse a multi-line description to one line end to end", func() {
 		Expect(create("k", "line one\nline two\t indented", "c")).To(Succeed())
 		desc, _, _ := store.Read(ctx, "k")
 		Expect(desc).To(Equal("line one line two indented"))
-	})
-
-	It("Should reject content over the size limit", func() {
-		big := strings.Repeat("x", maxContentBytes+1)
-		Expect(create("k", "d", big)).To(MatchError(ContainSubstring("too large")))
 	})
 
 	It("Should reject an invalid key before any file access", func() {
@@ -122,7 +114,7 @@ var _ = Describe("fileStore", func() {
 
 			entries, err := store.List(ctx)
 			Expect(err).ToNot(HaveOccurred())
-			Expect(entries).To(Equal([]Item{
+			Expect(entries).To(Equal([]memory.Item{
 				{Key: "a", Description: "first"},
 				{Key: "b", Description: "second"},
 			}))
@@ -171,8 +163,8 @@ var _ = Describe("fileStore", func() {
 })
 
 var _ = Describe("New", func() {
-	memCfg := func(backend string, options string) *config.Config {
-		m := &config.MemoryConfig{Enabled: true, Backend: backend}
+	memCfg := func(options string) *config.Config {
+		m := &config.MemoryConfig{Enabled: true, Backend: memory.BackendFile}
 		if options != "" {
 			m.Options = []byte(options)
 		}
@@ -183,7 +175,7 @@ var _ = Describe("New", func() {
 		dir := GinkgoT().TempDir()
 		GinkgoT().Chdir(dir)
 
-		store, err := New(memCfg("file", ""))
+		store, err := memory.New(memCfg(""))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(store).ToNot(BeNil())
 
@@ -195,20 +187,15 @@ var _ = Describe("New", func() {
 		dir := GinkgoT().TempDir()
 		target := filepath.Join(dir, "custom")
 
-		_, err := New(memCfg("file", `{"directory":`+quote(target)+`}`))
+		_, err := memory.New(memCfg(`{"directory":` + quote(target) + `}`))
 		Expect(err).ToNot(HaveOccurred())
 
 		_, err = os.Stat(target)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
-	It("Should reject an unknown backend", func() {
-		_, err := New(memCfg("redis", ""))
-		Expect(err).To(MatchError(ContainSubstring("unknown memory backend")))
-	})
-
 	It("Should reject an unknown option key", func() {
-		_, err := New(memCfg("file", `{"nonesuch":"x"}`))
+		_, err := memory.New(memCfg(`{"nonesuch":"x"}`))
 		Expect(err).To(MatchError(ContainSubstring("invalid file memory options")))
 	})
 })

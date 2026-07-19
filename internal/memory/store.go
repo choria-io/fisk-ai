@@ -3,38 +3,35 @@
 //  SPDX-License-Identifier: Apache-2.0
 
 // Package memory provides a small pluggable key/value store the agent uses to
-// keep durable notes across runs. A key maps to a markdown value that carries a
-// one-line description in YAML frontmatter; the description feeds the memory
-// index and the memory_list tool. The store is deliberately minimal: a flat
-// keyspace whose keys are legal both as NATS KV keys and as filenames, so a
-// value written by the file backend can migrate unchanged to a future JetStream
-// KV backend. The file backend is the only implementation today.
+// keep durable notes across runs. A key maps to a value carrying a one-line
+// description; the description feeds the memory index and the memory_list tool.
+// The store is deliberately minimal: a flat keyspace whose keys are legal both
+// as NATS KV keys and as filenames, so a value written by one backend can
+// migrate unchanged to another.
+//
+// A backend is a Store implementation registered under a name with Register,
+// usually from the backend package's init so a program links a backend in by
+// importing it. New looks the configured backend up in that registry, so adding
+// a backend touches no code here. The file backend lives in the file subpackage
+// and is the only implementation today.
 package memory
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/choria-io/fisk-ai/config"
 )
 
 // Backend names for the memory store, selected by harness.memory.backend.
 const (
-	// BackendFile stores each memory as a markdown file under a directory.
+	// BackendFile stores each memory as a markdown file under a directory. It is
+	// the name the file subpackage registers under and the config default.
 	BackendFile = "file"
 )
 
 const (
-	// defaultDirectory is the base directory the file backend uses when
-	// harness.memory.options.directory is unset. The agent identity is appended
-	// so two agents run from the same working directory do not share a namespace
-	// unless the operator points them at the same explicit directory.
-	defaultDirectory = "memory"
-
 	// maxKeyRunes caps a key's length so key+".md" stays within a filename limit
 	// on every supported filesystem. The charset is ASCII, so runes equal bytes.
 	maxKeyRunes = 200
@@ -88,50 +85,20 @@ type Store interface {
 	Delete(ctx context.Context, key string) (existed bool, err error)
 }
 
-// New builds the memory store described by cfg. It returns an error for an
-// unknown backend or malformed backend options, so an operator's mistake surfaces
-// at run start rather than on the first tool call.
+// New builds the memory store described by cfg. It looks the configured backend
+// up in the registry and hands the backend its factory the agent identity and
+// the raw per-backend options block. It returns an error for an unknown backend
+// or malformed backend options, so an operator's mistake surfaces at run start
+// rather than on the first tool call. An unknown backend most often means the
+// backend package was not imported into this build; the error lists the backends
+// that are linked in.
 func New(cfg *config.Config) (Store, error) {
-	switch cfg.MemoryBackend() {
-	case BackendFile:
-		opts, err := decodeFileOptions(cfg.MemoryRawOptions())
-		if err != nil {
-			return nil, err
-		}
+	backend := cfg.MemoryBackend()
 
-		dir := opts.Directory
-		if dir == "" {
-			dir = filepath.Join(defaultDirectory, cfg.Identity)
-		}
-
-		return newFileStore(dir)
-	default:
-		return nil, fmt.Errorf("unknown memory backend %q: the only supported backend is %q", cfg.MemoryBackend(), BackendFile)
-	}
-}
-
-// fileOptions is the typed shape of harness.memory.options for the file backend.
-type fileOptions struct {
-	// Directory is where memory files live. It is resolved relative to the
-	// working directory when not absolute, and defaults to memory/<identity>.
-	Directory string `json:"directory"`
-}
-
-// decodeFileOptions strictly decodes the backend options. The options arrive as
-// canonical JSON (config parses with UseJSONUnmarshaler), so a stdlib decoder
-// with DisallowUnknownFields catches a mistyped option key the same way the YAML
-// layer catches a mistyped top-level key.
-func decodeFileOptions(raw json.RawMessage) (fileOptions, error) {
-	var opts fileOptions
-	if len(raw) == 0 {
-		return opts, nil
+	factory, ok := lookup(backend)
+	if !ok {
+		return nil, fmt.Errorf("unknown memory backend %q: known backends are %v", backend, Backends())
 	}
 
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&opts); err != nil {
-		return opts, fmt.Errorf("invalid file memory options: %w", err)
-	}
-
-	return opts, nil
+	return factory(cfg.Identity, cfg.MemoryRawOptions())
 }

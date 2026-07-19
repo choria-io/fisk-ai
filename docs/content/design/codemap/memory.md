@@ -7,12 +7,14 @@ description = "A small key/value store that lets the model keep durable notes ac
 Memory gives the model a small key/value store that persists across runs, so it can keep durable notes and pick them up next time rather than rediscovering them. It is opt-in, agent-mode only, and never exposed over MCP.
 
 {{% notice style="note" title="Where it lives" %}}
-`internal/memory`: the backend-agnostic `Store` interface and factory in `store.go`, the file backend in `file.go`, the on-disk format in `frontmatter.go`, and key validation in `key.go`. The four model-facing tools and the system-prompt index are in `internal/util/builtin_memory.go`.
+`internal/memory` holds the backend-agnostic core: the `Store` interface and the `New` factory in `store.go`, the backend registry in `registry.go`, key validation in `key.go`, and the shared write validation in `write.go`. The file backend lives in its own `internal/memory/file` package, with the backend and its options in `file.go` and the on-disk format in `frontmatter.go`. The four model-facing tools and the system-prompt index are in `internal/util/builtin_memory.go`.
 {{% /notice %}}
 
 ## Four tools over one interface
 
 When memory is enabled the model gets four tools: `memory_list` returns keys and descriptions, `memory_read` fetches one entry, `memory_write` saves an entry, and `memory_delete` removes one. All four go through the `Store` interface, so the storage backend is pluggable behind them.
+
+Each backend registers itself under a name in `registry.go`, so a backend links into the binary by being imported and `New` builds whichever one `agent.yaml` selects. An unknown backend name fails at the start of a run and lists the backends that are linked in. Backends share the same key and write rules through `ValidateKey` and `ValidateWrite`, so a value written by one is legal in another. The file backend is the only one today; a NATS KV backend is the planned second.
 
 <figure class="cm-diagram">
   <svg viewBox="0 0 760 210" role="img" aria-label="Four memory tools call one Store interface backed by a file backend of markdown files">

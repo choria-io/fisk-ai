@@ -2,27 +2,90 @@
 //
 //  SPDX-License-Identifier: Apache-2.0
 
-package memory
+// Package file is the file-backed memory backend: one markdown file per key
+// under a directory, each carrying its one-line description in YAML frontmatter.
+// Importing this package registers the backend under memory.BackendFile, so the
+// program links it in by importing it (usually for its side effect). It holds no
+// exported API beyond that registration.
+package file
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode/utf8"
+
+	"github.com/choria-io/fisk-ai/internal/memory"
 )
 
-// fileExtension is appended to a key to form its filename, so the on-disk name
-// is the key verbatim and an operator can read the directory directly.
-const fileExtension = ".md"
+func init() {
+	memory.Register(memory.BackendFile, newStore)
+}
 
-// tempPattern names the temporary file a write stages before atomically linking
-// or renaming it into place. The leading dot keeps it out of List, which only
-// considers names ending in fileExtension whose stem is a valid key.
-const tempPattern = ".memtmp-*"
+const (
+	// defaultDirectory is the base directory used when the directory option is
+	// unset. The agent identity is appended so two agents run from the same
+	// working directory do not share a namespace unless the operator points them
+	// at the same explicit directory.
+	defaultDirectory = "memory"
+
+	// fileExtension is appended to a key to form its filename, so the on-disk name
+	// is the key verbatim and an operator can read the directory directly.
+	fileExtension = ".md"
+
+	// tempPattern names the temporary file a write stages before atomically linking
+	// or renaming it into place. The leading dot keeps it out of List, which only
+	// considers names ending in fileExtension whose stem is a valid key.
+	tempPattern = ".memtmp-*"
+)
+
+// options is the typed shape of harness.memory.options for the file backend.
+type options struct {
+	// Directory is where memory files live. It is resolved relative to the
+	// working directory when not absolute, and defaults to memory/<identity>.
+	Directory string `json:"directory"`
+}
+
+// newStore is the memory.Factory for the file backend: it decodes the options
+// block, resolves the directory, and opens the store. A construction failure
+// (bad options, an unwritable directory) surfaces here at run start.
+func newStore(identity string, raw json.RawMessage) (memory.Store, error) {
+	opts, err := decodeOptions(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	dir := opts.Directory
+	if dir == "" {
+		dir = filepath.Join(defaultDirectory, identity)
+	}
+
+	return newFileStore(dir)
+}
+
+// decodeOptions strictly decodes the backend options. The options arrive as
+// canonical JSON (config parses with UseJSONUnmarshaler), so a stdlib decoder
+// with DisallowUnknownFields catches a mistyped option key the same way the YAML
+// layer catches a mistyped top-level key.
+func decodeOptions(raw json.RawMessage) (options, error) {
+	var opts options
+	if len(raw) == 0 {
+		return opts, nil
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&opts); err != nil {
+		return opts, fmt.Errorf("invalid file memory options: %w", err)
+	}
+
+	return opts, nil
+}
 
 // fileStore is the file-backed Store: one markdown file per key under dir.
 type fileStore struct {
@@ -46,13 +109,13 @@ func (s *fileStore) path(key string) string {
 }
 
 func (s *fileStore) Read(_ context.Context, key string) (string, string, error) {
-	if err := ValidateKey(key); err != nil {
+	if err := memory.ValidateKey(key); err != nil {
 		return "", "", err
 	}
 
 	data, err := s.readFile(s.path(key))
 	if errors.Is(err, os.ErrNotExist) {
-		return "", "", ErrNotExist
+		return "", "", memory.ErrNotExist
 	}
 	if err != nil {
 		return "", "", err
@@ -64,16 +127,9 @@ func (s *fileStore) Read(_ context.Context, key string) (string, string, error) 
 }
 
 func (s *fileStore) Write(_ context.Context, key, description, content string, overwrite bool) error {
-	if err := ValidateKey(key); err != nil {
+	description, err := memory.ValidateWrite(key, description, content)
+	if err != nil {
 		return err
-	}
-
-	description = normalizeDescription(description)
-	if description == "" {
-		return fmt.Errorf("a memory description must not be empty")
-	}
-	if len(content) > maxContentBytes {
-		return fmt.Errorf("memory content is too large: %d bytes, limit is %d", len(content), maxContentBytes)
 	}
 
 	data, err := serialize(description, content)
@@ -86,8 +142,8 @@ func (s *fileStore) Write(_ context.Context, key, description, content string, o
 		if err != nil {
 			return err
 		}
-		if count >= maxEntries {
-			return fmt.Errorf("memory is full: %d entries, limit is %d; delete an entry before creating another", count, maxEntries)
+		if err := memory.CheckCapacity(count); err != nil {
+			return err
 		}
 	}
 
@@ -95,7 +151,7 @@ func (s *fileStore) Write(_ context.Context, key, description, content string, o
 }
 
 func (s *fileStore) Delete(_ context.Context, key string) (bool, error) {
-	if err := ValidateKey(key); err != nil {
+	if err := memory.ValidateKey(key); err != nil {
 		return false, err
 	}
 
@@ -110,13 +166,13 @@ func (s *fileStore) Delete(_ context.Context, key string) (bool, error) {
 	return true, nil
 }
 
-func (s *fileStore) List(_ context.Context) ([]Item, error) {
+func (s *fileStore) List(_ context.Context) ([]memory.Item, error) {
 	names, err := s.keyFiles()
 	if err != nil {
 		return nil, err
 	}
 
-	entries := make([]Item, 0, len(names))
+	entries := make([]memory.Item, 0, len(names))
 	for _, key := range names {
 		data, err := s.readFile(s.path(key))
 		if err != nil {
@@ -125,7 +181,7 @@ func (s *fileStore) List(_ context.Context) ([]Item, error) {
 			continue
 		}
 		description, _ := parse(data)
-		entries = append(entries, Item{Key: key, Description: description})
+		entries = append(entries, memory.Item{Key: key, Description: description})
 	}
 
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Key < entries[j].Key })
@@ -151,7 +207,7 @@ func (s *fileStore) keyFiles() ([]string, error) {
 			continue
 		}
 		key := strings.TrimSuffix(name, fileExtension)
-		if ValidateKey(key) != nil {
+		if memory.ValidateKey(key) != nil {
 			continue
 		}
 		keys = append(keys, key)
@@ -222,30 +278,10 @@ func (s *fileStore) writeAtomic(path string, data []byte, overwrite bool) error 
 
 	if err := os.Link(tmpName, path); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			return ErrExists
+			return memory.ErrExists
 		}
 		return fmt.Errorf("creating memory value: %w", err)
 	}
 
 	return nil
-}
-
-// normalizeDescription flattens a description to a single trimmed line and caps
-// its length: control characters (including newlines and tabs) become spaces,
-// runs of whitespace collapse to one, so the value is a clean single-key
-// frontmatter header and a clean single line in the index.
-func normalizeDescription(s string) string {
-	s = strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
-			return ' '
-		}
-		return r
-	}, s)
-	s = strings.Join(strings.Fields(s), " ")
-
-	if utf8.RuneCountInString(s) > maxDescriptionRunes {
-		s = string([]rune(s)[:maxDescriptionRunes])
-	}
-
-	return s
 }
