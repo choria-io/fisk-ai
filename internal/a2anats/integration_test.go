@@ -17,6 +17,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/choria-io/fisk-ai/internal/conns"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
@@ -87,6 +88,26 @@ var _ = Describe("Integration: a2a NATS round-trip", func() {
 		Expect(reply.IsError).To(BeFalse())
 		Expect(reply.Output).To(Equal("pong\n"))
 		Expect(reply.Exec.ExitCode).To(Equal(0))
+	})
+
+	It("Should discover and invoke through a client built from a connection Provider", func() {
+		nc := runNATS()
+
+		srv, err := NewServer(nc, servingApp("ping", "#!/bin/sh\necho pong\n"), ServerOptions{Identity: "svc", Version: "v1", LogOutput: io.Discard})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(srv.Stop)
+
+		client, err := NewClientFromProvider(conns.New(conns.WithNats(nc)), "caller", time.Second)
+		Expect(err).NotTo(HaveOccurred())
+
+		card, err := client.Discover(ctx, "svc")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(card.Name).To(Equal("svc"))
+
+		reply, err := client.InvokeTool(ctx, "svc", "ping", nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reply.IsError).To(BeFalse())
+		Expect(reply.Output).To(Equal("pong\n"))
 	})
 
 	It("Should report a tool that does not exist as an in-band error", func() {

@@ -11,12 +11,14 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/choria-io/fisk"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/choria-io/fisk-ai/a2a"
+	"github.com/choria-io/fisk-ai/internal/conns"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
@@ -46,6 +48,14 @@ var _ = Describe("Subjects", func() {
 	It("Should namespace discovery and tool subjects under the prefix and identity", func() {
 		Expect(DiscoverySubject("nats")).To(Equal("choria.fisk-ai.discovery.nats"))
 		Expect(ToolSubject("orders-db")).To(Equal("choria.fisk-ai.tool.orders-db"))
+	})
+})
+
+var _ = Describe("NewClientFromProvider", func() {
+	It("Should fail when the provider carries no NATS connection", func() {
+		c, err := NewClientFromProvider(conns.New(), "caller", time.Second)
+		Expect(err).To(MatchError(ContainSubstring("requires a NATS connection")))
+		Expect(c).To(BeNil())
 	})
 })
 

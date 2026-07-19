@@ -26,6 +26,7 @@ import (
 	"github.com/choria-io/fisk-ai/a2a"
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/a2anats"
+	"github.com/choria-io/fisk-ai/internal/conns"
 	"github.com/choria-io/fisk-ai/internal/memory"
 	// Link the file memory backend in so it registers itself; memory.New resolves
 	// the configured backend from the registry, and this is the sole backend today.
@@ -217,11 +218,16 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 	var remoteTools []*util.RemoteTool
 	remoteByName := map[string]*util.RemoteTool{}
 	if len(cfg.RemoteTools) > 0 {
-		client, err := a2anats.Connect(cfg.NatsContext, cfg.Identity, cfg.LLM.Budget.CallTimeoutParsed)
+		provider, err := conns.Connect(cfg.NatsContext, cfg.Identity)
 		if err != nil {
 			return res, fmt.Errorf("connecting to NATS for remote tools: %w", err)
 		}
-		defer client.Close()
+		defer provider.Close()
+
+		client, err := a2anats.NewClientFromProvider(provider, cfg.Identity, cfg.LLM.Budget.CallTimeoutParsed)
+		if err != nil {
+			return res, err
+		}
 
 		var imports []remotetools.HostImport
 		remoteTools, remoteByName, imports, err = remotetools.ImportForRun(ctx, client, cfg, taken)
