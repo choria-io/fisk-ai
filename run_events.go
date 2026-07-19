@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 	"golang.org/x/term"
 
 	"github.com/choria-io/fisk-ai/internal/agent"
@@ -107,7 +108,7 @@ func (c *cliEvents) RemoteHostNotes(imports []remotetools.HostImport) {
 	}
 }
 
-func (c *cliEvents) ResumeTranscript(rs *runstate.RunState, tools map[string]*util.Tool) {
+func (c *cliEvents) ResumeTranscript(rs *runstate.RunState, tools map[string]*fisk.FiskCommandTool) {
 	printResumeTranscript(os.Stderr, rs, tools, c.noColor)
 }
 

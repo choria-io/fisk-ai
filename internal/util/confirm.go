@@ -10,6 +10,7 @@ import (
 	"fmt"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 )
 
 // maxCommandLineRunes caps the length of a resolved command line shown to the
@@ -25,7 +26,7 @@ const maxCommandLineRunes = 2000
 // cannot rewrite or spoof what the operator sees, and capped at
 // maxCommandLineRunes.
 func SanitizeCommandLine(s string) string {
-	return sanitizeForTerminal(s, maxCommandLineRunes)
+	return SanitizeForTerminal(s, maxCommandLineRunes)
 }
 
 // ConfirmGate enforces confirmation tags in the agent loop: a tool carrying
@@ -46,12 +47,12 @@ type ConfirmGate struct {
 	// prompt and trace rendering lives behind it, so nothing writes to the raw
 	// terminal while a full-screen Prompter owns the screen. The gate keeps the
 	// default-deny policy; the prompter only reports a choice or an error.
-	prompter Prompter
+	prompter toolkit.Prompter
 }
 
 // NewConfirmGate returns a ConfirmGate with an empty session allow list that puts
 // its approval prompts to the given Prompter.
-func NewConfirmGate(prompter Prompter) *ConfirmGate {
+func NewConfirmGate(prompter toolkit.Prompter) *ConfirmGate {
 	return &ConfirmGate{allow: map[string]bool{}, prompter: prompter}
 }
 
@@ -78,23 +79,23 @@ func (g *ConfirmGate) Approve(ctx context.Context, toolName, commandPath, displa
 	// answer must resolve to a denial rather than block or run. Both are checked
 	// before any prompt is shown so the prompter is never reached in a state where
 	// its answer could not be trusted.
-	if !stdinIsTerminal() {
-		return false, noTerminalReason
+	if !StdinIsTerminal() {
+		return false, NoTerminalReason
 	}
 	if err := ctx.Err(); err != nil {
 		return false, fmt.Sprintf("the run ended before the operator could approve this command: %v; this decision is final, do not retry", err)
 	}
 
-	choice, err := g.prompter.ApproveCommand(ctx, GateRequest{Command: commandPath, Display: display, Tag: tag})
+	choice, err := g.prompter.ApproveCommand(ctx, toolkit.GateRequest{Command: commandPath, Display: display, Tag: tag})
 	if err != nil {
 		return false, fmt.Sprintf("the operator did not permit this command: %v; this decision is final, do not retry", err)
 	}
 
 	switch choice {
-	case ConfirmAlways:
+	case toolkit.ConfirmAlways:
 		g.allow[toolName] = true
 		return true, ""
-	case ConfirmOnce:
+	case toolkit.ConfirmOnce:
 		return true, ""
 	default:
 		return false, "the operator declined to permit this command; this decision is final, do not retry"

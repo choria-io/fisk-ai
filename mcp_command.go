@@ -13,6 +13,8 @@ import (
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/mcpserver"
+	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
+	fisktool "github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
@@ -64,12 +66,12 @@ func mcpAction(_ *fisk.ParseContext) error {
 		fmt.Fprintln(os.Stderr, "warning: memory has no effect over MCP; the built-in memory tools are only available in an agent run")
 	}
 
-	tools, err := util.ServedTools(cfg)
+	tools, err := fisktool.ServedTools(cfg)
 	if err != nil {
 		return err
 	}
 
-	ragBuiltins, ragStore, err := util.MCPKnowledgeBuiltins(ctx, cfg, os.Stderr)
+	ragBuiltins, ragStore, err := builtin.MCPKnowledgeBuiltins(ctx, cfg, os.Stderr)
 	if err != nil {
 		return err
 	}

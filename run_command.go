@@ -16,6 +16,7 @@ import (
 	"syscall"
 
 	"github.com/choria-io/fisk"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/agent"
@@ -155,7 +156,7 @@ func runAction(_ *fisk.ParseContext) error {
 		defer stopSignals()
 	}
 
-	res, err := agent.Run(runCtx, opts, &cliEvents{verbose: verbose, noColor: noColor, showToolOutput: showToolOutput}, util.NewSurveyPrompter())
+	res, err := agent.Run(runCtx, opts, &cliEvents{verbose: verbose, noColor: noColor, showToolOutput: showToolOutput}, toolkit.NewSurveyPrompter())
 
 	if res != nil {
 		if res.Reason == runstate.ReasonSuspended {

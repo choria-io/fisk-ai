@@ -12,6 +12,8 @@ import (
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
+	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
+	fisktool "github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 	"github.com/choria-io/fisk-ai/internal/util"
 	"github.com/choria-io/ui/columns"
 	"github.com/choria-io/ui/table"
@@ -45,7 +47,7 @@ func infoAction(_ *fisk.ParseContext) error {
 		fmt.Fprintln(os.Stderr, "warning: include/exclude have no effect without application_path; they filter the wrapped application's tools")
 	}
 
-	tools, err := util.LoadTools(cfg)
+	tools, err := fisktool.LoadTools(cfg)
 	if err != nil {
 		return err
 	}
@@ -56,16 +58,16 @@ func infoAction(_ *fisk.ParseContext) error {
 	for _, t := range tools {
 		taken[t.Name()] = true
 	}
-	for _, b := range util.HITLTools(cfg) {
+	for _, b := range builtin.HITLTools(cfg) {
 		taken[b.Name()] = true
 	}
 	// The memory tools are enumerated with a nil store: info only needs their names
 	// and descriptions, and never invokes a handler.
-	for _, b := range util.MemoryTools(cfg, nil) {
+	for _, b := range builtin.MemoryTools(cfg, nil) {
 		taken[b.Name()] = true
 	}
 	// The knowledge_search tool is likewise enumerated with a nil store.
-	for _, b := range util.RAGTools(cfg, nil) {
+	for _, b := range builtin.RAGTools(cfg, nil) {
 		taken[b.Name()] = true
 	}
 
@@ -97,16 +99,16 @@ func infoAction(_ *fisk.ParseContext) error {
 	// Built-in human-in-the-loop tools are not introspected from the application,
 	// so list them too when enabled, to show the full tool set a run would expose.
 	// They carry no tags.
-	for _, b := range util.HITLTools(cfg) {
+	for _, b := range builtin.HITLTools(cfg) {
 		tbl.AddRow(b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), "")
 	}
 	// Built-in memory tools are likewise not introspected from the application, so
 	// list them when enabled to show the full tool set a run would expose.
-	for _, b := range util.MemoryTools(cfg, nil) {
+	for _, b := range builtin.MemoryTools(cfg, nil) {
 		tbl.AddRow(b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), "")
 	}
 	// The built-in knowledge_search tool, likewise, when RAG is enabled.
-	for _, b := range util.RAGTools(cfg, nil) {
+	for _, b := range builtin.RAGTools(cfg, nil) {
 		tbl.AddRow(b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), "")
 	}
 	// Imported remote tools are listed with the host alias as their source, so the
@@ -138,7 +140,7 @@ func infoAction(_ *fisk.ParseContext) error {
 	// List the application's exposable global flags so an operator can see which
 	// exist and which they have allowlisted under global_flags, closing the loop
 	// between "what can I expose" and the error a bad name would raise at load.
-	globals, err := util.AppGlobalFlags(cfg)
+	globals, err := fisktool.AppGlobalFlags(cfg)
 	if err != nil {
 		return err
 	}

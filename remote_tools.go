@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/choria-io/fisk-ai/config"
-	"github.com/choria-io/fisk-ai/internal/a2anats"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/ui/columns"
 )
@@ -28,8 +27,8 @@ func printRemoteToolStatus(c *columns.Document, cfg *config.Config, imports []re
 
 	for _, imp := range imports {
 		if imp.Err != nil {
-			c.Printf("  %s: UNAVAILABLE via context %q on %q after %s: %v\n",
-				imp.Host.Name, cfg.NatsContext, a2anats.DiscoverySubject(imp.Host.Name), imp.RTT.Round(time.Millisecond), imp.Err)
+			c.Printf("  %s: UNAVAILABLE via context %q after %s: %v\n",
+				imp.Host.Name, cfg.NatsContext, imp.RTT.Round(time.Millisecond), imp.Err)
 			continue
 		}
 

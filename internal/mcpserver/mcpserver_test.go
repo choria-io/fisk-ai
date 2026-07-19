@@ -17,12 +17,13 @@ import (
 	"time"
 
 	"github.com/choria-io/fisk"
+	tools2 "github.com/choria-io/fisk-ai/internal/toolkit"
+	fisk2 "github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/choria-io/fisk-ai/config"
-	"github.com/choria-io/fisk-ai/internal/util"
 )
 
 func TestMCPServer(t *testing.T) {
@@ -61,10 +62,10 @@ func introspect(app *fisk.Application) *fisk.ApplicationModel {
 }
 
 // toolsFor introspects app and returns its tools.
-func toolsFor(app *fisk.Application) []*util.Tool {
+func toolsFor(app *fisk.Application) []*fisk2.FiskCommandTool {
 	GinkgoHelper()
 
-	tools, err := util.ApplicationTools(introspect(app))
+	tools, err := fisk2.ApplicationTools(introspect(app))
 	Expect(err).NotTo(HaveOccurred())
 
 	return tools
@@ -129,7 +130,7 @@ func connectElicit(ctx context.Context, srv *mcp.Server, handler func(context.Co
 
 // taggedExecutable builds one command carrying tag, backed by an executable that
 // prints marker, ready to serve.
-func taggedExecutable(name, tag, marker string) []*util.Tool {
+func taggedExecutable(name, tag, marker string) []*fisk2.FiskCommandTool {
 	GinkgoHelper()
 
 	app := fisk.New("app", "an app")
@@ -267,7 +268,7 @@ var _ = Describe("BuildServer", func() {
 		app.Command("secret", "denied tool").Tag("ai:deny")
 
 		// The deny strip is the same first FilterTools pass the agent uses.
-		filtered, err := util.FilterTools(toolsFor(app), nil, util.IncludeFilter)
+		filtered, err := fisk2.FilterTools(toolsFor(app), nil, fisk2.IncludeFilter)
 		Expect(err).NotTo(HaveOccurred())
 
 		srv, registered := BuildServer(filtered, Options{Name: "app", Version: "v1", LogOutput: io.Discard})
@@ -293,10 +294,10 @@ var _ = Describe("BuildServer", func() {
 	})
 
 	It("Should skip tools whose names are not valid MCP tool names", func() {
-		valid := &util.Tool{Path: []string{"ok"}, Model: &fisk.CmdModel{RestrictedSchema: map[string]any{"type": "object"}}}
-		invalid := &util.Tool{Path: []string{"bad.name"}, Model: &fisk.CmdModel{RestrictedSchema: map[string]any{"type": "object"}}}
+		valid := &fisk2.FiskCommandTool{Path: []string{"ok"}, Model: &fisk.CmdModel{RestrictedSchema: map[string]any{"type": "object"}}}
+		invalid := &fisk2.FiskCommandTool{Path: []string{"bad.name"}, Model: &fisk.CmdModel{RestrictedSchema: map[string]any{"type": "object"}}}
 
-		_, registered := BuildServer([]*util.Tool{valid, invalid}, Options{Name: "app", Version: "v1", LogOutput: io.Discard})
+		_, registered := BuildServer([]*fisk2.FiskCommandTool{valid, invalid}, Options{Name: "app", Version: "v1", LogOutput: io.Discard})
 		Expect(registered).To(ConsistOf("ok"))
 	})
 })
@@ -310,7 +311,7 @@ var _ = Describe("tool calls", func() {
 
 	// appWithExecutables builds an app whose named commands are each bound to a
 	// stand-in executable body, returning tools ready to call.
-	appWithExecutables := func(bodies map[string]string) []*util.Tool {
+	appWithExecutables := func(bodies map[string]string) []*fisk2.FiskCommandTool {
 		GinkgoHelper()
 
 		app := fisk.New("app", "an app")
@@ -319,7 +320,7 @@ var _ = Describe("tool calls", func() {
 		}
 
 		tools := toolsFor(app)
-		byName := map[string]*util.Tool{}
+		byName := map[string]*fisk2.FiskCommandTool{}
 		for _, t := range tools {
 			byName[t.Name()] = t
 		}
@@ -341,7 +342,7 @@ var _ = Describe("tool calls", func() {
 		text, isError := callText(ctx, cs, "ping", nil)
 		Expect(isError).To(BeFalse())
 
-		var result util.CommandResult
+		var result tools2.CommandResult
 		Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
 		Expect(result.ExitCode).To(Equal(0))
 		Expect(result.Output).To(Equal("pong\n"))
@@ -357,7 +358,7 @@ var _ = Describe("tool calls", func() {
 		text, isError := callText(ctx, cs, "fail", nil)
 		Expect(isError).To(BeFalse())
 
-		var result util.CommandResult
+		var result tools2.CommandResult
 		Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
 		Expect(result.ExitCode).To(Equal(4))
 	})
@@ -558,7 +559,7 @@ var _ = Describe("Confirm gating over MCP", func() {
 		text, isError := callText(ctx, cs, "deploy", nil)
 		Expect(isError).To(BeFalse())
 
-		var result util.CommandResult
+		var result tools2.CommandResult
 		Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
 		Expect(result.Output).To(Equal("deployed\n"))
 	})
@@ -608,7 +609,7 @@ var _ = Describe("Confirm gating over MCP", func() {
 		text, isError := callText(ctx, cs, "deploy", nil)
 		Expect(isError).To(BeFalse())
 
-		var result util.CommandResult
+		var result tools2.CommandResult
 		Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
 		Expect(result.Output).To(Equal("deployed\n"))
 		Expect(logs.String()).To(ContainSubstring("ungated"))
@@ -628,7 +629,7 @@ var _ = Describe("Confirm gating over MCP", func() {
 		text, isError := callText(ctx, cs, "list", nil)
 		Expect(isError).To(BeFalse())
 
-		var result util.CommandResult
+		var result tools2.CommandResult
 		Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
 		Expect(result.Output).To(Equal("listed\n"))
 	})
@@ -659,7 +660,7 @@ var _ = Describe("Confirm gating over MCP", func() {
 		text, isError := callText(ctx, cs, "write", nil)
 		Expect(isError).To(BeFalse())
 
-		var result util.CommandResult
+		var result tools2.CommandResult
 		Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
 		Expect(result.Output).To(Equal("wrote\n"))
 	})
@@ -687,7 +688,7 @@ var _ = Describe("Confirm gating over MCP", func() {
 		text, isError := callText(ctx, cs, "deploy", nil)
 		Expect(isError).To(BeFalse())
 
-		var result util.CommandResult
+		var result tools2.CommandResult
 		Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
 		Expect(result.Output).To(Equal("deployed\n"))
 	})
@@ -706,7 +707,7 @@ var _ = Describe("Confirm gating over MCP", func() {
 		text, isError := callText(ctx, cs, "deploy", nil)
 		Expect(isError).To(BeFalse())
 
-		var result util.CommandResult
+		var result tools2.CommandResult
 		Expect(json.Unmarshal([]byte(text), &result)).To(Succeed())
 		Expect(result.Output).To(Equal("deployed\n"))
 	})

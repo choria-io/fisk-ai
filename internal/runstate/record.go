@@ -19,8 +19,6 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
-
-	"github.com/choria-io/fisk-ai/a2a"
 )
 
 // Version is the current on-disk record schema version, stamped into the Meta
@@ -39,7 +37,11 @@ const Version = 2
 // so they never collide with the a2a wire protocols.
 type Protocol string
 
-const protocolNamespace = a2a.ProtocolNamespace + ".session"
+// protocolNamespace is the a2a product namespace (a2a.ProtocolNamespace) under a
+// ".session" segment. It is spelled out here rather than imported so the storage
+// layer does not depend on the a2a package, which now carries the anthropic SDK
+// via its remote-tool code; it must track a2a.ProtocolNamespace if that changes.
+const protocolNamespace = "io.choria.fisk-ai.v1.session"
 
 const (
 	// MetaProtocol frames the run: version, id, fingerprint and the initial

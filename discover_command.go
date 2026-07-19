@@ -10,7 +10,8 @@ import (
 
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
-	"github.com/choria-io/fisk-ai/internal/a2anats"
+	"github.com/choria-io/fisk-ai/internal/a2a"
+	_ "github.com/choria-io/fisk-ai/internal/a2a/nats"
 	"github.com/choria-io/fisk-ai/internal/conns"
 	"github.com/choria-io/fisk-ai/internal/util"
 	"github.com/choria-io/ui/columns"
@@ -52,7 +53,12 @@ func discoverAction(_ *fisk.ParseContext) error {
 	}
 	defer provider.Close()
 
-	client, err := a2anats.NewClientFromProvider(provider, sender, 0)
+	transport, err := a2a.NewTransport(config.A2ATransportName, provider, a2a.TransportConfig{Identity: sender})
+	if err != nil {
+		return err
+	}
+
+	client, err := a2a.NewClient(transport, sender)
 	if err != nil {
 		return err
 	}

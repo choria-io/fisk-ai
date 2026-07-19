@@ -10,7 +10,10 @@ import (
 
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
-	"github.com/choria-io/fisk-ai/internal/a2anats"
+	"github.com/choria-io/fisk-ai/internal/a2a"
+	_ "github.com/choria-io/fisk-ai/internal/a2a/nats"
+	"github.com/choria-io/fisk-ai/internal/conns"
+	fisktool "github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 	"github.com/choria-io/fisk-ai/internal/util"
 	"github.com/choria-io/ui/columns"
 )
@@ -41,7 +44,7 @@ func a2aAction(_ *fisk.ParseContext) error {
 		return fmt.Errorf("fisk-ai a2a requires expose.agent.agent_to_agent: true in %q; this agent is not configured to serve its tools to other agents", configFile)
 	}
 
-	tools, err := util.ServedTools(cfg)
+	tools, err := fisktool.ServedTools(cfg)
 	if err != nil {
 		return err
 	}
@@ -49,7 +52,18 @@ func a2aAction(_ *fisk.ParseContext) error {
 		return fmt.Errorf("no tools available after filtering; check include/exclude in %q", configFile)
 	}
 
-	srv, err := a2anats.Serve(cfg.NatsContext, tools, a2anats.ServerOptions{
+	provider, err := conns.Connect(cfg.NatsContext, cfg.Identity)
+	if err != nil {
+		return err
+	}
+	defer provider.Close()
+
+	transport, err := a2a.NewTransport(cfg.A2ATransport(), provider, a2a.TransportConfig{Identity: cfg.Identity})
+	if err != nil {
+		return err
+	}
+
+	srv, err := a2a.NewServer(transport, tools, a2a.ServerOptions{
 		Identity:    cfg.Identity,
 		Version:     util.Version(),
 		ConfirmTags: cfg.ConfirmTags(),
@@ -64,11 +78,11 @@ func a2aAction(_ *fisk.ParseContext) error {
 		return fmt.Errorf("no tools available to serve over a2a; all were filtered or confirmation-gated")
 	}
 
-	discovery, tool := srv.Subjects()
 	c := columns.New()
 	c.Headingf("Serving {bold}%d{/bold} tools over a2a as {bold}%s{/bold}/{bold}%s{/bold} on NATS context {bold}%s{/bold}", len(exposed), cfg.Identity, util.Version(), cfg.NatsContext)
-	c.Item("Discovery", discovery)
-	c.Item("Tools", tool)
+	for _, line := range srv.Describe() {
+		c.Item(line.Label, line.Value)
+	}
 	c.Values("Exposed", exposed)
 
 	fmt.Fprintln(os.Stderr, c.String())

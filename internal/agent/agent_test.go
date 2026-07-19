@@ -16,9 +16,12 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/choria-io/fisk"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
+	fisk2 "github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 	"github.com/segmentio/ksuid"
 
 	"github.com/choria-io/fisk-ai/config"
+	"github.com/choria-io/fisk-ai/internal/a2a"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	runstatefile "github.com/choria-io/fisk-ai/internal/runstate/file"
@@ -37,15 +40,15 @@ func TestAgent(t *testing.T) {
 // its rendering.
 type nopEvents struct{}
 
-func (nopEvents) Warn(Warning)                                               {}
-func (nopEvents) Starting(RunInfo)                                           {}
-func (nopEvents) RemoteHostNotes([]remotetools.HostImport)                   {}
-func (nopEvents) ResumeTranscript(*runstate.RunState, map[string]*util.Tool) {}
-func (nopEvents) LLMRequest(string)                                          {}
-func (nopEvents) ToolCall(ToolTrace)                                         {}
-func (nopEvents) ToolResult(ToolResultTrace)                                 {}
-func (nopEvents) Message(*anthropic.Message, bool)                           {}
-func (nopEvents) SessionRotated(string)                                      {}
+func (nopEvents) Warn(Warning)                                                           {}
+func (nopEvents) Starting(RunInfo)                                                       {}
+func (nopEvents) RemoteHostNotes([]remotetools.HostImport)                               {}
+func (nopEvents) ResumeTranscript(*runstate.RunState, map[string]*fisk2.FiskCommandTool) {}
+func (nopEvents) LLMRequest(string)                                                      {}
+func (nopEvents) ToolCall(ToolTrace)                                                     {}
+func (nopEvents) ToolResult(ToolResultTrace)                                             {}
+func (nopEvents) Message(*anthropic.Message, bool)                                       {}
+func (nopEvents) SessionRotated(string)                                                  {}
 
 // captureEvents records the tool traces so a test can assert what was emitted; it
 // inherits the no-op behavior for every other event.
@@ -86,6 +89,16 @@ type rotateRecorder struct {
 }
 
 func (r *rotateRecorder) SessionRotated(prevID string) { r.prevIDs = append(r.prevIDs, prevID) }
+
+// stubInvoker is a canned a2a.RemoteInvoker for driving a RemoteTool through the
+// runner without a transport: every call returns the same reply.
+type stubInvoker struct {
+	reply *a2a.ToolReply
+}
+
+func (s stubInvoker) InvokeTool(context.Context, string, string, json.RawMessage) (*a2a.ToolReply, error) {
+	return s.reply, nil
+}
 
 func mustMessage(j string) *anthropic.Message {
 	GinkgoHelper()
@@ -151,9 +164,7 @@ var _ = Describe("runner", func() {
 			finalMsg := `{"id":"m2","type":"message","role":"assistant","model":"m","stop_reason":"end_turn","content":[{"type":"text","text":"all done"}],"usage":{"input_tokens":3,"output_tokens":2}}`
 
 			emptyTools := func(r *runner) {
-				r.byName = map[string]*util.Tool{}
-				r.builtinByName = map[string]*util.BuiltinTool{}
-				r.remoteByName = map[string]*util.RemoteTool{}
+				r.tools = map[string]toolkit.Tool{}
 			}
 
 			// Runner A: one tool-using turn, then a suspend request lands, so the
@@ -220,11 +231,9 @@ var _ = Describe("runner", func() {
 		It("emits neither a call nor a result for a tool that never ran", func() {
 			ev := &captureEvents{}
 			r := &runner{
-				stats:         &util.RunStats{},
-				events:        ev,
-				byName:        map[string]*util.Tool{},
-				builtinByName: map[string]*util.BuiltinTool{},
-				remoteByName:  map[string]*util.RemoteTool{},
+				stats:  &util.RunStats{},
+				events: ev,
+				tools:  map[string]toolkit.Tool{},
 			}
 
 			block, remote := r.executeTool(context.Background(), anthropic.ToolUseBlock{ID: "t1", Name: "nope"})
@@ -240,7 +249,7 @@ var _ = Describe("runner", func() {
 
 		It("rejects a local tool call missing a required parameter without running it", func() {
 			ev := &captureEvents{}
-			tool := &util.Tool{
+			tool := &fisk2.FiskCommandTool{
 				Path:    []string{"do"},
 				AppPath: filepath.Join(GinkgoT().TempDir(), "never-run"),
 				Model: &fisk.CmdModel{RestrictedSchema: map[string]any{
@@ -253,11 +262,9 @@ var _ = Describe("runner", func() {
 				}},
 			}
 			r := &runner{
-				stats:         &util.RunStats{},
-				events:        ev,
-				byName:        map[string]*util.Tool{"do": tool},
-				builtinByName: map[string]*util.BuiltinTool{},
-				remoteByName:  map[string]*util.RemoteTool{},
+				stats:  &util.RunStats{},
+				events: ev,
+				tools:  map[string]toolkit.Tool{"do": tool},
 			}
 
 			block, remote := r.executeTool(context.Background(), anthropic.ToolUseBlock{ID: "t1", Name: "do", Input: json.RawMessage(`{"level":"info"}`)})
@@ -273,6 +280,72 @@ var _ = Describe("runner", func() {
 			Expect(ev.warns[0].Kind).To(Equal(WarnMissingRequired))
 			Expect(ev.warns[0].Name).To(Equal("do"))
 			Expect(ev.warns[0].Params).To(Equal([]string{"subject"}))
+		})
+
+		It("dispatches a local command tool: traces the full call line and runs it", func() {
+			app := filepath.Join(GinkgoT().TempDir(), "app")
+			Expect(os.WriteFile(app, []byte("#!/bin/sh\necho hello\n"), 0o755)).To(Succeed())
+
+			ev := &captureEvents{}
+			tool := &fisk2.FiskCommandTool{Path: []string{"do"}, AppPath: app, Model: &fisk.CmdModel{}}
+			r := &runner{stats: &util.RunStats{}, events: ev, tools: map[string]toolkit.Tool{"do": tool}}
+
+			block, remote := r.executeTool(context.Background(), anthropic.ToolUseBlock{ID: "t1", Name: "do", Input: json.RawMessage(`{}`)})
+			Expect(remote).To(BeFalse())
+			Expect(block.OfToolResult).NotTo(BeNil())
+			Expect(block.OfToolResult.IsError.Or(false)).To(BeFalse())
+
+			Expect(ev.calls).To(HaveLen(1))
+			Expect(ev.calls[0].Kind).To(Equal(ToolLocal))
+			Expect(ev.calls[0].Display).NotTo(BeEmpty())
+			Expect(ev.results).To(HaveLen(1))
+			Expect(ev.results[0].Kind).To(Equal(ToolLocal))
+		})
+
+		It("dispatches a remote tool: flags it remote, counts it, and traces the agent", func() {
+			ev := &captureEvents{}
+			desc := a2a.ToolDescriptor{Name: "info", InputSchema: json.RawMessage(`{"type":"object"}`)}
+			rt, err := a2a.NewRemoteTool("nats_info", "nats", desc, stubInvoker{reply: a2a.NewToolReply("ok", false)})
+			Expect(err).NotTo(HaveOccurred())
+
+			r := &runner{stats: &util.RunStats{}, events: ev, tools: map[string]toolkit.Tool{"nats_info": rt}}
+
+			block, remote := r.executeTool(context.Background(), anthropic.ToolUseBlock{ID: "t1", Name: "nats_info"})
+			Expect(remote).To(BeTrue())
+			Expect(r.stats.RemoteToolCalls).To(Equal(int64(1)))
+			Expect(block.OfToolResult).NotTo(BeNil())
+			Expect(block.OfToolResult.IsError.Or(false)).To(BeFalse())
+
+			Expect(ev.calls).To(HaveLen(1))
+			Expect(ev.calls[0].Kind).To(Equal(ToolRemote))
+			Expect(ev.calls[0].Agent).To(Equal("nats"))
+			Expect(ev.results).To(HaveLen(1))
+			Expect(ev.results[0].Kind).To(Equal(ToolRemote))
+		})
+
+		It("gates a confirm-tagged local tool and denies it without running when no operator can approve", func() {
+			ev := &captureEvents{}
+			tool := &fisk2.FiskCommandTool{
+				Path:    []string{"stream", "rm"},
+				AppPath: filepath.Join(GinkgoT().TempDir(), "never-run"),
+				Model:   &fisk.CmdModel{Tags: []string{"ai:confirm"}},
+			}
+			r := &runner{
+				stats:  &util.RunStats{},
+				events: ev,
+				tools:  map[string]toolkit.Tool{"stream_rm": tool},
+				gate:   util.NewConfirmGate(nil),
+			}
+
+			// With no interactive terminal there is no operator to approve, so the gate
+			// denies. The gated tool is never run: no call or result line is emitted, and
+			// the denial is an authoritative non-error result to the model.
+			block, remote := r.executeTool(context.Background(), anthropic.ToolUseBlock{ID: "t1", Name: "stream_rm"})
+			Expect(remote).To(BeFalse())
+			Expect(block.OfToolResult).NotTo(BeNil())
+			Expect(block.OfToolResult.IsError.Or(false)).To(BeFalse())
+			Expect(ev.calls).To(BeEmpty())
+			Expect(ev.results).To(BeEmpty())
 		})
 	})
 
@@ -306,15 +379,13 @@ var _ = Describe("runner", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			r := &runner{
-				stats:         &util.RunStats{},
-				events:        nopEvents{},
-				byName:        map[string]*util.Tool{},
-				builtinByName: map[string]*util.BuiltinTool{},
-				remoteByName:  map[string]*util.RemoteTool{},
-				messages:      rs.Messages,
-				journal:       resumeJ,
-				seq:           resumeJ.LastSeq(),
-				pending:       rs.Pending,
+				stats:    &util.RunStats{},
+				events:   nopEvents{},
+				tools:    map[string]toolkit.Tool{},
+				messages: rs.Messages,
+				journal:  resumeJ,
+				seq:      resumeJ.LastSeq(),
+				pending:  rs.Pending,
 			}
 
 			before := len(r.messages)
@@ -344,9 +415,7 @@ var _ = Describe("runner", func() {
 			return cfg
 		}
 		emptyTools := func(r *runner) {
-			r.byName = map[string]*util.Tool{}
-			r.builtinByName = map[string]*util.BuiltinTool{}
-			r.remoteByName = map[string]*util.RemoteTool{}
+			r.tools = map[string]toolkit.Tool{}
 		}
 		finalMsg := func(text string) string {
 			return `{"id":"x","type":"message","role":"assistant","model":"m","stop_reason":"end_turn","content":[{"type":"text","text":"` + text + `"}],"usage":{"input_tokens":1,"output_tokens":1}}`
@@ -852,9 +921,7 @@ var _ = Describe("runner", func() {
 			return cfg
 		}
 		emptyTools := func(r *runner) {
-			r.byName = map[string]*util.Tool{}
-			r.builtinByName = map[string]*util.BuiltinTool{}
-			r.remoteByName = map[string]*util.RemoteTool{}
+			r.tools = map[string]toolkit.Tool{}
 		}
 		// A tool turn then a final answer gives two LLM calls, so the request assertions
 		// cover a resend of the growing conversation, not just the first turn.
@@ -951,9 +1018,7 @@ var _ = Describe("runner", func() {
 
 	Describe("cache accounting", func() {
 		emptyTools := func(r *runner) {
-			r.byName = map[string]*util.Tool{}
-			r.builtinByName = map[string]*util.BuiltinTool{}
-			r.remoteByName = map[string]*util.RemoteTool{}
+			r.tools = map[string]toolkit.Tool{}
 		}
 
 		It("flows the cache split into stats, the journal, folded counters and the budget", func() {

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
@@ -37,15 +38,15 @@ func newTcellPrompter(live *Live) *tcellPrompter {
 	return &tcellPrompter{live: live}
 }
 
-var _ util.Prompter = (*tcellPrompter)(nil)
+var _ toolkit.Prompter = (*tcellPrompter)(nil)
 
 // ApproveCommand shows the confirm-gate modal (No default-focused; Enter on it or
 // Esc declines) and returns the three-way choice.
-func (p *tcellPrompter) ApproveCommand(ctx context.Context, req util.GateRequest) (util.ConfirmChoice, error) {
+func (p *tcellPrompter) ApproveCommand(ctx context.Context, req toolkit.GateRequest) (toolkit.ConfirmChoice, error) {
 	p.live.setBlocked()
 	defer p.live.setRunning()
 
-	result := make(chan util.ConfirmChoice, 1)
+	result := make(chan toolkit.ConfirmChoice, 1)
 	// The modal draws its text through tview's tag-aware printer, so the whole body
 	// is escaped to keep a literal "[" in the model-supplied command from opening a
 	// color tag; the fixed wording carries no brackets, so escaping it is harmless.
@@ -55,18 +56,18 @@ func (p *tcellPrompter) ApproveCommand(ctx context.Context, req util.GateRequest
 	p.modal(body, []string{"No", "Once", "Always"}, func(idx int) {
 		switch idx {
 		case 1:
-			result <- util.ConfirmOnce
+			result <- toolkit.ConfirmOnce
 		case 2:
-			result <- util.ConfirmAlways
+			result <- toolkit.ConfirmAlways
 		default:
-			result <- util.ConfirmNo
+			result <- toolkit.ConfirmNo
 		}
 	})
 
 	select {
 	case <-ctx.Done():
 		p.dismiss()
-		return util.ConfirmNo, ctx.Err()
+		return toolkit.ConfirmNo, ctx.Err()
 	case r := <-result:
 		return r, nil
 	}

@@ -13,17 +13,17 @@ import (
 	"path/filepath"
 
 	"github.com/choria-io/fisk"
+	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/rag"
-	"github.com/choria-io/fisk-ai/internal/util"
 )
 
 // lexicalKnowledgeBuiltins builds a real lexical knowledge_search built-in backed
 // by a small on-disk index, so a dispatch exercises the actual tool end to end.
-func lexicalKnowledgeBuiltins(ctx context.Context) []*util.BuiltinTool {
+func lexicalKnowledgeBuiltins(ctx context.Context) []*builtin.BuiltinTool {
 	GinkgoHelper()
 
 	storeDir := GinkgoT().TempDir()
@@ -46,7 +46,7 @@ func lexicalKnowledgeBuiltins(ctx context.Context) []*util.BuiltinTool {
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(func() { store.Close() })
 
-	return util.RAGTools(cfg, store)
+	return builtin.RAGTools(cfg, store)
 }
 
 var _ = Describe("BuildServer built-ins", func() {

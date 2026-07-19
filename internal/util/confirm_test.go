@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/choria-io/fisk"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -21,12 +21,12 @@ var _ = Describe("ConfirmGate", func() {
 	var savedStdinIsTerminal func() bool
 	var prompter *fakePrompter
 	BeforeEach(func() {
-		savedStdinIsTerminal = stdinIsTerminal
-		stdinIsTerminal = func() bool { return true }
+		savedStdinIsTerminal = StdinIsTerminal
+		StdinIsTerminal = func() bool { return true }
 		prompter = &fakePrompter{}
 	})
 	AfterEach(func() {
-		stdinIsTerminal = savedStdinIsTerminal
+		StdinIsTerminal = savedStdinIsTerminal
 	})
 
 	// newGate builds a gate wired to the spec's fakePrompter.
@@ -34,47 +34,12 @@ var _ = Describe("ConfirmGate", func() {
 		return NewConfirmGate(prompter)
 	}
 
-	Describe("NeedsConfirm", func() {
-		It("Should report the always-on ai:confirm tag regardless of configured tags", func() {
-			confirm := &Tool{Path: []string{"stream", "rm"}, Model: &fisk.CmdModel{Tags: []string{confirmTag}}}
-			plain := &Tool{Path: []string{"stream", "info"}, Model: &fisk.CmdModel{}}
-
-			Expect(confirm.NeedsConfirm(nil)).To(BeTrue())
-			Expect(plain.NeedsConfirm(nil)).To(BeFalse())
-		})
-
-		It("Should report a tool carrying a configured extra confirm tag", func() {
-			tool := &Tool{Path: []string{"stream", "rm"}, Model: &fisk.CmdModel{Tags: []string{"impact:rw"}}}
-
-			Expect(tool.NeedsConfirm([]string{"impact:rw"})).To(BeTrue())
-			Expect(tool.NeedsConfirm([]string{"impact:ro"})).To(BeFalse())
-			Expect(tool.NeedsConfirm(nil)).To(BeFalse())
-		})
-	})
-
-	Describe("ConfirmTrigger", func() {
-		It("Should prefer the always-on ai:confirm tag when several match", func() {
-			tool := &Tool{Path: []string{"stream", "rm"}, Model: &fisk.CmdModel{Tags: []string{"impact:rw", confirmTag}}}
-			Expect(tool.ConfirmTrigger([]string{"impact:rw"})).To(Equal(confirmTag))
-		})
-
-		It("Should name the first matching configured tag in command tag order", func() {
-			tool := &Tool{Path: []string{"stream", "rm"}, Model: &fisk.CmdModel{Tags: []string{"impact:rw", "admin"}}}
-			Expect(tool.ConfirmTrigger([]string{"admin", "impact:rw"})).To(Equal("impact:rw"))
-		})
-
-		It("Should be empty for an ungated command", func() {
-			tool := &Tool{Path: []string{"stream", "info"}, Model: &fisk.CmdModel{Tags: []string{"impact:ro"}}}
-			Expect(tool.ConfirmTrigger([]string{"impact:rw"})).To(BeEmpty())
-		})
-	})
-
 	Describe("Approve", func() {
 		It("Should allow once without remembering the tool", func() {
 			calls := 0
-			prompter.approveFn = func(GateRequest) (ConfirmChoice, error) {
+			prompter.approveFn = func(toolkit.GateRequest) (toolkit.ConfirmChoice, error) {
 				calls++
-				return ConfirmOnce, nil
+				return toolkit.ConfirmOnce, nil
 			}
 			gate := newGate()
 
@@ -90,9 +55,9 @@ var _ = Describe("ConfirmGate", func() {
 
 		It("Should remember an always answer by tool name for any arguments", func() {
 			calls := 0
-			prompter.approveFn = func(GateRequest) (ConfirmChoice, error) {
+			prompter.approveFn = func(toolkit.GateRequest) (toolkit.ConfirmChoice, error) {
 				calls++
-				return ConfirmAlways, nil
+				return toolkit.ConfirmAlways, nil
 			}
 			gate := newGate()
 
@@ -112,19 +77,19 @@ var _ = Describe("ConfirmGate", func() {
 		})
 
 		It("Should pass the triggering tag and command line to the prompter", func() {
-			prompter.approveFn = func(GateRequest) (ConfirmChoice, error) { return ConfirmOnce, nil }
+			prompter.approveFn = func(toolkit.GateRequest) (toolkit.ConfirmChoice, error) { return toolkit.ConfirmOnce, nil }
 			gate := newGate()
 
 			allowed, _ := gate.Approve(context.Background(), "stream_rm", "stream rm", "stream rm ORDERS", "impact:rw")
 			Expect(allowed).To(BeTrue())
-			Expect(prompter.lastGateReq).To(Equal(GateRequest{Command: "stream rm", Display: "stream rm ORDERS", Tag: "impact:rw"}))
+			Expect(prompter.lastGateReq).To(Equal(toolkit.GateRequest{Command: "stream rm", Display: "stream rm ORDERS", Tag: "impact:rw"}))
 		})
 
 		It("Should decline when the operator says no, and re-prompt next time", func() {
 			calls := 0
-			prompter.approveFn = func(GateRequest) (ConfirmChoice, error) {
+			prompter.approveFn = func(toolkit.GateRequest) (toolkit.ConfirmChoice, error) {
 				calls++
-				return ConfirmNo, nil
+				return toolkit.ConfirmNo, nil
 			}
 			gate := newGate()
 
@@ -139,7 +104,9 @@ var _ = Describe("ConfirmGate", func() {
 		})
 
 		It("Should deny by default when the prompt errors (interrupt, EOF)", func() {
-			prompter.approveFn = func(GateRequest) (ConfirmChoice, error) { return ConfirmNo, errors.New("interrupt") }
+			prompter.approveFn = func(toolkit.GateRequest) (toolkit.ConfirmChoice, error) {
+				return toolkit.ConfirmNo, errors.New("interrupt")
+			}
 			gate := newGate()
 
 			allowed, reason := gate.Approve(context.Background(), "stream_rm", "stream rm", "stream rm ORDERS", "ai:confirm")
@@ -148,22 +115,22 @@ var _ = Describe("ConfirmGate", func() {
 		})
 
 		It("Should deny with the no-terminal reason when no terminal is attached", func() {
-			stdinIsTerminal = func() bool { return false }
-			prompter.approveFn = func(GateRequest) (ConfirmChoice, error) {
+			StdinIsTerminal = func() bool { return false }
+			prompter.approveFn = func(toolkit.GateRequest) (toolkit.ConfirmChoice, error) {
 				Fail("must not prompt without a terminal")
-				return ConfirmNo, nil
+				return toolkit.ConfirmNo, nil
 			}
 			gate := newGate()
 
 			allowed, reason := gate.Approve(context.Background(), "stream_rm", "stream rm", "stream rm ORDERS", "ai:confirm")
 			Expect(allowed).To(BeFalse())
-			Expect(reason).To(Equal(noTerminalReason))
+			Expect(reason).To(Equal(NoTerminalReason))
 		})
 
 		It("Should deny without prompting when the run was already canceled", func() {
-			prompter.approveFn = func(GateRequest) (ConfirmChoice, error) {
+			prompter.approveFn = func(toolkit.GateRequest) (toolkit.ConfirmChoice, error) {
 				Fail("must not prompt once the run is canceled")
-				return ConfirmNo, nil
+				return toolkit.ConfirmNo, nil
 			}
 			gate := newGate()
 

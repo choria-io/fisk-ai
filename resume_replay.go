@@ -14,6 +14,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
+	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 	"golang.org/x/term"
 
 	"github.com/choria-io/fisk-ai/internal/runstate"
@@ -26,7 +28,7 @@ import (
 // this narration first appeared during the live run (all of it was intermediate,
 // never the final answer) and keeping the resumed run's eventual answer clean on
 // stdout for piping.
-func printResumeTranscript(w io.Writer, rs *runstate.RunState, byName map[string]*util.Tool, noColor bool) {
+func printResumeTranscript(w io.Writer, rs *runstate.RunState, byName map[string]*fisk.FiskCommandTool, noColor bool) {
 	fmt.Fprintf(w, "\n--- resuming %q, %d LLM call(s) so far ---\n", rs.RunID, rs.Counters.LlmCalls)
 
 	for i, msg := range rs.Messages {
@@ -60,7 +62,7 @@ func printResumeTranscript(w io.Writer, rs *runstate.RunState, byName map[string
 
 // printAssistantTurn renders one assistant turn's narration and the tools it
 // called, mirroring the live run's stderr output.
-func printAssistantTurn(w io.Writer, msg anthropic.MessageParam, byName map[string]*util.Tool, noColor bool) {
+func printAssistantTurn(w io.Writer, msg anthropic.MessageParam, byName map[string]*fisk.FiskCommandTool, noColor bool) {
 	text := messageText(msg)
 	if text != "" {
 		fmt.Fprintln(w)
@@ -78,7 +80,7 @@ func printAssistantTurn(w io.Writer, msg anthropic.MessageParam, byName map[stri
 // full resolved command line when the tool is known, so the resume transcript
 // reads identically to interactive output. It falls back to the raw name and JSON
 // arguments for a tool not in the registry (removed, built-in or remote).
-func toolCallDisplay(byName map[string]*util.Tool, use *anthropic.ToolUseBlockParam) string {
+func toolCallDisplay(byName map[string]*fisk.FiskCommandTool, use *anthropic.ToolUseBlockParam) string {
 	input, err := json.Marshal(use.Input)
 	if err != nil {
 		input = []byte("<unrenderable input>")
@@ -356,7 +358,7 @@ func commandResultOutput(output string) (string, bool) {
 	dec := json.NewDecoder(strings.NewReader(trimmed))
 	dec.DisallowUnknownFields()
 
-	var res util.CommandResult
+	var res toolkit.CommandResult
 	err := dec.Decode(&res)
 	if err != nil {
 		return "", false

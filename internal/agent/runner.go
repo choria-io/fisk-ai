@@ -15,8 +15,12 @@ import (
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
+	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
+	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 
 	"github.com/choria-io/fisk-ai/config"
+	"github.com/choria-io/fisk-ai/internal/a2a"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
@@ -38,11 +42,15 @@ type runner struct {
 	maxIter         int64
 	maxTokens       int64
 
-	byName        map[string]*util.Tool
-	builtinByName map[string]*util.BuiltinTool
-	remoteByName  map[string]*util.RemoteTool
-	confirmTags   []string
-	gate          *util.ConfirmGate
+	// tools is the single dispatch registry: every model-facing tool, whatever its
+	// kind (local command, in-process built-in, remote), keyed by the unique name the
+	// model addresses it by. executeTool looks a call up here once and runs it through
+	// the uniform Tool contract, consulting narrow capability interfaces for the
+	// kind-specific policy (argument validation, confirmation) and a type switch for
+	// the kind-specific call trace.
+	tools       map[string]toolkit.Tool
+	confirmTags []string
+	gate        *util.ConfirmGate
 
 	verbose bool
 
@@ -61,7 +69,7 @@ type runner struct {
 	// prompter puts the run's interactive decisions (confirm-gate approval and the
 	// human-in-the-loop questions) to the operator. It is used only from this single
 	// run goroutine, never from the concurrent MCP path.
-	prompter util.Prompter
+	prompter toolkit.Prompter
 
 	// callLLM performs one LLM request. It defaults to util.CallLLM and is a field
 	// so tests can drive the loop with scripted responses.
@@ -564,42 +572,16 @@ func toolUseFromParam(p *anthropic.ToolUseBlockParam) (anthropic.ToolUseBlock, e
 	return anthropic.ToolUseBlock{ID: p.ID, Name: p.Name, Input: input}, nil
 }
 
-// executeTool dispatches a single tool call: built-in tools first, then remote
-// tools, then local application tools (with confirm gating), mirroring the
-// original inline dispatch order. The second return reports whether the call was
+// executeTool dispatches a single tool call. It looks the tool up once in the
+// unified registry, then runs it through the uniform Tool contract: kind-specific
+// policy (argument validation, confirmation) is consulted through narrow capability
+// interfaces, and the kind-specific call trace is built by a type switch, so a tool
+// of any kind executes the same way. The second return reports whether the call was
 // dispatched to a remote agent, for the journal and stats.
 func (r *runner) executeTool(ctx context.Context, use anthropic.ToolUseBlock) (anthropic.ContentBlockParamUnion, bool) {
 	r.stats.ToolCalls++
 
-	// Built-in tools run in-process and are dispatched before the application
-	// tools. A human-in-the-loop tool renders its own prompt (or declines when no
-	// terminal is attached) on the next line, so naming it in the trace is a
-	// redundant distraction and it is shown only under verbose. A memory tool has no
-	// operator interaction of its own, so it is traced like an application tool with
-	// a call line (Display) and a shown result.
-	if b, ok := r.builtinByName[use.Name]; ok {
-		kind := ToolBuiltin
-		if b.Traced() {
-			kind = ToolMemory
-		}
-		r.events.ToolCall(ToolTrace{Name: use.Name, Display: b.TraceLine(use.Input), Kind: kind})
-		block := util.ExecuteBuiltinUse(ctx, b, use, r.prompter)
-		r.events.ToolResult(toolResultTrace(kind, block))
-		return block, false
-	}
-
-	// Remote tools are invoked on their agent over NATS. They carry no local
-	// tags, so the confirm gate does not apply; the serving agent declines
-	// confirmation-gated tools at its own end.
-	if rt, ok := r.remoteByName[use.Name]; ok {
-		r.stats.RemoteToolCalls++
-		r.events.ToolCall(ToolTrace{Name: use.Name, Kind: ToolRemote, Agent: rt.Agent()})
-		block := util.ExecuteRemoteUse(ctx, rt, use)
-		r.events.ToolResult(toolResultTrace(ToolRemote, block))
-		return block, true
-	}
-
-	t, ok := r.byName[use.Name]
+	tool, ok := r.tools[use.Name]
 	if !ok {
 		r.events.Warn(Warning{Kind: WarnUnknownTool, Name: use.Name})
 		return anthropic.NewToolResultBlock(use.ID, fmt.Sprintf("unknown tool %q", use.Name), true), false
@@ -609,39 +591,79 @@ func (r *runner) executeTool(ctx context.Context, use anthropic.ToolUseBlock) (a
 	// is silently dropped or skipped, so the command runs incomplete and fails only
 	// on its own non-zero exit. When the model omits a required parameter, reject the
 	// call before it runs and return the missing parameters so the model can correct
-	// and retry. This runs before the confirm gate so the operator is never asked to
-	// approve a structurally invalid call, and nothing executed, so it is reported as
-	// a warning rather than a call-and-result pair whose command line would be shown
-	// missing the very parameter that was absent.
-	if missing := t.MissingRequired(use.Input); len(missing) > 0 {
-		r.events.Warn(Warning{Kind: WarnMissingRequired, Name: use.Name, Params: missing})
-		return anthropic.NewToolResultBlock(use.ID, t.MissingRequiredMessage(missing), true), false
+	// and retry. Only the tool kinds that can check (local command tools) implement
+	// ArgumentValidator. This runs before the confirm gate so the operator is never
+	// asked to approve a structurally invalid call, and nothing executed, so it is
+	// reported as a warning rather than a call-and-result pair whose command line
+	// would be shown missing the very parameter that was absent.
+	if v, ok := tool.(toolkit.ArgumentValidator); ok {
+		if missing := v.MissingRequired(use.Input); len(missing) > 0 {
+			r.events.Warn(Warning{Kind: WarnMissingRequired, Name: use.Name, Params: missing})
+			return anthropic.NewToolResultBlock(use.ID, v.MissingRequiredMessage(missing), true), false
+		}
 	}
 
-	// A confirm-tagged tool must be approved by the operator before it runs. The
-	// gate is shown the full, faithful command line (TraceLine) so the operator
-	// approves exactly what will run; a denial returns an authoritative result to
-	// the model and the command is not run, so it emits no trace or result. The
-	// line is sanitized because its argument values come from the model and must
-	// not be able to rewrite or spoof the operator's terminal.
-	if t.NeedsConfirm(r.confirmTags) {
-		allowed, reason := r.gate.Approve(ctx, t.Name(), t.Command(), t.TraceLine(use.Input), t.ConfirmTrigger(r.confirmTags))
+	// A confirm-tagged tool must be approved by the operator before it runs. Only
+	// local command tools are Confirmable; a remote tool carries no local tags (its
+	// serving agent declines confirmation-gated tools at its own end) and a built-in
+	// has no command to gate. The gate is shown the full, faithful command line
+	// (TraceLine) so the operator approves exactly what will run; a denial returns an
+	// authoritative result to the model and the command is not run, so it emits no
+	// trace or result. The line is sanitized because its argument values come from
+	// the model and must not be able to rewrite or spoof the operator's terminal.
+	if c, ok := tool.(toolkit.Confirmable); ok && c.NeedsConfirm(r.confirmTags) {
+		allowed, reason := r.gate.Approve(ctx, tool.Name(), c.Command(), c.TraceLine(use.Input), c.ConfirmTrigger(r.confirmTags))
 		if !allowed {
 			return util.ConfirmDeniedResult(use.ID, reason), false
 		}
 	}
 
-	// A call line is emitted for every tool that runs, including an approved
-	// confirm-gated one whose approval modal has since closed, so its result always
-	// has a visible command above it. Both the full command line and a short form with
-	// long argument values elided are carried, so a width-aware surface can show the
-	// full line when it fits and fall back to the short one only when it would overflow
-	// the row; the gate above kept the full command for the approval decision.
-	r.events.ToolCall(ToolTrace{Name: use.Name, Display: t.TraceLine(use.Input), DisplayShort: t.TraceLineShort(use.Input), Kind: ToolLocal})
+	// The call trace shape and the execution dependencies are kind-specific; the
+	// result trace and the ExecuteUse call are uniform. A call line is emitted for
+	// every tool that runs, including an approved confirm-gated one whose approval
+	// modal has since closed, so its result always has a visible command above it.
+	kind, deps, remote := r.traceCall(use)
+	if remote {
+		r.stats.RemoteToolCalls++
+	}
 
-	block := util.ExecuteToolUse(ctx, t, use)
-	r.events.ToolResult(toolResultTrace(ToolLocal, block))
-	return block, false
+	block := tool.ExecuteUse(ctx, use, deps)
+	r.events.ToolResult(toolResultTrace(kind, block))
+	return block, remote
+}
+
+// traceCall emits the ToolCall trace for a dispatched call and returns the kind
+// (for the matching result trace), the execution dependencies the kind needs, and
+// whether it is a remote call. The trace shapes are per kind: a built-in shows its
+// own call line (a human-in-the-loop tool is distracting to name and is shown only
+// under verbose downstream, a memory tool is traced like a command); a remote tool
+// names the agent it runs on; a local command tool carries the full call line and a
+// short form with long argument values elided, so a width-aware surface can fall
+// back to the short one only when the full line would overflow.
+func (r *runner) traceCall(use anthropic.ToolUseBlock) (ToolKind, toolkit.ExecDeps, bool) {
+	switch t := r.tools[use.Name].(type) {
+	case *builtin.BuiltinTool:
+		kind := ToolBuiltin
+		if t.Traced() {
+			kind = ToolMemory
+		}
+		r.events.ToolCall(ToolTrace{Name: use.Name, Display: t.TraceLine(use.Input), Kind: kind})
+		return kind, toolkit.ExecDeps{Prompter: r.prompter}, false
+
+	case *a2a.RemoteTool:
+		r.events.ToolCall(ToolTrace{Name: use.Name, Kind: ToolRemote, Agent: t.Agent()})
+		return ToolRemote, toolkit.ExecDeps{}, true
+
+	case *fisk.FiskCommandTool:
+		r.events.ToolCall(ToolTrace{Name: use.Name, Display: t.TraceLine(use.Input), DisplayShort: t.TraceLineShort(use.Input), Kind: ToolLocal})
+		return ToolLocal, toolkit.ExecDeps{}, false
+
+	default:
+		// A model-facing tool of an unforeseen kind still runs uniformly; it is traced
+		// by name alone rather than dropped.
+		r.events.ToolCall(ToolTrace{Name: use.Name, Kind: ToolLocal})
+		return ToolLocal, toolkit.ExecDeps{}, false
+	}
 }
 
 // toolResultTrace extracts the display fields from a tool result block: its text

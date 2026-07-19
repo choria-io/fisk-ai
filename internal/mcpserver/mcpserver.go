@@ -3,7 +3,7 @@
 //  SPDX-License-Identifier: Apache-2.0
 
 // Package mcpserver exposes a fisk application's tools over the Model Context
-// Protocol. The same util.Tool values the agent calls are registered as MCP
+// Protocol. The same util.FiskCommandTool values the agent calls are registered as MCP
 // tools, so an external MCP client can invoke the underlying commands directly,
 // without an LLM in the loop.
 package mcpserver
@@ -20,9 +20,10 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/choria-io/fisk-ai/internal/toolkit"
+	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
+	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-
-	"github.com/choria-io/fisk-ai/internal/util"
 )
 
 const (
@@ -105,7 +106,7 @@ type Options struct {
 	// their own schema and dispatched in-process; they carry no confirm tags and so
 	// skip the elicitation gate, and they are invoked with a default-deny prompter
 	// since there is no operator on the MCP path. Empty means none.
-	Builtins []*util.BuiltinTool
+	Builtins []*builtin.BuiltinTool
 }
 
 func (o *Options) applyDefaults() {
@@ -139,7 +140,7 @@ func (o *Options) applyDefaults() {
 //
 // A single semaphore is shared across all handlers, so Concurrency bounds the
 // total number of in-flight tool calls, not the count per tool.
-func BuildServer(tools []*util.Tool, opts Options) (*mcp.Server, []string) {
+func BuildServer(tools []*fisk.FiskCommandTool, opts Options) (*mcp.Server, []string) {
 	opts.applyDefaults()
 
 	srv := mcp.NewServer(&mcp.Implementation{Name: opts.Name, Version: opts.Version}, &mcp.ServerOptions{
@@ -211,7 +212,7 @@ func BuildServer(tools []*util.Tool, opts Options) (*mcp.Server, []string) {
 // the silently skipped registration BuildServer falls back to. Serve calls it up
 // front; the skip in BuildServer remains the library-level backstop for callers
 // that do not.
-func checkBuiltinCollisions(tools []*util.Tool, builtins []*util.BuiltinTool) error {
+func checkBuiltinCollisions(tools []*fisk.FiskCommandTool, builtins []*builtin.BuiltinTool) error {
 	if len(builtins) == 0 {
 		return nil
 	}
@@ -250,14 +251,14 @@ func confirmModeSummary(mode ConfirmMode) string {
 // BuildServer. The behavioral hints (ReadOnlyHint, DestructiveHint) are left unset:
 // fisk-ai has no standard tag describing a command's effect, so asserting one would
 // be a guess, and leaving them unset carries the spec's conservative default.
-func toolAnnotations(t *util.Tool) *mcp.ToolAnnotations {
+func toolAnnotations(t *fisk.FiskCommandTool) *mcp.ToolAnnotations {
 	return &mcp.ToolAnnotations{Title: t.Command()}
 }
 
 // Serve builds the MCP server and serves it over HTTP until ctx is canceled.
 // It returns an error if there are no registrable tools or the listener fails;
 // a clean shutdown via ctx returns nil.
-func Serve(ctx context.Context, tools []*util.Tool, opts Options) error {
+func Serve(ctx context.Context, tools []*fisk.FiskCommandTool, opts Options) error {
 	opts.applyDefaults()
 
 	if err := checkBuiltinCollisions(tools, opts.Builtins); err != nil {
@@ -361,7 +362,7 @@ func claudeAddHint(name string, addr net.Addr) string {
 // MCP clients consume the schema directly, so no agent-specific rewriting (such
 // as the optional-parameter annotation used for the Anthropic API) is applied. A
 // missing schema falls back to an empty object schema.
-func inputSchema(t *util.Tool) json.RawMessage {
+func inputSchema(t *fisk.FiskCommandTool) json.RawMessage {
 	schema := t.InputSchema()
 	if schema == nil {
 		return json.RawMessage(`{"type":"object"}`)
@@ -378,7 +379,7 @@ func inputSchema(t *util.Tool) json.RawMessage {
 // builtinInputSchema renders a built-in tool's JSON-schema input as raw JSON for
 // MCP, mirroring inputSchema for command tools: passed through verbatim, with an
 // empty object schema as the fallback.
-func builtinInputSchema(b *util.BuiltinTool) json.RawMessage {
+func builtinInputSchema(b *builtin.BuiltinTool) json.RawMessage {
 	schema := b.InputSchema()
 	if schema == nil {
 		return json.RawMessage(`{"type":"object"}`)
@@ -400,7 +401,7 @@ func builtinInputSchema(b *util.BuiltinTool) json.RawMessage {
 // JSON result verbatim as text content: the string is already JSON, so it is not
 // re-encoded. A handler error becomes an IsError result rather than a Go error, so
 // the client can reason about it, matching the command-tool mapping.
-func builtinHandler(b *util.BuiltinTool, sem chan struct{}, timeout time.Duration, logOut io.Writer) mcp.ToolHandler {
+func builtinHandler(b *builtin.BuiltinTool, sem chan struct{}, timeout time.Duration, logOut io.Writer) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		select {
 		case sem <- struct{}{}:
@@ -416,7 +417,7 @@ func builtinHandler(b *util.BuiltinTool, sem chan struct{}, timeout time.Duratio
 			fmt.Fprintf(logOut, "Running %s\n", line)
 		}
 
-		out, err := b.Call(callCtx, req.Params.Arguments, util.DefaultDenyPrompter())
+		out, err := b.Call(callCtx, req.Params.Arguments, toolkit.DefaultDenyPrompter())
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}
@@ -457,7 +458,7 @@ type confirmPolicy struct {
 // JSON body carries the exit code and output. Failures are never returned as a
 // Go error, which the SDK would treat as a protocol-level error the client
 // cannot reason about.
-func toolHandler(t *util.Tool, policy confirmPolicy, sem chan struct{}, timeout time.Duration, logOut io.Writer) mcp.ToolHandler {
+func toolHandler(t *fisk.FiskCommandTool, policy confirmPolicy, sem chan struct{}, timeout time.Duration, logOut io.Writer) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		// Resolve the command line up front: it names the command in the approval
 		// prompt and the run log, and an argument-resolution failure here is the same
@@ -537,7 +538,7 @@ var approvalSchema = map[string]any{
 // execution visible per call rather than only at connect time. A nil return means
 // the command may run. It is not called under ConfirmNever, where the caller skips
 // gating entirely.
-func confirmRun(ctx context.Context, req *mcp.CallToolRequest, t *util.Tool, policy confirmPolicy, cmdLine string, logOut io.Writer) *mcp.CallToolResult {
+func confirmRun(ctx context.Context, req *mcp.CallToolRequest, t *fisk.FiskCommandTool, policy confirmPolicy, cmdLine string, logOut io.Writer) *mcp.CallToolResult {
 	trigger := t.ConfirmTrigger(policy.tags)
 
 	if !sessionElicits(req.Session) {

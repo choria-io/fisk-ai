@@ -10,9 +10,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/choria-io/fisk-ai/a2a"
 	"github.com/choria-io/fisk-ai/config"
-	"github.com/choria-io/fisk-ai/internal/util"
+	"github.com/choria-io/fisk-ai/internal/a2a"
 )
 
 func TestRemoteTools(t *testing.T) {
@@ -143,7 +142,7 @@ var _ = Describe("resolveRemoteTools", func() {
 		r, err := resolveRemoteTools(taken, reverse, nil)
 		Expect(err).NotTo(HaveOccurred())
 
-		keys := func(m map[string]*util.RemoteTool) []string {
+		keys := func(m map[string]*a2a.RemoteTool) []string {
 			out := make([]string, 0, len(m))
 			for k := range m {
 				out = append(out, k)
