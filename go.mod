@@ -7,10 +7,9 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.58.0
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/choria-io/fisk v0.9.1
-	github.com/choria-io/ui v0.0.0-20260718181956-a655e1134f27
+	github.com/choria-io/ui v0.0.0-20260719063519-7676fceb5718
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/goccy/go-yaml v1.19.2
-	github.com/jedib0t/go-pretty/v6 v6.8.2
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/muesli/termenv v0.16.0
 	github.com/nats-io/jsm.go v0.4.1
@@ -37,7 +36,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834 // indirect
 	github.com/charmbracelet/x/ansi v0.11.7 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
-	github.com/charmbracelet/x/exp/slice v0.0.0-20260713092006-0d683c34c74b // indirect
+	github.com/charmbracelet/x/exp/slice v0.0.0-20260719004043-bb9a97036f23 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
@@ -54,6 +53,7 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
 	github.com/invopop/jsonschema v0.14.0 // indirect
+	github.com/jedib0t/go-pretty/v6 v6.8.2 // indirect
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/klauspost/compress v1.19.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect

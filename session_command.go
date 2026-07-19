@@ -12,7 +12,7 @@ import (
 
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/ui/columns"
-	"github.com/jedib0t/go-pretty/v6/table"
+	"github.com/choria-io/ui/table"
 
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/tui"
@@ -61,14 +61,13 @@ func sessionLsAction(_ *fisk.ParseContext) error {
 		return infos[i].Updated.After(infos[j].Updated)
 	})
 
-	tbl := util.NewTable(os.Stdout)
-	tbl.AppendHeader(table.Row{"ID", "Model", "Status", "Updated", "Prompt"})
+	tbl := table.NewTableWriter("")
+	defer tbl.WriteTo(os.Stdout)
+
+	tbl.AddHeaders("ID", "Model", "Status", "Updated", "Prompt")
 	for _, info := range infos {
-		tbl.AppendRow(table.Row{
-			info.RunID, info.Model, sessionStatus(info.Terminal),
-			info.Updated.Format("2006-01-02 15:04"), util.TruncateString(info.Prompt, 50)})
+		tbl.AddRow(info.RunID, info.Model, sessionStatus(info.Terminal), info.Updated, util.TruncateString(info.Prompt, 50))
 	}
-	tbl.Render()
 
 	return nil
 }
