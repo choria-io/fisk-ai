@@ -121,6 +121,70 @@ type HarnessConfig struct {
 	// lexical FTS5 baseline that is always on when enabled, and an opt-in vector tier
 	// active only when the embeddings sub-block is present.
 	RAG *RAGConfig `json:"knowledge,omitempty" yaml:"knowledge,omitempty"`
+	// Sessions selects and configures the store that holds checkpointed run
+	// journals. It is deliberately NOT parsed from the config file yet (yaml:"-"):
+	// it is synthesized at boot from the --state-dir flag and defaults (see
+	// SessionConfigFromStateDir), so the construction path is already the one a
+	// future YAML block will use. Exposing it to the file is a designed change (it
+	// needs strict options decoding, unknown-backend validation, and the
+	// --state-dir precedence rule), not a one-line tag flip; when that lands, change
+	// the tag to yaml:"sessions,omitempty" and route it through the same canonical
+	// JSON path memory uses for its options block.
+	Sessions *SessionConfig `json:"-" yaml:"-"`
+}
+
+// SessionConfig selects and configures the session store backend. Its shape
+// mirrors MemoryConfig: a backend name and a raw per-backend options block decoded
+// against a typed schema at store construction, so an unknown option key fails as
+// loudly as an unknown top-level key. For the file backend the options accept
+// {directory: <path>}, defaulting to the absolute XDG state directory.
+type SessionConfig struct {
+	// Backend selects the store implementation. It defaults to "file", the only
+	// backend today, which keeps each run in a JSON-lines journal under a directory.
+	Backend string `json:"backend,omitempty" yaml:"backend,omitempty"`
+	// Options carries backend-specific settings as a raw block, decoded against a
+	// typed per-backend schema at store construction. For the file backend it
+	// accepts {directory: <path>}.
+	Options json.RawMessage `json:"options,omitempty" yaml:"options,omitempty"`
+}
+
+// BackendName returns the configured backend, defaulting to "file". It is
+// nil-safe: sessions are always available (checkpointing is not a feature that can
+// be disabled), so a nil config resolves to the file backend rather than to an
+// empty name that would fail lookup.
+func (s *SessionConfig) BackendName() string {
+	if s == nil || s.Backend == "" {
+		return "file"
+	}
+
+	return s.Backend
+}
+
+// RawOptions returns the raw backend options block, decoded per backend at store
+// construction. It is nil-safe and nil when no options are set.
+func (s *SessionConfig) RawOptions() json.RawMessage {
+	if s == nil {
+		return nil
+	}
+
+	return s.Options
+}
+
+// SessionConfigFromStateDir synthesizes the session config from the --state-dir
+// flag. An empty dir yields the file backend with no options, so the file backend
+// applies its default (the absolute XDG state directory); a set dir populates the
+// file backend's directory option. The flag is the sole source today and always
+// wins: when a YAML block is later added, this override is applied last so an
+// explicit --state-dir still takes precedence over a configured directory.
+func SessionConfigFromStateDir(dir string) *SessionConfig {
+	if dir == "" {
+		return &SessionConfig{Backend: "file"}
+	}
+
+	return &SessionConfig{
+		Backend: "file",
+		Options: json.RawMessage(fmt.Sprintf(`{"directory":%q}`, dir)),
+	}
 }
 
 // RAGConfig configures the built-in knowledge_search tool and the backing SQLite
@@ -632,6 +696,19 @@ func (c *Config) MemoryRawOptions() json.RawMessage {
 	}
 
 	return c.Harness.Memory.Options
+}
+
+// SessionBackend returns the configured session store backend, defaulting to
+// "file". Unlike MemoryBackend it never returns "": sessions are not a feature
+// that can be disabled, so an unset config still resolves to the file backend.
+func (c *Config) SessionBackend() string {
+	return c.Harness.Sessions.BackendName()
+}
+
+// SessionRawOptions returns the raw session backend options block, decoded per
+// backend at store construction. It is nil when no options are set.
+func (c *Config) SessionRawOptions() json.RawMessage {
+	return c.Harness.Sessions.RawOptions()
 }
 
 // RAGEnabled reports whether the built-in knowledge_search tool is enabled. Like

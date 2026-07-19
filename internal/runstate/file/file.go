@@ -2,7 +2,12 @@
 //
 //  SPDX-License-Identifier: Apache-2.0
 
-package runstate
+// Package file is the file-backed session store: each run is a JSON-lines journal
+// (<id>.json) under a directory, guarded by a per-run lock file (<id>.lock).
+// Importing this package registers the backend under runstate.BackendFile, so the
+// program links it in by importing it (usually for its side effect). It holds no
+// exported API beyond that registration.
+package file
 
 import (
 	"bytes"
@@ -10,51 +15,65 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
+
+	"github.com/choria-io/fisk-ai/internal/runstate"
 )
 
-// idPattern constrains a run id to a safe, single path component. It is also a
-// valid NATS subject token, so the same ids carry over to the JetStream backend.
-// Operator-chosen names and machine-generated KSUIDs both satisfy it.
-var idPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]*$`)
-
-// FileStore stores each run as a JSON-lines journal (<id>.json) under a
-// directory, guarded by a per-run lock file (<id>.lock). Conversation and tool
-// IO are sensitive, so the directory is 0700 and journals are 0600.
-type FileStore struct {
-	dir string
+func init() {
+	runstate.Register(runstate.BackendFile, newStore)
 }
 
-// DefaultDir returns the default run store directory, honoring XDG_STATE_HOME and
-// falling back to ~/.local/state. Runs are never stored in the working
-// directory, where they would leak into repositories.
-func DefaultDir() (string, error) {
-	base := os.Getenv("XDG_STATE_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolving home directory: %w", err)
-		}
-		base = filepath.Join(home, ".local", "state")
+// options is the typed shape of the file backend's session options.
+type options struct {
+	// Directory is where run journals live. It defaults to runstate.DefaultDir()
+	// (the absolute XDG state path), never the working directory, so runs never leak
+	// into a repository.
+	Directory string `json:"directory"`
+}
+
+// newStore is the runstate.Factory for the file backend: it decodes the options
+// block, resolves the directory, and opens the store. A construction failure (bad
+// options, an unwritable directory) surfaces here at run start.
+func newStore(raw json.RawMessage) (runstate.Store, error) {
+	opts, err := decodeOptions(raw)
+	if err != nil {
+		return nil, err
 	}
 
-	return filepath.Join(base, "fisk-ai", "runs"), nil
-}
-
-// OpenStore returns a FileStore rooted at dir, or at DefaultDir() when dir is
-// empty. It is the single resolution point shared by the run and session
-// commands, so an operator's --state-dir (or its absence) resolves identically
-// across them.
-func OpenStore(dir string) (*FileStore, error) {
+	dir := opts.Directory
 	if dir == "" {
-		d, err := DefaultDir()
+		dir, err = runstate.DefaultDir()
 		if err != nil {
 			return nil, err
 		}
-		dir = d
 	}
 
 	return NewFileStore(dir)
+}
+
+// decodeOptions strictly decodes the backend options. A stdlib decoder with
+// DisallowUnknownFields catches a mistyped option key the same way the config
+// layer catches a mistyped top-level key.
+func decodeOptions(raw json.RawMessage) (options, error) {
+	var opts options
+	if len(raw) == 0 {
+		return opts, nil
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&opts); err != nil {
+		return opts, fmt.Errorf("invalid file session options: %w", err)
+	}
+
+	return opts, nil
+}
+
+// FileStore stores each run as a JSON-lines journal (<id>.json) under a directory,
+// guarded by a per-run lock file (<id>.lock). Conversation and tool IO are
+// sensitive, so the directory is 0700 and journals are 0600.
+type FileStore struct {
+	dir string
 }
 
 // NewFileStore returns a FileStore rooted at dir, creating it 0700 if needed.
@@ -67,14 +86,6 @@ func NewFileStore(dir string) (*FileStore, error) {
 	return &FileStore{dir: dir}, nil
 }
 
-func validateID(id string) error {
-	if len(id) > 128 || !idPattern.MatchString(id) {
-		return fmt.Errorf("%w: %q (use letters, digits, '-' or '_')", ErrInvalidID, id)
-	}
-
-	return nil
-}
-
 func (s *FileStore) journalPath(id string) string {
 	return filepath.Join(s.dir, id+".json")
 }
@@ -83,16 +94,16 @@ func (s *FileStore) lockPath(id string) string {
 	return filepath.Join(s.dir, id+".lock")
 }
 
-// Create implements Store.
-func (s *FileStore) Create(id string, meta MetaRecord) (Journal, error) {
-	err := validateID(id)
+// Create implements runstate.Store.
+func (s *FileStore) Create(id string, meta runstate.MetaRecord) (runstate.Journal, error) {
+	err := runstate.ValidateID(id)
 	if err != nil {
 		return nil, err
 	}
 
 	_, err = os.Stat(s.journalPath(id))
 	if err == nil {
-		return nil, fmt.Errorf("%w: %q", ErrExists, id)
+		return nil, fmt.Errorf("%w: %q", runstate.ErrExists, id)
 	}
 	if !os.IsNotExist(err) {
 		return nil, err
@@ -103,7 +114,7 @@ func (s *FileStore) Create(id string, meta MetaRecord) (Journal, error) {
 		return nil, err
 	}
 
-	err = j.Append(1, Record{Seq: 1, Protocol: MetaProtocol, Meta: &meta})
+	err = j.Append(1, runstate.Record{Seq: 1, Protocol: runstate.MetaProtocol, Meta: &meta})
 	if err != nil {
 		j.Close()
 		return nil, err
@@ -112,16 +123,16 @@ func (s *FileStore) Create(id string, meta MetaRecord) (Journal, error) {
 	return j, nil
 }
 
-// Open implements Store.
-func (s *FileStore) Open(id string) (Journal, error) {
-	err := validateID(id)
+// Open implements runstate.Store.
+func (s *FileStore) Open(id string) (runstate.Journal, error) {
+	err := runstate.ValidateID(id)
 	if err != nil {
 		return nil, err
 	}
 
 	_, err = os.Stat(s.journalPath(id))
 	if os.IsNotExist(err) {
-		return nil, fmt.Errorf("%w: %q", ErrNotFound, id)
+		return nil, fmt.Errorf("%w: %q", runstate.ErrNotFound, id)
 	}
 	if err != nil {
 		return nil, err
@@ -154,39 +165,39 @@ func (s *FileStore) openJournal(id string, created bool) (*fileJournal, error) {
 	return j, nil
 }
 
-// Load implements Store.
-func (s *FileStore) Load(id string) (*RunState, error) {
-	err := validateID(id)
+// Load implements runstate.Store.
+func (s *FileStore) Load(id string) (*runstate.RunState, error) {
+	err := runstate.ValidateID(id)
 	if err != nil {
 		return nil, err
 	}
 
 	recs, err := readRecords(s.journalPath(id))
 	if os.IsNotExist(err) {
-		return nil, fmt.Errorf("%w: %q", ErrNotFound, id)
+		return nil, fmt.Errorf("%w: %q", runstate.ErrNotFound, id)
 	}
 	if err != nil {
 		return nil, err
 	}
 
-	return Fold(recs)
+	return runstate.Fold(recs)
 }
 
-// List implements Store.
-func (s *FileStore) List() ([]RunInfo, error) {
+// List implements runstate.Store.
+func (s *FileStore) List() ([]runstate.RunInfo, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		return nil, err
 	}
 
-	var out []RunInfo
+	var out []runstate.RunInfo
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || filepath.Ext(name) != ".json" {
 			continue
 		}
 		id := name[:len(name)-len(".json")]
-		if validateID(id) != nil {
+		if runstate.ValidateID(id) != nil {
 			continue
 		}
 
@@ -194,12 +205,12 @@ func (s *FileStore) List() ([]RunInfo, error) {
 		if err != nil || len(recs) == 0 || recs[0].Meta == nil {
 			continue
 		}
-		rs, err := Fold(recs)
+		rs, err := runstate.Fold(recs)
 		if err != nil {
 			continue
 		}
 
-		info := RunInfo{RunID: rs.RunID, Created: recs[0].Meta.Created, Model: rs.Fingerprint.Model, Prompt: rs.Prompt}
+		info := runstate.RunInfo{RunID: rs.RunID, Created: recs[0].Meta.Created, Model: rs.Fingerprint.Model, Prompt: rs.Prompt}
 		if fi, err := e.Info(); err == nil {
 			info.Updated = fi.ModTime()
 		}
@@ -212,9 +223,9 @@ func (s *FileStore) List() ([]RunInfo, error) {
 	return out, nil
 }
 
-// Delete implements Store.
+// Delete implements runstate.Store.
 func (s *FileStore) Delete(id string) error {
-	err := validateID(id)
+	err := runstate.ValidateID(id)
 	if err != nil {
 		return err
 	}
@@ -241,14 +252,18 @@ type fileJournal struct {
 	dirCreated bool
 }
 
-// Append implements Journal.
-func (j *fileJournal) Append(seq uint64, rec Record) error {
-	if seq <= j.lastSeq {
-		// Already recorded (a crash-retry of the most recent event). Idempotent.
-		return nil
+// Append implements runstate.Journal. The dup/gap decision is the shared
+// runstate.CheckAppend contract; the write, the fsync, and the last-seq advance
+// stay here because they are file-specific and ordering-load-bearing: lastSeq is
+// advanced only after a successful Sync, so a torn or failed write re-appends the
+// same seq on retry rather than losing it.
+func (j *fileJournal) Append(seq uint64, rec runstate.Record) error {
+	skip, err := runstate.CheckAppend(j.lastSeq, seq)
+	if err != nil {
+		return err
 	}
-	if seq > j.lastSeq+1 {
-		return fmt.Errorf("%w: seq %d skips ahead of %d", ErrSeqGap, seq, j.lastSeq)
+	if skip {
+		return nil
 	}
 	rec.Seq = seq
 
@@ -282,17 +297,17 @@ func (j *fileJournal) Append(seq uint64, rec Record) error {
 	return nil
 }
 
-// Records implements Journal.
-func (j *fileJournal) Records() ([]Record, error) {
+// Records implements runstate.Journal.
+func (j *fileJournal) Records() ([]runstate.Record, error) {
 	return readRecords(j.path)
 }
 
-// LastSeq implements Journal.
+// LastSeq implements runstate.Journal.
 func (j *fileJournal) LastSeq() uint64 {
 	return j.lastSeq
 }
 
-// Close implements Journal.
+// Close implements runstate.Journal.
 func (j *fileJournal) Close() error {
 	err := j.f.Close()
 	j.lock.release()
@@ -313,7 +328,7 @@ func syncDir(dir string) error {
 // readRecords parses a JSON-lines journal, dropping an unparsable final line as a
 // torn tail (only the last append can be torn on an append-only, fsynced file)
 // while treating interior parse failures as corruption.
-func readRecords(path string) ([]Record, error) {
+func readRecords(path string) ([]runstate.Record, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -325,13 +340,13 @@ func readRecords(path string) ([]Record, error) {
 		lines = lines[:len(lines)-1]
 	}
 
-	out := make([]Record, 0, len(lines))
+	out := make([]runstate.Record, 0, len(lines))
 	for i, line := range lines {
 		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 
-		var rec Record
+		var rec runstate.Record
 		err := json.Unmarshal(line, &rec)
 		if err != nil {
 			if i == len(lines)-1 {
@@ -339,7 +354,7 @@ func readRecords(path string) ([]Record, error) {
 				// last complete record.
 				break
 			}
-			return nil, fmt.Errorf("%w: line %d: %w", ErrCorrupt, i+1, err)
+			return nil, fmt.Errorf("%w: line %d: %w", runstate.ErrCorrupt, i+1, err)
 		}
 		out = append(out, rec)
 	}

@@ -741,4 +741,45 @@ harness:
 			Expect(err.Error()).To(ContainSubstring("bogus"))
 		})
 	})
+
+	Describe("Sessions", func() {
+		It("Should default an unset config to the file backend with no options", func() {
+			cfg := &Config{}
+			Expect(cfg.SessionBackend()).To(Equal("file"))
+			Expect(cfg.SessionRawOptions()).To(BeNil())
+		})
+
+		It("Should default a nil SessionConfig via the nil-safe accessors", func() {
+			var sc *SessionConfig
+			Expect(sc.BackendName()).To(Equal("file"))
+			Expect(sc.RawOptions()).To(BeNil())
+		})
+
+		It("Should synthesize the file backend with no options for an empty state dir", func() {
+			sc := SessionConfigFromStateDir("")
+			Expect(sc.BackendName()).To(Equal("file"))
+			Expect(sc.RawOptions()).To(BeNil())
+		})
+
+		It("Should synthesize the directory option from a set state dir", func() {
+			sc := SessionConfigFromStateDir("/tmp/runs")
+			Expect(sc.BackendName()).To(Equal("file"))
+			Expect(string(sc.RawOptions())).To(MatchJSON(`{"directory":"/tmp/runs"}`))
+		})
+
+		It("Should not parse a sessions block from the config file yet", func() {
+			_, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+harness:
+  sessions:
+    backend: file
+`))
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("sessions"))
+		})
+	})
 })

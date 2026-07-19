@@ -14,10 +14,21 @@ import (
 	"github.com/choria-io/ui/columns"
 	"github.com/choria-io/ui/table"
 
+	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/tui"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
+
+// openSessionStore opens the session store the inspection subcommands read. The
+// session command parses no agent config, so it synthesizes the session config
+// from --state-dir (and its default) the same way runAction does, resolving the
+// store identically across the run and session commands.
+func openSessionStore() (runstate.Store, error) {
+	sc := config.SessionConfigFromStateDir(stateDirFlag)
+
+	return runstate.New(sc.BackendName(), sc.RawOptions())
+}
 
 func registerSessionCommand(cmd *fisk.Application) {
 	session := cmd.Command("session", "Manage checkpointed agent runs")
@@ -43,7 +54,7 @@ func sessionStatus(reason runstate.TerminalReason) string {
 }
 
 func sessionLsAction(_ *fisk.ParseContext) error {
-	store, err := runstate.OpenStore(stateDirFlag)
+	store, err := openSessionStore()
 	if err != nil {
 		return err
 	}
@@ -73,7 +84,7 @@ func sessionLsAction(_ *fisk.ParseContext) error {
 }
 
 func sessionShowAction(_ *fisk.ParseContext) error {
-	store, err := runstate.OpenStore(stateDirFlag)
+	store, err := openSessionStore()
 	if err != nil {
 		return err
 	}
@@ -164,7 +175,7 @@ func showTranscriptTUI(rs *runstate.RunState) (bool, error) {
 }
 
 func sessionRmAction(_ *fisk.ParseContext) error {
-	store, err := runstate.OpenStore(stateDirFlag)
+	store, err := openSessionStore()
 	if err != nil {
 		return err
 	}
