@@ -13,7 +13,7 @@ import (
 	"strings"
 
 	"github.com/choria-io/fisk"
-	"github.com/jedib0t/go-pretty/v6/table"
+	"github.com/choria-io/ui/table"
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/rag"
@@ -406,12 +406,13 @@ func knowledgeSourcesAction(_ *fisk.ParseContext) error {
 		return nil
 	}
 
-	tbl := util.NewTable(os.Stdout)
-	tbl.AppendHeader(table.Row{"Path", "Chunks", "Last Indexed"})
+	tbl := table.NewTableWriter("")
+	defer tbl.WriteTo(os.Stdout)
+
+	tbl.AddHeaders("Path", "Chunks", "Last Indexed")
 	for _, s := range sources {
-		tbl.AppendRow(table.Row{s.Path, s.Chunks, s.MTime.Format("2006-01-02 15:04")})
+		tbl.AddRow(s.Path, s.Chunks, s.MTime)
 	}
-	tbl.Render()
 
 	return nil
 }

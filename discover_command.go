@@ -13,7 +13,7 @@ import (
 	"github.com/choria-io/fisk-ai/internal/a2anats"
 	"github.com/choria-io/fisk-ai/internal/util"
 	"github.com/choria-io/ui/columns"
-	"github.com/jedib0t/go-pretty/v6/table"
+	"github.com/choria-io/ui/table"
 )
 
 // maxDiscoverDescriptionLen is the width at which tool descriptions are truncated
@@ -69,12 +69,13 @@ func discoverAction(_ *fisk.ParseContext) error {
 		return nil
 	}
 
-	tbl := util.NewTable(os.Stdout)
-	tbl.AppendHeader(table.Row{"Tool", "Description"})
+	tbl := table.NewTableWriter("")
+	defer tbl.WriteTo(os.Stdout)
+
+	tbl.AddHeaders("Tool", "Description")
 	for _, t := range card.Tools {
-		tbl.AppendRow(table.Row{t.Name, util.TruncateString(t.Description, maxDiscoverDescriptionLen)})
+		tbl.AddRow(t.Name, util.TruncateString(t.Description, maxDiscoverDescriptionLen))
 	}
-	tbl.Render()
 
 	return nil
 }

@@ -14,7 +14,7 @@ import (
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/util"
 	"github.com/choria-io/ui/columns"
-	"github.com/jedib0t/go-pretty/v6/table"
+	"github.com/choria-io/ui/table"
 )
 
 // maxInfoDescriptionLen is the width at which tool descriptions are truncated in
@@ -77,8 +77,11 @@ func infoAction(_ *fisk.ParseContext) error {
 		fmt.Fprintf(os.Stderr, "warning: cannot connect to NATS context %q to discover remote tools: %v\n", cfg.NatsContext, err)
 	}
 
-	tbl := util.NewTable(os.Stdout)
-	tbl.AppendHeader(table.Row{"Tool", "Source", "Confirm", "Description", "Tags"})
+	c := columns.New()
+	defer c.WriteTo(os.Stdout)
+
+	tbl := table.NewTableWriter("")
+	tbl.AddHeaders("Tool", "Source", "Confirm", "Description", "Tags")
 	// The Confirm column marks the commands a run would gate behind operator
 	// confirmation, so an author can see confirm_tags resolves to the commands they
 	// expect rather than discovering a typo (an unmatched tag) only mid-run. Only the
@@ -89,22 +92,22 @@ func infoAction(_ *fisk.ParseContext) error {
 		if t.NeedsConfirm(cfg.ConfirmTags()) {
 			confirm = "Yes"
 		}
-		tbl.AppendRow(table.Row{t.Name(), "local", confirm, util.TruncateString(t.Description(), maxInfoDescriptionLen), strings.Join(t.Tags(), ", ")})
+		tbl.AddRow(t.Name(), "local", confirm, util.TruncateString(t.Description(), maxInfoDescriptionLen), strings.Join(t.Tags(), ", "))
 	}
 	// Built-in human-in-the-loop tools are not introspected from the application,
 	// so list them too when enabled, to show the full tool set a run would expose.
 	// They carry no tags.
 	for _, b := range util.HITLTools(cfg) {
-		tbl.AppendRow(table.Row{b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), ""})
+		tbl.AddRow(b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), "")
 	}
 	// Built-in memory tools are likewise not introspected from the application, so
 	// list them when enabled to show the full tool set a run would expose.
 	for _, b := range util.MemoryTools(cfg, nil) {
-		tbl.AppendRow(table.Row{b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), ""})
+		tbl.AddRow(b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), "")
 	}
 	// The built-in knowledge_search tool, likewise, when RAG is enabled.
 	for _, b := range util.RAGTools(cfg, nil) {
-		tbl.AppendRow(table.Row{b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), ""})
+		tbl.AddRow(b.Name(), "local", "", util.TruncateString(b.Description(), maxInfoDescriptionLen), "")
 	}
 	// Imported remote tools are listed with the host alias as their source, so the
 	// provenance of a tool the prompt may reference is clear.
@@ -118,13 +121,13 @@ func infoAction(_ *fisk.ParseContext) error {
 			// local rows.
 			desc, tags := splitRemoteDescription(rt.Description())
 			desc = strings.ReplaceAll(desc, "\n", " ")
-			tbl.AppendRow(table.Row{rt.Name(), alias, "", util.TruncateString(desc, maxInfoDescriptionLen), tags})
+			tbl.AddRow(rt.Name(), alias, "", util.TruncateString(desc, maxInfoDescriptionLen), tags)
 		}
 	}
-	tbl.Render()
 
-	c := columns.New()
-	defer c.WriteTo(os.Stdout)
+	c.Section("Tools", func(c *columns.Document) {
+		c.Embed(tbl)
+	})
 
 	if cfg.ApplicationPath == "" {
 		c.Print("No wrapped application configured (application_path unset); built-in and remote tools only.")
