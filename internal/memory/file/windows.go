@@ -4,7 +4,7 @@
 
 //go:build windows
 
-package memory
+package file
 
 // openNoFollow is a no-op on Windows, which has no O_NOFOLLOW open flag. The
 // readFile symlink defense instead rests on the follow-up Stat rejecting any

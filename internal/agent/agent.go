@@ -27,6 +27,9 @@ import (
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/a2anats"
 	"github.com/choria-io/fisk-ai/internal/memory"
+	// Link the file memory backend in so it registers itself; memory.New resolves
+	// the configured backend from the registry, and this is the sole backend today.
+	_ "github.com/choria-io/fisk-ai/internal/memory/file"
 	"github.com/choria-io/fisk-ai/internal/rag"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"

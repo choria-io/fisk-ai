@@ -29,7 +29,8 @@ A quick index into the codebase: what each command does, where each package live
 | `internal/util` | The shared core: introspection, tool params, built-ins, confirm gate, prompter, LLM call, stats. | `fisk.go`, `anthropic.go`, `builtin.go`, `builtin_memory.go`, `builtin_rag.go`, `confirm.go`, `prompter.go`, `llm.go` |
 | `internal/agent` | The agentic loop: setup, iteration, events. | `agent.go`, `runner.go`, `events.go` |
 | `internal/runstate` | Durable sessions: records, fold, store, fingerprint, locking. | `record.go`, `state.go`, `store.go`, `filestore.go`, `fingerprint.go` |
-| `internal/memory` | The pluggable memory store and file backend. | `store.go`, `file.go`, `frontmatter.go`, `key.go` |
+| `internal/memory` | The backend-agnostic memory store: `Store` interface, backend registry, key and write validation. | `store.go`, `registry.go`, `key.go`, `write.go` |
+| `internal/memory/file` | The file memory backend, registered by import: one markdown file per key. | `file.go`, `frontmatter.go`, `nofollow.go` |
 | `internal/rag` | The local RAG index: SQLite store, chunking, hybrid search, embeddings, doctor, write lock. | `store.go`, `chunk.go`, `index.go`, `search.go`, `embed.go`, `doctor.go`, `vec.go`, `lock_unix.go` |
 | `internal/tui` | The full-screen runner and transcript viewer. | `viewer.go`, `live.go`, `prompter.go`, `splash.go` |
 | `internal/mcpserver` | Serving tools over MCP. | `mcpserver.go` |
