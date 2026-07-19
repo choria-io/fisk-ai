@@ -52,10 +52,8 @@ func (e *tcellEvents) Warn(w agent.Warning) {
 }
 
 func (e *tcellEvents) Starting(info agent.RunInfo) {
-	if info.NoApplication {
-		e.live.Append(tui.Line{Kind: tui.LineMeta, Text: "running without a wrapped application; built-in and remote tools only"})
-	}
-
+	// The no-application notice is intentionally not surfaced here: the TUI has no
+	// place for incidental notes yet. Restore it once a logs pane exists.
 	if !e.verbose {
 		return
 	}
