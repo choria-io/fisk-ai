@@ -61,7 +61,7 @@ The tiers stay independent because the boundaries between them are narrow interf
 <dl class="cm-kv">
   <dt>Events</dt><dd>`internal/agent/events.go`. The agent decides what happened; the caller decides how it looks. `cliEvents` renders line output, `tcellEvents` drives the full-screen UI, both from the same callbacks.</dd>
   <dt>Prompter</dt><dd>`internal/util/prompter.go`. The only path allowed to read the terminal. A line implementation (`survey_prompter.go`) and a full-screen one (`internal/tui/prompter.go`) satisfy it; deny-by-default lives at the caller, never in the prompter.</dd>
-  <dt>Store / Journal</dt><dd>`internal/runstate/store.go`. A run is an append-only record stream. The file backend is the only one today; the interface is shaped for a JetStream backend next. `Fold` turns records into resumable state with no IO.</dd>
+  <dt>Store / Journal</dt><dd>`internal/runstate/store.go`. A run is an append-only record stream behind a pluggable backend registry; the `file` backend exists, a JetStream backend is the planned second. `Fold` turns records into resumable state with no IO.</dd>
   <dt>memory.Store</dt><dd>`internal/memory/store.go`. A pluggable key/value store; the `file` backend exists, a NATS KV backend is the planned second.</dd>
   <dt>rag.Embedder</dt><dd>`internal/rag/embed.go`. The knowledge vector-tier seam; the OpenAI-compatible client is the only implementation, tests mock it, and a nil embedder is the lexical-only path, so the vector tier is fully optional.</dd>
   <dt>RemoteInvoker</dt><dd>`internal/util/remote.go`. A one-method interface so `util` depends only on `a2a` types, not the NATS binding, which avoids an import cycle and lets tests supply a fake.</dd>

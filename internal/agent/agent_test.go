@@ -21,6 +21,7 @@ import (
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"
+	runstatefile "github.com/choria-io/fisk-ai/internal/runstate/file"
 	"github.com/choria-io/fisk-ai/internal/util"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -138,7 +139,7 @@ var _ = Describe("runner", func() {
 
 	Describe("suspend then resume across runners", func() {
 		It("journals a run, suspends at a boundary, and resumes in a fresh runner to completion", func() {
-			store, err := runstate.NewFileStore(GinkgoT().TempDir())
+			store, err := runstatefile.NewFileStore(GinkgoT().TempDir())
 			Expect(err).NotTo(HaveOccurred())
 			id := ksuid.New().String()
 
@@ -277,7 +278,7 @@ var _ = Describe("runner", func() {
 
 	Describe("completePending (partial-turn resume)", func() {
 		It("runs only the unanswered tools, reuses the rest, and commits the turn", func() {
-			store, err := runstate.NewFileStore(GinkgoT().TempDir())
+			store, err := runstatefile.NewFileStore(GinkgoT().TempDir())
 			Expect(err).NotTo(HaveOccurred())
 			runID := ksuid.New().String()
 
@@ -461,7 +462,7 @@ var _ = Describe("runner", func() {
 		})
 
 		It("rotates to a fresh checkpoint session on a reset, keeping the previous one resumable", func() {
-			store, err := runstate.NewFileStore(GinkgoT().TempDir())
+			store, err := runstatefile.NewFileStore(GinkgoT().TempDir())
 			Expect(err).NotTo(HaveOccurred())
 
 			oldID := ksuid.New().String()
@@ -529,7 +530,7 @@ var _ = Describe("runner", func() {
 		})
 
 		It("defers a bare reset until the next prompt before rotating (checkpointed)", func() {
-			store, err := runstate.NewFileStore(GinkgoT().TempDir())
+			store, err := runstatefile.NewFileStore(GinkgoT().TempDir())
 			Expect(err).NotTo(HaveOccurred())
 
 			oldID := ksuid.New().String()
@@ -592,7 +593,7 @@ var _ = Describe("runner", func() {
 		})
 
 		It("runs on in the current session and warns when rotation fails", func() {
-			store, err := runstate.NewFileStore(GinkgoT().TempDir())
+			store, err := runstatefile.NewFileStore(GinkgoT().TempDir())
 			Expect(err).NotTo(HaveOccurred())
 
 			oldID := ksuid.New().String()
@@ -707,7 +708,7 @@ var _ = Describe("runner", func() {
 		})
 
 		It("journals interactive follow-ups and suspends a checkpointed chat on a clean end", func() {
-			store, err := runstate.NewFileStore(GinkgoT().TempDir())
+			store, err := runstatefile.NewFileStore(GinkgoT().TempDir())
 			Expect(err).NotTo(HaveOccurred())
 			id := ksuid.New().String()
 			j, err := store.Create(id, runstate.MetaRecord{Version: runstate.Version, RunID: id, Prompt: "go", Interactive: true})
@@ -787,7 +788,7 @@ var _ = Describe("runner", func() {
 		})
 
 		It("ends the session, warns, and does not loop when journaling a follow-up fails", func() {
-			store, err := runstate.NewFileStore(GinkgoT().TempDir())
+			store, err := runstatefile.NewFileStore(GinkgoT().TempDir())
 			Expect(err).NotTo(HaveOccurred())
 			id := ksuid.New().String()
 			j, err := store.Create(id, runstate.MetaRecord{Version: runstate.Version, RunID: id, Prompt: "go", Interactive: true})
@@ -956,7 +957,7 @@ var _ = Describe("runner", func() {
 		}
 
 		It("flows the cache split into stats, the journal, folded counters and the budget", func() {
-			store, err := runstate.NewFileStore(GinkgoT().TempDir())
+			store, err := runstatefile.NewFileStore(GinkgoT().TempDir())
 			Expect(err).NotTo(HaveOccurred())
 			id := ksuid.New().String()
 

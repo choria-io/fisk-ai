@@ -68,6 +68,11 @@ func runAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
+	// The session store is not configured in the file yet; synthesize it from
+	// --state-dir (and its default) so the construction path is the one a future
+	// YAML block will use. The flag is applied here, last, so it always wins.
+	cfg.Harness.Sessions = config.SessionConfigFromStateDir(stateDirFlag)
+
 	// --http-debug dumps the API bodies to a file rather than stderr, so it coexists
 	// with the full-screen UI whose alt-screen stderr would otherwise be corrupted.
 	// The CLI owns the file's lifecycle.
@@ -93,7 +98,6 @@ func runAction(_ *fisk.ParseContext) error {
 			Name:     runName,
 			ResumeID: resumeID,
 			Force:    forceResume,
-			StateDir: stateDirFlag,
 		},
 	}
 	if checkpointing {
@@ -106,7 +110,7 @@ func runAction(_ *fisk.ParseContext) error {
 	// input bar and the agent wire NextPrompt before the run starts.
 	interactive := chatMode
 	if resumeID != "" {
-		resumed, err := agent.SessionInteractive(stateDirFlag, resumeID)
+		resumed, err := agent.SessionInteractive(cfg, resumeID)
 		if err != nil {
 			return err
 		}

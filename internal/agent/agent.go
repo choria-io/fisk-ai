@@ -33,6 +33,9 @@ import (
 	"github.com/choria-io/fisk-ai/internal/rag"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"
+	// Link the file session backend in so it registers itself; runstate.New resolves
+	// the configured backend from the registry, and this is the sole backend today.
+	_ "github.com/choria-io/fisk-ai/internal/runstate/file"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
@@ -61,7 +64,6 @@ type Checkpoint struct {
 	Name     string
 	ResumeID string
 	Force    bool
-	StateDir string
 }
 
 // Options is everything Run needs to execute a run. Config is already parsed so
@@ -390,7 +392,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter util.Prompte
 			return res, err
 		}
 
-		store, err := runstate.OpenStore(opts.Checkpoint.StateDir)
+		store, err := runstate.New(cfg.SessionBackend(), cfg.SessionRawOptions())
 		if err != nil {
 			return res, err
 		}
@@ -611,8 +613,8 @@ func endsOnAssistant(messages []anthropic.MessageParam) bool {
 // chat run, reading only its Meta record so the CLI can reopen the input bar on
 // resume without the operator re-passing the flag. It does not lock the session (the
 // subsequent resume takes the lock), so it is a cheap pre-flight read.
-func SessionInteractive(stateDir, id string) (bool, error) {
-	store, err := runstate.OpenStore(stateDir)
+func SessionInteractive(cfg *config.Config, id string) (bool, error) {
+	store, err := runstate.New(cfg.SessionBackend(), cfg.SessionRawOptions())
 	if err != nil {
 		return false, err
 	}

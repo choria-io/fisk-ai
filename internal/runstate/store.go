@@ -5,8 +5,19 @@
 package runstate
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"time"
+)
+
+// Backend names for the session store, selected by the session config backend.
+const (
+	// BackendFile stores each run as a JSON-lines journal under a directory. It is
+	// the name the file subpackage registers under and the config default.
+	BackendFile = "file"
 )
 
 var (
@@ -70,4 +81,38 @@ type Store interface {
 	List() ([]RunInfo, error)
 	// Delete removes a run's journal and lock.
 	Delete(id string) error
+}
+
+// New builds the session store for the named backend, handing the factory the raw
+// per-backend options block. It returns an error for an unknown backend or
+// malformed backend options, so an operator's mistake surfaces at run start rather
+// than on the first operation. An unknown backend most often means the backend
+// package was not imported into this build; the error lists the backends that are
+// linked in.
+func New(backend string, options json.RawMessage) (Store, error) {
+	factory, ok := lookup(backend)
+	if !ok {
+		return nil, fmt.Errorf("unknown session backend %q: known backends are %v", backend, Backends())
+	}
+
+	return factory(options)
+}
+
+// DefaultDir returns the default run store directory, honoring XDG_STATE_HOME and
+// falling back to ~/.local/state. Runs are never stored in the working directory,
+// where they would leak into repositories, and they are never namespaced by
+// identity, so a resume finds its run regardless of the active identity. It lives
+// in the core, not the file backend, so the never-in-CWD contract stays visible to
+// every backend that resolves a default location.
+func DefaultDir() (string, error) {
+	base := os.Getenv("XDG_STATE_HOME")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolving home directory: %w", err)
+		}
+		base = filepath.Join(home, ".local", "state")
+	}
+
+	return filepath.Join(base, "fisk-ai", "runs"), nil
 }

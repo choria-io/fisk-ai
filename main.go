@@ -12,6 +12,10 @@ import (
 
 	"github.com/choria-io/fisk"
 
+	// Link the file session backend in so it registers itself. The run path links it
+	// transitively through the agent package; importing it here as well keeps the
+	// session subcommands, which construct the store directly, self-sufficient.
+	_ "github.com/choria-io/fisk-ai/internal/runstate/file"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 

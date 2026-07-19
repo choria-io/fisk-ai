@@ -2,19 +2,18 @@
 //
 //  SPDX-License-Identifier: Apache-2.0
 
-//go:build unix
+//go:build !unix
 
-package runstate
+package file
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"syscall"
 )
 
-// fileLock is an advisory flock on a per-run lock file. The kernel releases it
-// automatically when the process exits, so a crashed run leaves no stale lock.
+// fileLock is a best-effort marker on platforms without flock. It does not
+// prevent concurrent access; those platforms rely on the operator not resuming a
+// run twice.
 type fileLock struct {
 	f *os.File
 }
@@ -25,15 +24,6 @@ func acquireLock(path string) (*fileLock, error) {
 		return nil, fmt.Errorf("opening lock file: %w", err)
 	}
 
-	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
-	if err != nil {
-		f.Close()
-		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return nil, ErrLocked
-		}
-		return nil, fmt.Errorf("locking run: %w", err)
-	}
-
 	return &fileLock{f: f}, nil
 }
 
@@ -42,6 +32,5 @@ func (l *fileLock) release() {
 		return
 	}
 
-	syscall.Flock(int(l.f.Fd()), syscall.LOCK_UN)
 	l.f.Close()
 }
