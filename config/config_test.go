@@ -517,6 +517,29 @@ expose:
 			Expect(cfg.MCPPort()).To(Equal(0))
 		})
 
+		It("Should report the configured MCP bind address, defaulting to empty", func() {
+			cfg, err := ParseConfigForMode([]byte(`
+application_path: /usr/bin/nats
+expose:
+  agent:
+    mcp:
+      port: 9000
+      address: 127.0.0.1
+`), ModeMCP)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.MCPAddress()).To(Equal("127.0.0.1"))
+
+			cfg, err = ParseConfigForMode([]byte(`
+application_path: /usr/bin/nats
+expose:
+  agent:
+    mcp:
+      port: 9000
+`), ModeMCP)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.MCPAddress()).To(Equal(""))
+		})
+
 		It("Should report MCP disabled when the expose block is absent", func() {
 			cfg, err := ParseConfigForMode([]byte(`
 application_path: /usr/bin/nats

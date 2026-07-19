@@ -279,6 +279,12 @@ expose:
       # FISK_AI_MCP_PORT environment variable is set. Default 8080.
       port: 8080
 
+      # Host or IP to bind to, used when neither --address nor the
+      # FISK_AI_MCP_ADDRESS environment variable is set. Defaults to the
+      # loopback address 127.0.0.1, so the server serves only local clients
+      # unless you set this; use 0.0.0.0 to listen on all interfaces.
+      address: 127.0.0.1
+
       # Free-text guidance sent to clients when they connect. A client may
       # pass it to the model as a hint about how to use the server, a good
       # place for orientation the terse per-tool descriptions cannot carry.

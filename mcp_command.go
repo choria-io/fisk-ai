@@ -6,7 +6,9 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
+	"strconv"
 
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
@@ -18,10 +20,17 @@ import (
 // --port flag nor expose.agent.mcp.port in the config sets one.
 const defaultMCPPort = 8080
 
+// defaultMCPAddress is the host the MCP server binds to when neither the
+// --address flag nor expose.agent.mcp.address in the config sets one. It is
+// loopback so the server is not reachable off the host by default; set an
+// address explicitly (e.g. 0.0.0.0) to expose it more widely.
+const defaultMCPAddress = "127.0.0.1"
+
 func registerMcpAction(cmd *fisk.Application) {
 	mcpCmd := cmd.Command("mcp", "Serves the tools over the Model Context Protocol").Action(mcpAction)
 	mcpCmd.Flag("config", "Path to the agent configuration file").Default("agent.yaml").ExistingFileVar(&configFile)
 	mcpCmd.Flag("port", "TCP port to listen on; overrides expose.agent.mcp.port").Envar("FISK_AI_MCP_PORT").IntVar(&mcpPort)
+	mcpCmd.Flag("address", "Host or IP to bind to (default 127.0.0.1; use 0.0.0.0 for all interfaces); overrides expose.agent.mcp.address").Envar("FISK_AI_MCP_ADDRESS").StringVar(&mcpAddress)
 }
 
 // mcpAction serves the configured tools over MCP instead of running the agent.
@@ -83,10 +92,18 @@ func mcpAction(_ *fisk.ParseContext) error {
 		port = defaultMCPPort
 	}
 
+	address := mcpAddress
+	if address == "" {
+		address = cfg.MCPAddress()
+	}
+	if address == "" {
+		address = defaultMCPAddress
+	}
+
 	return mcpserver.Serve(ctx, tools, mcpserver.Options{
 		Name:         cfg.Identity,
 		Version:      util.Version(),
-		Addr:         fmt.Sprintf(":%d", port),
+		Addr:         net.JoinHostPort(address, strconv.Itoa(port)),
 		Instructions: cfg.MCPInstructions(),
 		ConfirmTags:  cfg.ConfirmTags(),
 		ConfirmMode:  mcpserver.ConfirmMode(cfg.ConfirmOverMCPMode()),
