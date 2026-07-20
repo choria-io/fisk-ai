@@ -262,6 +262,7 @@ the CLI never runs the agent. Every command reads `--config` (default `agent.yam
 | Command                              | Description                                                                        |
 |--------------------------------------|------------------------------------------------------------------------------------|
 | `knowledge index [paths...]`         | incremental build; requires a path argument or a configured `knowledge.paths`      |
+| `knowledge watch [paths...]`         | watch the configured paths and re-index on change, coalescing edit bursts          |
 | `knowledge search <query>`           | retrieve from the CLI for tuning; prints citation, heading, and a snippet          |
 | `knowledge show <relpath#ordinal>`   | print one chunk verbatim, resolving a citation token                               |
 | `knowledge sources`                  | list indexed files with chunk counts and last-indexed time                         |
@@ -277,6 +278,20 @@ and a walk of a full configured root reconciles deletions. `--dry-run` lists the
 without embedding anything, and `--reindex` forces a full rebuild. Indexing walks markdown and text files only, by the
 `.md`, `.markdown`, `.txt`, and `.text` extensions, and always excludes the store directory itself and the `memory/`
 directory.
+
+`knowledge watch` keeps the index current while you edit. It runs one initial index over the configured paths, then
+watches them and re-indexes on every change, coalescing a burst of edits with a `--debounce` window (default `2s`,
+minimum `100ms`). Each re-index is the same incremental pass, so unchanged files are skipped by hash and only edited
+files are re-chunked and re-embedded, and a file is dropped from the index as it is deleted. Watching is recursive and
+cross-platform, on Linux, macOS, and Windows, and applies the same exclusions as `index`: the store directory, `memory/`,
+and dotdirs such as `.git`. A configured path that does not exist is warned about and skipped rather than failing the
+command, and `--no-initial` skips the startup pass to watch only for later changes.
+
+Unlike the one-shot `knowledge index`, `watch` is long-running, but it holds the single writer lock only for the moment
+each re-index runs, so an occasional manual `knowledge index` still succeeds between changes and a clash simply retries.
+Stop it with Ctrl-C. Paths must exist when it starts: a root created afterwards is not picked up until the next run, and
+if the process misses a deletion event the stale entry clears on the next `knowledge index` or a restart, both of which
+reconcile.
 
 `knowledge doctor` degrades for lexical-only users and never exits non-zero solely because embeddings are absent. It
 always checks that the store is present and writable, that FTS5 is compiled in, and that the configured paths resolve.
