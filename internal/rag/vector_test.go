@@ -137,6 +137,27 @@ var _ = Describe("Store (vector tier)", func() {
 		Expect(res.Hits).ToNot(BeEmpty())
 	})
 
+	It("estimates the full embedding work for a dry-run reindex of an unchanged corpus", func() {
+		indexVector("m1", 32)
+
+		// A plain dry run over an unchanged corpus embeds nothing.
+		w := openWriterMock(vectorConfig(storeD, "m1"), &fakeEmbedder{model: "m1", dim: 32})
+		defer w.Close()
+		incremental, err := w.Index(ctx, []string{docsD}, IndexOptions{DryRun: true})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(incremental.Skipped).To(Equal(2))
+		Expect(incremental.Embeddings).To(Equal(0))
+
+		// A dry-run reindex re-embeds everything, so the estimate must reflect that
+		// rather than skipping every unchanged file and reporting zero work.
+		reindex, err := w.Index(ctx, []string{docsD}, IndexOptions{DryRun: true, Reindex: true})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(reindex.Added).To(Equal(2))
+		Expect(reindex.Skipped).To(Equal(0))
+		Expect(reindex.Chunks).To(BeNumerically(">", 0))
+		Expect(reindex.Embeddings).To(Equal(reindex.Chunks))
+	})
+
 	It("refuses a dimension change upfront without a reindex", func() {
 		indexVector("m1", 32)
 

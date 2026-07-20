@@ -8,6 +8,7 @@ require (
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/choria-io/fisk v0.9.1
 	github.com/choria-io/ui v0.0.0-20260719063519-7676fceb5718
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/goccy/go-yaml v1.19.2
 	github.com/modelcontextprotocol/go-sdk v1.6.1
