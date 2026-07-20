@@ -144,12 +144,23 @@ llm:
   # accepts; the well-known identifiers are listed under "Models" below.
   model: claude-sonnet-4-6
 
+  # The model backend. Defaults to "anthropic" when unset, so most agents
+  # never set it. Set it only to target a different backend that has been
+  # built in; naming one that is not available fails at run start with the
+  # list of providers that are.
+  provider: anthropic
+
   # Bounds on a single run so the agent loop cannot spend without limit.
   # The run stops with a summary once any of these is reached, whether or
   # not the task is complete.
   budget:
     # Cumulative token spend cap for the run. Default 200000.
     max_tokens: 200000
+    # Cap on the tokens a single response may generate, distinct from the
+    # cumulative max_tokens. Left unset it uses a built-in default that is
+    # raised when thinking is on. Set it only to fit an endpoint whose
+    # per-response limit is lower than that default; an explicit value wins.
+    max_output_tokens: 0
     # Maximum agent loop iterations. Default 50.
     max_iterations: 50
     # Per-call timeout as a Go duration string, for example "60s" or
@@ -169,6 +180,13 @@ llm:
   # Fisk AI caches the stable prefix of each request to lower cost and
   # latency on multi-turn runs.
   no_prompt_cache: false
+
+  # When true, disables server-side tool search: every tool is sent to the
+  # model directly instead of being deferred behind a search tool at ten or
+  # more tools. Left off, tool search is used automatically when the provider
+  # supports it and the tool count crosses the threshold. Set true only for an
+  # endpoint that does not implement it.
+  no_tool_search: false
 ```
 
 Larger models reason better on complex, long-horizon tasks; smaller models like Haiku are faster and cheaper for narrow
@@ -396,8 +414,8 @@ overlap, except for the hard off switches (`harness.no_tui`), which the command 
 |----------------|----------------------|-----------------------------------------------------------------------------------|
 | `--config`     |                      | Path to the configuration file. Default `agent.yaml`.                             |
 | `--api-key`    | `ANTHROPIC_API_KEY`  | Anthropic API key. Required.                                                       |
-| `--base-url`   | `ANTHROPIC_BASE_URL` | Anthropic API base URL to use, for example a local Anthropic-compatible runner.    |
-| `--http-debug` | `HTTP_DEBUG`         | Dump Anthropic API request and response bodies to `http-debug.log`.               |
+| `--base-url`   | `ANTHROPIC_BASE_URL` | Anthropic API base URL to use, for example a local Anthropic-compatible runner. A non-loopback host must use `https`; plain `http` is allowed only for a loopback address. |
+| `--http-debug` | `HTTP_DEBUG`         | Dump Anthropic API request and response bodies to `http-debug.log`. The file holds the full conversation and is created mode 0600. |
 | `--no-color`   | `NO_COLOR`           | Disable markdown rendering of the final answer, emitting raw text.                |
 | `--no-tui`     | `NO_TUI`             | Disable the full-screen terminal UI for this run and use line-by-line output.     |
 | `--chat`       |                      | Keep the full-screen UI open for interactive follow-ups after each turn.          |

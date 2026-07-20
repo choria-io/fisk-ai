@@ -6,6 +6,12 @@ The default `run` presentation is a full-screen terminal UI built on tview and t
 `internal/tui`: the shared widget model and transcript viewer in `viewer.go`, the live-run wrapper in `live.go`, the native prompts in `prompter.go`, and the identity card in `splash.go`. The seam from the run loop is `tcellEvents` in `run_tui_events.go`.
 {{% /notice %}}
 
+## Two output surfaces
+
+The full-screen UI is one of two ways output reaches an operator, and only `run` uses it. Everything else, `info`, `session ls`, `knowledge doctor`, `discover`, prints line output instead.
+
+That line output is not hand-rolled. Tables and key-value column layout come from the external `github.com/choria-io/ui` library: `ui/table` builds tables, and `ui/columns` builds the sectioned key-value blocks the commands print. The commands hand it a `columns.Document`, add sections and items, and let the library decide widths and time formatting rather than computing them per command. `internal/tui` does not use either; it owns its own widgets.
+
 ## Two goroutines, one writer
 
 A live run has two goroutines. One runs `agent.Run` and emits `Events`; the other is the tview event loop that owns the screen. The run goroutine never touches widgets directly. Every cross-goroutine mutation is marshaled onto the tview loop with `QueueUpdateDraw`, so view state has a single writer. `tcellEvents` is the only producer, and it always goes through `Live.Append`.
@@ -65,5 +71,5 @@ When a run blocks on an operator decision, the prompter rings the terminal bell 
 {{% /notice %}}
 
 {{% notice style="tip" title="Next" %}}
-Continue to [Interoperability]({{% relref "interop" %}}) for serving the same tools to other clients and agents.
+Continue to [MCP and A2A]({{% relref "interop" %}}) for serving the same tools to other clients and agents.
 {{% /notice %}}

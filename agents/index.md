@@ -247,8 +247,9 @@ llm:
 
 Larger models reason better on complex, long-horizon tasks; smaller models like Haiku are faster and cheaper for narrow
 ones. When the agent exposes ten or more tools it relies on the model's server-side tool search, which recent models
-support and older ones (Claude Opus 4.1 and earlier and local models) do not. The [configuration reference](../reference/) lists the known
-models and their trade-offs.
+support and older ones (Claude Opus 4.1 and earlier and local models) do not. Set `llm.no_tool_search` to send every tool
+directly on an endpoint that does not implement tool search; when a large tool set cannot use it the run warns that all
+tools are being sent directly. The [configuration reference](../reference/) lists the known models and their trade-offs.
 
 ### Budget
 
@@ -324,7 +325,9 @@ Prompt:
 ...
 ```
 
-The output shows the `say` and `think` tools and some Human in the Loop tools.
+The output shows the `say` and `think` tools and some Human in the Loop tools. When the configuration sets a model,
+`fisk-ai info` also prints a Model section first, listing the resolved model and provider, whether thinking is enabled,
+and how tool search will behave, so you can confirm the backend and feature gates without starting a run.
 
 There are a few ways to control what tools are visible.
 
@@ -686,3 +689,7 @@ I set these environment variables before invoking `fisk-ai` to access my local A
 $ export ANTHROPIC_BASE_URL=http://localhost:1234
 $ export ANTHROPIC_API_KEY=lmstudio
 ```
+
+The `base_url` is validated: a non-loopback host must use `https`, so the API key and conversation are never sent in
+cleartext. Plain `http` is allowed only for a loopback address (`127.0.0.1`, `::1`, `localhost`) as used by the local
+runners above.

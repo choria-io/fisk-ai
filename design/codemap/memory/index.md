@@ -3,7 +3,7 @@
 Memory gives the model a small key/value store that persists across runs, so it can keep durable notes and pick them up next time rather than rediscovering them. It is opt-in, agent-mode only, and never exposed over MCP.
 
 {{% notice style="note" title="Where it lives" %}}
-`internal/memory` holds the backend-agnostic core: the `Store` interface and the `New` factory in `store.go`, the backend registry in `registry.go`, key validation in `key.go`, and the shared write validation in `write.go`. The file backend lives in its own `internal/memory/file` package, with the backend and its options in `file.go` and the on-disk format in `frontmatter.go`. The four model-facing tools and the system-prompt index are in `../../../../internal/toolkit/builtin/builtin_memory.go`.
+`internal/memory` holds the backend-agnostic core: the `Store` interface and the `New` factory in `store.go`, the backend registry in `registry.go`, key validation in `key.go`, and the shared write validation in `write.go`. The file backend lives in its own `internal/memory/file` package, with the backend and its options in `file.go`, the on-disk format in `frontmatter.go`, and the symlink defense split across `nofollow.go` and `windows.go`. The four model-facing tools and the system-prompt index are in `internal/toolkit/builtin/builtin_memory.go`.
 {{% /notice %}}
 
 ## Four tools over one interface
@@ -50,7 +50,7 @@ Each backend registers itself under a name in `registry.go`, so a backend links 
 
 ## Keys, files, and races
 
-A key is letters, digits, and `. _ = -`, with no leading or trailing dot and no `..` (`key.go:25`). The slash that a NATS KV key also permits is deliberately excluded, so a key maps one-to-one to a flat filename with no separator to traverse. `ValidateKey` guards every operation and filters directory entries, which makes it a path-traversal defense as well as a format rule.
+A key is letters, digits, and `. _ = -`, with no leading or trailing dot and no `..`, enforced by `ValidateKey` in `key.go`. The slash that a NATS KV key also permits is deliberately excluded, so a key maps one-to-one to a flat filename with no separator to traverse. `ValidateKey` guards every operation and filters directory entries, which makes it a path-traversal defense as well as a format rule.
 
 The file backend stores each entry as a markdown file with a YAML frontmatter description under `memory/<identity>`, where the identity defaults to the application binary's base name. Two agents pointed at the same directory share a memory; the default keeps each separate. Create and overwrite use the filesystem for atomicity: a create links a staged temp file into place and fails if the name exists, giving a race-safe create guard, while an overwrite renames over the target. Content is capped at 64 KiB, sized to what a future NATS KV backend would accept.
 
@@ -59,7 +59,9 @@ The file backend stores each entry as a markdown file with a YAML frontmatter de
 At the start of a run, if the index is enabled, the stored keys and descriptions are injected into the system prompt inside a `<memory-index>` block, so the model knows what it has saved. `memory_list` is the live view during the run. The index is turned off with `no_index`.
 
 {{% notice style="warning" title="Load-bearing decision" %}}
-Memory is untrusted data, not instructions. The system note, the index framing, and the description sanitization all reinforce that a stored value is data the model saved, never an instruction to follow. A read opens with `O_NOFOLLOW` and rejects any non-regular file, so a planted symlink cannot redirect a read.
+Memory is untrusted data, not instructions. The system note, the index framing, and the description sanitization all reinforce that a stored value is data the model saved, never an instruction to follow. On unix a read opens with `O_NOFOLLOW` and then rejects any non-regular file, so a planted symlink cannot redirect a read. Windows has no `O_NOFOLLOW`, so that build keeps only the second check: the file is opened and then rejected if it is not regular. That is a weaker guarantee, and it leans on the fact that creating a symlink on Windows needs privilege.
+
+A create is atomic for a different reason. The backend stages into a temp file in the same directory and then links it into place, so an existing key fails at the link rather than after a separate existence check. The 1024-entry capacity check that precedes it is not part of that atomic step.
 {{% /notice %}}
 
 {{% notice style="tip" title="Next" %}}

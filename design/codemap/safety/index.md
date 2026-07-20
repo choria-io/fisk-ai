@@ -3,12 +3,12 @@
 Safety is the reason Fisk AI exists. Two ideas carry it: a command runs with no shell and no credentials so it is bounded by construction, and a tagged command can require a human to approve it before it runs. Both default to the safe outcome.
 
 {{% notice style="note" title="Where it lives" %}}
-`internal/util`: the confirm gate in `confirm.go`, the `ask_human_*` tools and terminal sanitization in `builtin.go`, the prompter contract in `prompter.go` and its line implementation in `survey_prompter.go`. Command execution safety is in `fisk.go`. The full-screen prompter is `internal/tui/prompter.go`.
+The confirm gate is `internal/util/confirm.go` and terminal detection and sanitization are `internal/util/terminal.go`. The prompter contract is `internal/toolkit/prompter.go` with its line implementation in `internal/toolkit/survey_prompter.go`; the full-screen prompter is `internal/tui/prompter.go`. The `ask_human_*` tools are `internal/toolkit/builtin/builtin.go`. Command execution safety is `internal/toolkit/fisk/fisk.go`.
 {{% /notice %}}
 
 ## A command is sandboxed by construction
 
-When the loop runs a tool, `Tool.Execute` passes an argument vector to `exec.CommandContext`. No shell is involved, so model-supplied arguments can never be interpreted as shell syntax; `t.Model.ArgsFromJSON` is the trust boundary that bounds input to the command's schema. The child gets no stdin, a ten-second wait delay after cancellation, an environment with credentials stripped, and its combined output capped.
+When the loop runs a tool, `FiskCommandTool.Execute` passes an argument vector to `exec.CommandContext`. No shell is involved, so model-supplied arguments can never be interpreted as shell syntax; `t.Model.ArgsFromJSON` is the trust boundary that bounds input to the command's schema. The child gets no stdin, a ten-second wait delay after cancellation, an environment with credentials stripped, and its combined output capped.
 
 <figure class="cm-diagram">
   <svg viewBox="0 0 760 250" role="img" aria-label="Model JSON becomes an argument vector executed with no shell, a stripped environment, and capped output">
@@ -47,10 +47,12 @@ When the loop runs a tool, `Tool.Execute` passes an argument vector to `exec.Com
   <figcaption>A tool call becomes an argument vector, never a shell command. The child environment has its credentials removed and gains `LLMFORMAT=1`.</figcaption>
 </figure>
 
-`commandEnv` removes five secret-bearing variables so a model-chosen command can never read the agent's own credentials: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_IDENTITY_TOKEN`, `ANTHROPIC_WEBHOOK_SIGNING_KEY`, and `ANTHROPIC_CUSTOM_HEADERS` (`fisk.go:511`). It appends `LLMFORMAT=1` so a fisk application can render output suited to a model rather than a terminal. Output is capped at 64 KiB, keeping the head and tail with a truncation marker, so a chatty command cannot flood the model's context.
+`commandEnv` removes five secret-bearing variables so a model-chosen command can never read the agent's own credentials: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_IDENTITY_TOKEN`, `ANTHROPIC_WEBHOOK_SIGNING_KEY`, and `ANTHROPIC_CUSTOM_HEADERS`. It appends `LLMFORMAT=1` so a fisk application can render output suited to a model rather than a terminal. Output is capped at 64 KiB, keeping the head and tail with a truncation marker, so a chatty command cannot flood the model's context.
+
+Selector variables such as `ANTHROPIC_PROFILE` and `XDG_CONFIG_HOME` are deliberately left in place. They hold no secret, and the files they point at are already protected by filesystem permissions.
 
 {{% notice style="warning" title="Load-bearing decision" %}}
-The built-in tools run in-process with the agent's own, unstripped environment. Their handlers must never hand that environment to a subprocess. Only the `exec` path through `commandEnv` is sanitized (`builtin.go:38`).
+The built-in tools run in-process with the agent's own, unstripped environment. Their handlers must never hand that environment to a subprocess. Only the `exec` path through `commandEnv` in `internal/toolkit/fisk/fisk.go` is sanitized.
 {{% /notice %}}
 
 ## Two ways to put a human in the loop
@@ -69,9 +71,9 @@ Reach for `ai:confirm` when a normal command should run only with the operator's
 When the model calls a gated command, the gate runs the checks in a fixed order, and every failure is a denial.
 
 <ol class="cm-steps">
-  <li><b>Missing parameters first</b> A structurally invalid call is rejected before the gate, so the operator is never asked to approve a broken command (`runner.go:608`).</li>
+  <li><b>Missing parameters first</b> A structurally invalid call is rejected before the gate, so the operator is never asked to approve a broken command. The runner reaches this through the `toolkit.ArgumentValidator` capability interface, which is why the check applies uniformly across tool kinds.</li>
   <li><b>Session-allow short-circuit</b> If the operator earlier chose "allow for the session" for this command, it runs without asking again.</li>
-  <li><b>No terminal, no run</b> Without an interactive terminal, or with a canceled context, the gate denies before any prompt is shown (`confirm.go:76`).</li>
+  <li><b>No terminal, no run</b> Without an interactive terminal, or with a canceled context, `ConfirmGate.Approve` denies before any prompt is shown.</li>
   <li><b>Prompt the operator</b> The sanitized full command line is shown. Any prompter error, an interrupt, an end-of-input, or an Escape, is a denial.</li>
 </ol>
 
@@ -79,10 +81,14 @@ A denial is returned to the model as an authoritative, non-error result whose re
 
 ## The ask_human tools
 
-When `human_in_the_loop` is enabled the model gets three tools: `ask_human_confirm` (yes or no), `ask_human_select` (choose one option), and `ask_human_input` (a free-text value). Each denies by default: a missing terminal, an interrupt, or an end-of-input yields a negative answer rather than a guess. Each renders on stderr so a piped final answer stays clean, and the model-supplied text is stripped of terminal control sequences first, before any truncation, so a cut can never leave a dangling escape.
+When `human_in_the_loop` is enabled the model gets three tools: `ask_human_confirm` (yes or no), `ask_human_select` (choose one option), and `ask_human_input` (a free-text value). Each denies by default: a missing terminal, an interrupt, an end-of-input, or a canceled context yields a negative answer rather than a guess, returned as a normal result with a reason so the model does not retry around it. `ask_human_select` caps the option list at 25.
+
+Model-supplied prompt text is stripped of terminal control sequences before any truncation, so a cut can never leave a dangling escape. The two prompter implementations differ in where they draw: the line prompter renders on stderr so a piped final answer stays clean, while the full-screen prompter draws a modal inside the terminal UI.
+
+The sanitization caps are deliberately asymmetric. Prompt text is capped at 500 runes, but a command line shown for approval is capped at 2000, so truncation can never hide the very arguments the operator is being asked to approve.
 
 {{% notice style="warning" title="Load-bearing decision" %}}
-The confirm gate and the `ask_human_*` tools are agent-loop only and are never exposed over MCP or A2A, where there is no operator to answer. Over MCP a confirm-tagged command is requested through elicitation instead, which a client may auto-approve, so `ai:deny` is the only way to keep a command off a served surface entirely. See [Interoperability]({{% relref "interop" %}}).
+The confirm gate and the `ask_human_*` tools are agent-loop only. Neither served face can prompt, but they handle a gated command differently. Over MCP the command is still served and requested through elicitation, which a client may auto-approve, so `ai:deny` is the only way to keep it off the MCP surface entirely. Over A2A a confirm-gated tool is dropped from the served set outright by `Server.selectExposed`, with the reason logged. An author who adds `ai:confirm` for agent-mode safety therefore also removes that tool from A2A. See [MCP and A2A]({{% relref "interop" %}}).
 {{% /notice %}}
 
 {{% notice style="tip" title="Next" %}}

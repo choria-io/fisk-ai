@@ -8,18 +8,20 @@ The agent loop is what `fisk-ai run` drives. It calls the Anthropic model, runs 
 
 ## Setup, then loop
 
-`agent.Run` does all the one-time work before the loop starts (`agent.go:119`): load and validate tools, inject the built-in tools, import any remote tools, build the Anthropic tool params, construct the confirm gate, build the client, seed the conversation, compute the resume fingerprint, and open or resume the journal. It then constructs a `runner` and calls its loop. The `runner` splits its state in two: infrastructure that is rebuilt from config on every start or resume, and mutable conversation state that is resumable. That split is what makes a run suspendable.
+`agent.Run` does all the one-time work before the loop starts: load and validate tools, inject the built-in tools, import any remote tools, build the Anthropic tool params, construct the confirm gate, build the client, seed the conversation, compute the resume fingerprint, and open or resume the journal. It then constructs a `runner` and calls its loop. The `runner` splits its state in two: infrastructure that is rebuilt from config on every start or resume, and mutable conversation state that is resumable. That split is what makes a run suspendable.
+
+Setup also claims every tool name into one flat namespace. A collision between a command tool, a built-in, and an imported remote tool aborts the run rather than letting one silently shadow another.
 
 ## How one iteration runs
 
-The loop runs while the iteration count is below `max_iterations` (`runner.go:368`).
+The loop runs while the iteration count is below `max_iterations`.
 
 <ol class="cm-steps">
-  <li><b>Check for suspend</b> Only at the loop boundary, before the iteration index is consumed, never mid-tool, so the conversation is always left coherent (`runner.go:384`).</li>
-  <li><b>Call the model</b> Under a per-call timeout derived from `call_timeout`. `util.CallLLM` wraps the single request in its own context (`llm.go:16`).</li>
-  <li><b>Journal the turn</b> The assistant response is appended to the conversation and journaled before any tool runs, so a crash mid-batch resumes without re-paying for the call (`runner.go:444`).</li>
-  <li><b>Decide terminality</b> A turn with no tool-use blocks, and not a paused turn, is the final answer and ends the run. Otherwise the tool calls are executed (`runner.go:470`).</li>
-  <li><b>Run tools and feed back</b> Each tool result is journaled as it completes, then all results are appended as one user message that becomes the next iteration's input (`runner.go:494`).</li>
+  <li><b>Check for suspend</b> Only at the loop boundary, before the iteration index is consumed, never mid-tool, so the conversation is always left coherent.</li>
+  <li><b>Call the model</b> Under a per-call timeout derived from `call_timeout`. `util.CallLLM` wraps the single request in its own context.</li>
+  <li><b>Journal the turn</b> The assistant response is appended to the conversation and journaled before any tool runs, so a crash mid-batch resumes without re-paying for the call.</li>
+  <li><b>Decide terminality</b> A turn with no tool-use blocks, and not a paused turn, is the final answer and ends the run. Otherwise the tool calls are executed.</li>
+  <li><b>Run tools and feed back</b> Each tool result is journaled as it completes, then all results are appended as one user message that becomes the next iteration's input.</li>
 </ol>
 
 <figure class="cm-diagram">
@@ -59,9 +61,24 @@ The loop runs while the iteration count is below `max_iterations` (`runner.go:36
   <figcaption>One iteration. The dashed edge feeds tool results back into the next call; the token budget is checked on that edge before any further tools run.</figcaption>
 </figure>
 
+## Dispatching one tool call
+
+`executeTool` handles every kind the same way, in a fixed order.
+
+<ol class="cm-steps">
+  <li><b>Look the name up</b> One `map[string]toolkit.Tool` holds command tools, built-ins, and remote tools together. An unknown name is rejected first, before any other work.</li>
+  <li><b>Validate arguments</b> If the tool implements `toolkit.ArgumentValidator`, missing required parameters are reported back to the model so it can correct and retry.</li>
+  <li><b>Ask the operator</b> If the tool implements `toolkit.Confirmable` and its tags require it, the confirm gate runs.</li>
+  <li><b>Trace and run</b> `traceCall` picks the trace shape for the kind, then `ExecuteUse` runs the tool through the one interface.</li>
+</ol>
+
+The order matters. Validation runs before the gate, so an operator is never asked to approve a call that is structurally incomplete and would only fail on its own.
+
+Only one type switch remains, inside `traceCall`, and it exists solely to choose how a call is described in the trace. It has a default branch, so a tool kind added later still runs and is still traced by name rather than being silently dropped.
+
 ## Budgets
 
-Two different token caps apply. `defaultMaxOutputTokens` (8192, or 16384 with thinking) bounds a single response so a call stays under the non-streaming ceiling (`agent.go:39`). The configured `llm.budget.max_tokens` bounds the whole run. The run budget is a soft cap checked after each call but before that turn's tools run, so an over-budget turn incurs no further tool side effects (`runner.go:490`). All four token tiers, input, output, cache read, and cache create, are summed so the cap measures total throughput.
+Two different token caps apply. `defaultMaxOutputTokens` (8192, or `thinkingMaxOutputTokens` at 16384 with thinking enabled) bounds a single response so a call stays under the non-streaming ceiling. The configured `llm.budget.max_tokens` bounds the whole run. The run budget is a soft cap checked after each call but before that turn's tools run, so an over-budget turn incurs no further tool side effects. All four token tiers, input, output, cache read, and cache create, are summed so the cap measures total throughput.
 
 `max_iterations` bounds the loop count and `call_timeout` bounds each call. The defaults are 200000 tokens, 50 iterations, and 120 seconds.
 
@@ -71,7 +88,7 @@ The assistant turn is journaled before any tool executes, and each tool result i
 
 ## Reporting, not rendering
 
-The loop never draws anything. It emits typed callbacks through the `Events` interface, and the caller decides how they look. The same callbacks back both the line UI and the full-screen UI, which keeps the loop free of terminal concerns. Tool dispatch distinguishes local, remote, built-in, and memory tools so each is traced correctly.
+The loop never draws anything. It emits typed callbacks through the `Events` interface, and the caller decides how they look. The same callbacks back both the line UI and the full-screen UI, which keeps the loop free of terminal concerns. Tracing distinguishes the three tool kinds so each is described correctly; the memory and `knowledge_search` tools are built-ins and trace as such.
 
 {{% notice style="tip" title="Next" %}}
 Continue to [Safety and Human in the Loop]({{% relref "safety" %}}) for the guardrails around each tool call.
