@@ -20,9 +20,10 @@ import (
 const ProviderName = "anthropic"
 
 // ToolDefToAnthropic renders a neutral tool definition as an Anthropic custom
-// tool. defer_loading is always emitted, including a present false, because the
-// request wire form and the session fingerprint distinguish a present false from
-// an omitted field, and a tool that does not defer is a present false today.
+// tool. defer_loading is emitted unconditionally, including a present false, so
+// the rendered tool is a pure function of the neutral value rather than varying
+// with its zero state. False is the API default, so a present false and an
+// omitted field request the same thing: send the tool directly.
 func ToolDefToAnthropic(td llm.ToolDef) sdk.ToolUnionParam {
 	return sdk.ToolUnionParam{OfTool: &sdk.ToolParam{
 		Type:         sdk.ToolTypeCustom,

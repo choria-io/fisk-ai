@@ -468,9 +468,11 @@ happens.
 Resume a session against the same agent configuration it started with. A session can be resumed from anywhere, including
 a machine that no longer has the original `agent.yaml`, so care is required: continuing a conversation against a
 different model, tool set, or system prompt can make the replayed transcript incoherent. fisk-ai guards this by
-fingerprinting the configuration (model, prompt, tool set, budget) at checkpoint time and refusing a resume when it no
-longer matches; the refusal names what changed. `--force` overrides the check, accepting that the restored conversation
-may not fit the current configuration. A session that already completed cannot be resumed.
+fingerprinting the configuration (provider, model, prompt, tool set, budget) at checkpoint time and refusing a resume
+when it no longer matches; the refusal names what changed. `--force` overrides the check, accepting that the restored
+conversation may not fit the current configuration. The provider is the one exception: a session started against one
+`llm.provider` can never be resumed against another, and `--force` does not apply. A session that already completed
+cannot be resumed.
 
 #### Managing sessions
 

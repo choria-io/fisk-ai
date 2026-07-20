@@ -51,9 +51,15 @@ When the loop runs a tool, `FiskCommandTool.Execute` passes an argument vector t
   <figcaption>A tool call becomes an argument vector, never a shell command. The child environment has its credentials removed and gains `LLMFORMAT=1`.</figcaption>
 </figure>
 
-`commandEnv` removes five secret-bearing variables so a model-chosen command can never read the agent's own credentials: `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_IDENTITY_TOKEN`, `ANTHROPIC_WEBHOOK_SIGNING_KEY`, and `ANTHROPIC_CUSTOM_HEADERS`. It appends `LLMFORMAT=1` so a fisk application can render output suited to a model rather than a terminal. Output is capped at 64 KiB, keeping the head and tail with a truncation marker, so a chatty command cannot flood the model's context.
+`commandEnv` removes the secret-bearing variables so a model-chosen command cannot read the agent's own credentials from its environment. The set is not a list maintained here: it is the union of the names every provider linked into the build declared when it registered, plus the operator's own `sensitive_env_vars`. The anthropic provider contributes five, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_IDENTITY_TOKEN`, `ANTHROPIC_WEBHOOK_SIGNING_KEY`, and `ANTHROPIC_CUSTOM_HEADERS`. Because the union is over linked providers rather than the configured one, a build that links two backends strips both regardless of which is selected. `commandEnv` also appends `LLMFORMAT=1` so a fisk application can render output suited to a model rather than a terminal, and output is capped at 64 KiB, keeping the head and tail with a truncation marker, so a chatty command cannot flood the model's context.
 
-Selector variables such as `ANTHROPIC_PROFILE` and `XDG_CONFIG_HOME` are deliberately left in place. They hold no secret, and the files they point at are already protected by filesystem permissions.
+Both executions of the operator's binary are covered: the tool call and the introspection subprocess that reads the command tree. Between them they are the only places Fisk AI executes it.
+
+Selector variables such as `ANTHROPIC_PROFILE`, `ANTHROPIC_CONFIG_DIR`, and `XDG_CONFIG_HOME` are deliberately left in place. They hold no secret, and the files they point at are already protected by filesystem permissions.
+
+{{% notice style="warning" title="Caveat" %}}
+The guarantee is name-based and scoped to the environment. It removes the variables a provider identified as secrets, so a tool cannot read them from its environment. It does not reach a secret the operator also exported under a second, unnamed variable, nor a key passed on the parent's command line, nor a file the agent itself wrote that the tool can read as the same user.
+{{% /notice %}}
 
 {{% notice style="warning" title="Load-bearing decision" %}}
 The built-in tools run in-process with the agent's own, unstripped environment. Their handlers must never hand that environment to a subprocess. Only the `exec` path through `commandEnv` in `internal/toolkit/fisk/fisk.go` is sanitized.

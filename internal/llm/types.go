@@ -89,9 +89,10 @@ type ProviderBlock struct {
 
 // ToolDef is a provider-neutral tool definition. The per-provider codec renders
 // it to the provider's tool format. DeferLoading asks for the tool to be hidden
-// behind server-side tool search; a codec that supports deferral OMITS the field
-// when DeferLoading is false rather than emitting an explicit false, since on
-// Anthropic a present defer_loading:false is a distinct, non-default state.
+// behind server-side tool search, leaving the model to discover it through the
+// provider's search tool rather than receiving it up front. How a codec spells
+// that on the wire is its own concern; false is the default in every format
+// seen so far, so emitting it and omitting it are equivalent.
 type ToolDef struct {
 	Name         string
 	Description  string

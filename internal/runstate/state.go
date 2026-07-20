@@ -100,9 +100,10 @@ func Fold(records []Record) (*RunState, error) {
 		return nil, ErrNoMeta
 	}
 	meta := first.Meta
-	// A newer snapshot may carry record shapes this build does not understand, so it
-	// is rejected; an older one is always readable since every version only adds
-	// records and optional fields, never changes an existing shape.
+	// Only the current version is accepted, in either direction. A newer snapshot may
+	// carry record shapes this build does not understand, and an older one predates the
+	// provider-neutral record format, which does not round-trip through these records.
+	// See Version in record.go for the policy.
 	if meta.Version != Version {
 		return nil, fmt.Errorf("%w: snapshot version %d, supported %d", ErrVersion, meta.Version, Version)
 	}
