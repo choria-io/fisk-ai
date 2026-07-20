@@ -138,7 +138,6 @@ func (s *Store) Index(ctx context.Context, roots []string, opts IndexOptions) (*
 // walkRoot walks one root, dispatching each eligible file to add / update / skip.
 func (s *Store) walkRoot(ctx context.Context, root string, opts IndexOptions, stats *IndexStats, seen map[string]bool) error {
 	exts := opts.exts()
-	storeDir := filepath.Clean(s.dir)
 
 	return filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -152,7 +151,10 @@ func (s *Store) walkRoot(ctx context.Context, root string, opts IndexOptions, st
 		}
 
 		if d.IsDir() {
-			return s.skipDir(path, d, storeDir)
+			if shouldSkipDir(path, s.dir) {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 
 		// Skip symlinks: canonicalize to one real key per file and never follow a
@@ -190,23 +192,24 @@ func (s *Store) walkRoot(ctx context.Context, root string, opts IndexOptions, st
 	})
 }
 
-// skipDir decides whether to descend into a directory. It skips dotfiles, the
-// feature's own store directory, and a sibling memory/ store, so the index never
-// walks its own file or the memory feature's.
-func (s *Store) skipDir(path string, d os.DirEntry, storeDir string) error {
-	name := d.Name()
-	if filepath.Clean(path) == storeDir {
-		return filepath.SkipDir
+// shouldSkipDir decides whether a directory is excluded from both the index walk
+// and the watcher, so the two agree on the corpus: the store's own directory,
+// dotdirs like .git, and a sibling memory/ store are skipped. The walk root itself
+// (name "." or "..") is never skipped.
+func shouldSkipDir(path, storeDir string) bool {
+	if filepath.Clean(path) == filepath.Clean(storeDir) {
+		return true
 	}
+	name := filepath.Base(path)
 	// Skip dotfiles like .git, but never skip the walk root itself when it is ".".
 	if name != "." && name != ".." && strings.HasPrefix(name, ".") {
-		return filepath.SkipDir
+		return true
 	}
 	if name == memoryDirName {
-		return filepath.SkipDir
+		return true
 	}
 
-	return nil
+	return false
 }
 
 // ingestOne classifies a seen file by content hash and add/update/skips it,
@@ -218,10 +221,14 @@ func (s *Store) ingestOne(ctx context.Context, key string, mtime int64, data []b
 	var have string
 	err := s.db.QueryRowContext(ctx, `SELECT hash FROM documents WHERE path = ?`, key).Scan(&have)
 	switch {
+	case err != nil && !errors.Is(err, sql.ErrNoRows):
+		return err
+	case opts.Reindex:
+		// A reindex drops and re-embeds every file, so a matching stale hash must not
+		// short-circuit it as unchanged. The dry-run cost estimate skips the reset, so
+		// without this it would see every file as unchanged and report zero work.
 	case errors.Is(err, sql.ErrNoRows):
 		// add
-	case err != nil:
-		return err
 	case have == hash:
 		stats.Skipped++
 		n, err := scanCount(ctx, s.db, `SELECT count(*) FROM chunks c JOIN documents d ON d.id=c.document_id WHERE d.path=?`, key)
@@ -234,10 +241,13 @@ func (s *Store) ingestOne(ctx context.Context, key string, mtime int64, data []b
 		// update
 	}
 
+	// A reindex re-embeds every file from scratch, so it always counts as an add.
+	isNew := opts.Reindex || errors.Is(err, sql.ErrNoRows)
+
 	chunks := ChunkDocument(string(data))
 
 	if opts.DryRun {
-		if errors.Is(err, sql.ErrNoRows) {
+		if isNew {
 			stats.Added++
 		} else {
 			stats.Updated++
@@ -252,7 +262,7 @@ func (s *Store) ingestOne(ctx context.Context, key string, mtime int64, data []b
 	if err := s.ingestFile(ctx, key, mtime, hash, string(data), chunks); err != nil {
 		return fmt.Errorf("indexing %q: %w", key, err)
 	}
-	if errors.Is(err, sql.ErrNoRows) {
+	if isNew {
 		stats.Added++
 	} else {
 		stats.Updated++

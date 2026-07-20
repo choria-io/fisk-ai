@@ -95,6 +95,12 @@ harness:
       model: text-embedding-embeddinggemma-300m
 ```
 
+EmbeddingGemma-300m, used in the examples here, is a good default to start from for local embedding: a small
+(300M-parameter) Gemma-based model that runs comfortably on CPU or modest hardware, is multilingual, and is well
+supported by the local runtimes this feature talks to, such as Ollama and LM Studio. It supports Matryoshka dimension
+truncation if you want smaller, faster vectors. The feature stays model-agnostic - any OpenAI-compatible endpoint works -
+but if you have no specific reason to prefer another model, this is a sound choice.
+
 The embedding model is user-chosen, so nothing about it is assumed. `fisk-ai knowledge doctor` probes the configured
 server and reports the model, its vector dimension, and whether its output is normalized. After turning embeddings on,
 rebuild the index so the vectors are populated:
@@ -195,6 +201,38 @@ that need one document it. Run `knowledge doctor` to see whether a chosen model 
 > [!info] Note
 > A non-loopback `base_url` must use `https`. The embeddings endpoint is only ever contacted when the vector tier is on;
 > the lexical path makes no network calls.
+
+#### EmbeddingGemma prefixes
+
+Google's EmbeddingGemma is trained with task-specific prompts, so it expects a prefix on both sides: a query is embedded
+under a retrieval instruction and a document under a title-and-text template. Setting them to the model's documented
+values improves retrieval; leaving them empty still works but embeds text bare, the way the model was not trained to see
+it.
+
+```yaml
+harness:
+  knowledge:
+    enabled: true
+    paths:
+      - docs/
+    embeddings:
+      base_url: http://127.0.0.1:1234/v1
+      model: text-embedding-embeddinggemma-300m
+      query_prefix: "task: search result | query: "
+      document_prefix: "title: {title} | text: "
+```
+
+The trailing space is significant, so quote both values in YAML. `{title}` in `document_prefix` is filled from each
+chunk's heading path, or the literal `none` when a chunk has no heading, matching the template the model expects. Because
+a prefix is part of the pinned vector identity, adding or changing one forces a `--reindex`; the index refuses a
+mismatched prefix upfront rather than mixing vectors embedded under different prompts.
+
+> [!info] Note
+> Some GGUF builds of EmbeddingGemma log `'tokenizer.ggml.add_eos_token' should be set to 'true' in the GGUF header` on
+> every embedded string. This comes from the embeddings server, not `fisk-ai`: the OpenAI embeddings API exposes no
+> control over tokenization, so it cannot be silenced from the client. It is harmless but means the model embeds without
+> the end-of-sequence token it was trained with; a GGUF whose header sets `tokenizer.ggml.add_eos_token = true` resolves
+> it.
 
 ## The knowledge_search tool
 

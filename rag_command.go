@@ -47,6 +47,11 @@ func registerRAGCommand(cmd *fisk.Application) {
 	idx.Flag("reindex", "Force a full rebuild, dropping and re-embedding everything (also allows a model or dimension change)").UnNegatableBoolVar(&knowledgeReindex)
 	idx.Flag("dry-run", "List the files and estimate the chunk and embedding-call counts without writing or embedding anything").UnNegatableBoolVar(&knowledgeDryRun)
 
+	watch := k.Command("watch", "Watches the knowledge paths and re-indexes on change").Action(knowledgeWatchAction)
+	watch.Arg("paths", "Paths to watch; defaults to knowledge.paths from the config").StringsVar(&knowledgePaths)
+	watch.Flag("debounce", "How long to wait for changes to settle before re-indexing").Default("2s").DurationVar(&knowledgeWatchDebounce)
+	watch.Flag("no-initial", "Skip the initial index pass and only watch for later changes").UnNegatableBoolVar(&knowledgeWatchNoInitial)
+
 	search := k.Command("search", "Retrieves from the index for tuning; prints citations and snippets").Action(knowledgeSearchAction)
 	search.Arg("query", "The search query").Required().StringVar(&knowledgeQuery)
 	search.Flag("top-k", "Maximum number of results to return").IntVar(&knowledgeTopK)
