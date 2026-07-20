@@ -19,6 +19,12 @@ import (
 // The system prompt is stored as a hash, not verbatim, so the fingerprint never
 // leaks prompt contents.
 type Fingerprint struct {
+	// Provider is the neutral provider id the run was started with. It is a HARD
+	// resume gate that --force cannot cross (a turn from another provider is
+	// incoherent, see SECURITY.md finding 4), so it is deliberately excluded from
+	// Equal and Diff, which govern only the forceable configuration drift. The
+	// provider check lives at the resume gate and is unconditional.
+	Provider      string `json:"provider"`
 	Model         string `json:"model"`
 	SystemHash    string `json:"system_hash"`
 	ToolsHash     string `json:"tools_hash"`

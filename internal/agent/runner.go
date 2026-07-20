@@ -6,21 +6,15 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
-	"slices"
-	"strings"
-	"time"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
 	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/a2a"
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
@@ -31,13 +25,14 @@ import (
 // carry (messages). This separation is what makes a run resumable: the state is a
 // plain value, the infrastructure is reconstructed.
 type runner struct {
-	cfg    *config.Config
-	client anthropic.Client
-	stats  *util.RunStats
+	cfg      *config.Config
+	provider llm.Provider
+	stats    *util.RunStats
 
-	system          []anthropic.TextBlockParam
-	toolParams      []anthropic.ToolUnionParam
-	thinking        anthropic.ThinkingConfigParamUnion
+	system          []string
+	toolDefs        []llm.ToolDef
+	toolSearch      bool
+	thinking        bool
 	maxOutputTokens int64
 	maxIter         int64
 	maxTokens       int64
@@ -71,13 +66,9 @@ type runner struct {
 	// run goroutine, never from the concurrent MCP path.
 	prompter toolkit.Prompter
 
-	// callLLM performs one LLM request. It defaults to util.CallLLM and is a field
-	// so tests can drive the loop with scripted responses.
-	callLLM func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error)
-
 	// messages is the conversation, grown as the loop runs. It is the core of the
 	// resumable state.
-	messages []anthropic.MessageParam
+	messages []llm.Message
 
 	// journal records every event for durable suspend/resume. It is nil when
 	// snapshotting is disabled, in which case the run behaves exactly as before.
@@ -141,17 +132,6 @@ func (r *runner) emit(rec runstate.Record) error {
 	}
 
 	return nil
-}
-
-// cacheControl is the cache_control marker to place on this run's breakpoints. A chat
-// run uses a 1h TTL because an operator's think-time between turns commonly exceeds the
-// default 5m (a 5m TTL there would pay a write with no read, a net cost increase); an
-// autonomous loop uses the 5m default, which its tight turn-to-turn cadence stays within.
-func (r *runner) cacheControl() anthropic.CacheControlEphemeralParam {
-	if r.interactive {
-		return anthropic.CacheControlEphemeralParam{TTL: anthropic.CacheControlEphemeralTTLTTL1h}
-	}
-	return anthropic.NewCacheControlEphemeralParam()
 }
 
 // run executes the agentic loop to a terminal state, returning the reason it
@@ -265,7 +245,7 @@ func (r *runner) run(ctx context.Context) (runstate.TerminalReason, error) {
 			r.appendUserPrompt(cont.Text)
 
 			jerr := r.emit(runstate.Record{Protocol: runstate.UserProtocol, User: &runstate.UserRecord{
-				Message: anthropic.NewUserMessage(anthropic.NewTextBlock(cont.Text)),
+				Message: llm.Message{Role: llm.RoleUser, Content: []llm.ContentBlock{{Text: &llm.TextBlock{Text: cont.Text}}}},
 			}})
 			if jerr != nil {
 				r.events.Warn(Warning{Kind: WarnJournalUser, Err: jerr})
@@ -313,15 +293,15 @@ func continuable(reason runstate.TerminalReason) bool {
 // follow-up is folded into that turn instead, so the roles keep alternating rather than
 // sending two user messages in a row, which the API rejects.
 func (r *runner) appendUserPrompt(text string) {
-	block := anthropic.NewTextBlock(text)
+	block := llm.ContentBlock{Text: &llm.TextBlock{Text: text}}
 
 	n := len(r.messages)
-	if n > 0 && r.messages[n-1].Role == anthropic.MessageParamRoleUser {
+	if n > 0 && r.messages[n-1].Role == llm.RoleUser {
 		r.messages[n-1].Content = append(r.messages[n-1].Content, block)
 		return
 	}
 
-	r.messages = append(r.messages, anthropic.NewUserMessage(block))
+	r.messages = append(r.messages, llm.Message{Role: llm.RoleUser, Content: []llm.ContentBlock{block}})
 }
 
 // resetContext clears the conversation for a fresh start within the same run, keeping the
@@ -366,7 +346,7 @@ func (r *runner) rotateSession(prompt string) error {
 	r.seq = newJournal.LastSeq()
 	r.iter = 0
 	r.maxIter = 0
-	r.messages = []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(prompt))}
+	r.messages = []llm.Message{{Role: llm.RoleUser, Content: []llm.ContentBlock{{Text: &llm.TextBlock{Text: prompt}}}}}
 
 	r.events.SessionRotated(prevID)
 
@@ -399,54 +379,35 @@ func (r *runner) loop(ctx context.Context) (runstate.TerminalReason, error) {
 		i := r.iter
 		r.iter++
 
-		// Prompt caching places two cache_control breakpoints without mutating any
-		// persistent state, so the fingerprint (which hashes r.system and r.toolParams)
-		// and the journal (r.messages) stay marker-free and toggling the kill switch never
-		// refuses a resume. The tools+system breakpoint marks the last block of a value
-		// copy of r.system (a real element clone, never a reslice, or the marker would
-		// write through to r.system and poison the fingerprint). The conversation-tail
-		// breakpoint is params.CacheControl, a request-level field that never touches
-		// r.messages, so no marker is journaled or accumulates across turns.
-		system := r.system
-		if r.promptCache && len(system) > 0 {
-			cc := r.cacheControl()
-			system = slices.Clone(r.system)
-			system[len(system)-1].CacheControl = cc
-		}
-
-		params := anthropic.MessageNewParams{
-			Model:     anthropic.Model(r.cfg.LLM.Model),
-			MaxTokens: r.maxOutputTokens,
-			System:    system,
-			Tools:     r.toolParams,
-			Messages:  r.messages,
-			Thinking:  r.thinking,
-		}
-		if r.promptCache {
-			params.CacheControl = r.cacheControl()
+		req := llm.Request{
+			Model:           r.cfg.LLM.Model,
+			SystemBlocks:    r.system,
+			Messages:        r.messages,
+			Tools:           r.toolDefs,
+			ToolSearch:      r.toolSearch,
+			ThinkingEnabled: r.thinking,
+			MaxOutputTokens: r.maxOutputTokens,
+			PromptCache:     r.promptCache,
+			Interactive:     r.interactive,
 		}
 
 		if r.verbose {
 			r.events.LLMRequest(util.LLMRequestSummary(r.messages))
 		}
 
-		resp, err := r.callLLM(util.WithTraceIteration(ctx, int(i)), r.client, params, r.cfg.LLM.Budget.CallTimeoutParsed)
+		resp, err := r.provider.Call(util.WithTraceIteration(ctx, int(i)), req)
 		if err != nil {
-			var apiErr *anthropic.Error
-			if r.cfg.ThinkingEnabled() && errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusBadRequest {
-				return runstate.ReasonError, fmt.Errorf("llm call: %w; model %q may not support thinking, set llm.thinking.enabled to false", err, r.cfg.LLM.Model)
-			}
 			return runstate.ReasonError, fmt.Errorf("llm call: %w", err)
 		}
 		r.stats.LlmCalls++
-		r.stats.InTokens += resp.Usage.InputTokens
-		r.stats.OutTokens += resp.Usage.OutputTokens
-		r.stats.CacheReadTokens += resp.Usage.CacheReadInputTokens
-		r.stats.CacheCreateTokens += resp.Usage.CacheCreationInputTokens
+		r.stats.InTokens += resp.Usage.In
+		r.stats.OutTokens += resp.Usage.Out
+		r.stats.CacheReadTokens += resp.Usage.CacheRead
+		r.stats.CacheCreateTokens += resp.Usage.CacheCreate
 
-		// Round-trip the assistant turn back into the conversation. This keeps
+		// Append the assistant turn to the conversation. The neutral blocks preserve
 		// any server-side tool_search blocks intact alongside text and tool_use.
-		asst := resp.ToParam()
+		asst := llm.Message{Role: llm.RoleAssistant, Content: resp.Content}
 		r.messages = append(r.messages, asst)
 
 		// Journal the assistant turn before executing any tools, so a crash mid
@@ -455,36 +416,44 @@ func (r *runner) loop(ctx context.Context) (runstate.TerminalReason, error) {
 			Iteration:         i,
 			Message:           asst,
 			StopReason:        string(resp.StopReason),
-			InTokens:          resp.Usage.InputTokens,
-			OutTokens:         resp.Usage.OutputTokens,
-			CacheReadTokens:   resp.Usage.CacheReadInputTokens,
-			CacheCreateTokens: resp.Usage.CacheCreationInputTokens,
+			InTokens:          resp.Usage.In,
+			OutTokens:         resp.Usage.Out,
+			CacheReadTokens:   resp.Usage.CacheRead,
+			CacheCreateTokens: resp.Usage.CacheCreate,
 		}})
 		if err != nil {
 			return runstate.ReasonError, err
 		}
 
-		var toolUses []anthropic.ToolUseBlock
+		var toolUses []llm.ToolUseBlock
 		for _, block := range resp.Content {
-			use, ok := block.AsAny().(anthropic.ToolUseBlock)
-			if !ok {
+			if block.ToolUse == nil {
 				continue
 			}
-			toolUses = append(toolUses, use)
+			toolUses = append(toolUses, *block.ToolUse)
+		}
+
+		// A turn truncated at the output token cap may carry a partial tool_use whose
+		// input is incomplete, so it must never be executed. Treat it as the run's end
+		// with a clear cause rather than running malformed input or silently completing;
+		// the caller surfaces the error and, in a chat, hands back to the operator.
+		if resp.StopReason == llm.StopMaxTokens {
+			r.events.Message(*resp, true)
+			return runstate.ReasonError, fmt.Errorf("model reply truncated at the output token limit; the answer is incomplete")
 		}
 
 		// The turn is terminal when the model neither asked to run a tool nor
 		// paused a long-running turn it intends to continue.
-		terminal := len(toolUses) == 0 && resp.StopReason != anthropic.StopReasonPauseTurn
+		terminal := len(toolUses) == 0 && resp.StopReason != llm.StopPauseTurn
 
 		// Text on a terminal turn is the answer; text on an intermediate turn is
 		// narration. The caller decides where each goes.
-		r.events.Message(resp, terminal)
+		r.events.Message(*resp, terminal)
 
 		// A terminal turn is the final answer; deliver it regardless of remaining
 		// budget since no further spend follows.
 		if terminal {
-			if resp.StopReason == anthropic.StopReasonRefusal {
+			if resp.StopReason == llm.StopRefusal {
 				return runstate.ReasonError, fmt.Errorf("model refused to respond")
 			}
 			return runstate.ReasonCompleted, nil
@@ -500,20 +469,20 @@ func (r *runner) loop(ctx context.Context) (runstate.TerminalReason, error) {
 		}
 
 		if len(toolUses) > 0 {
-			results := make([]anthropic.ContentBlockParamUnion, 0, len(toolUses))
+			results := make([]llm.ContentBlock, 0, len(toolUses))
 			for _, use := range toolUses {
-				block, remote := r.executeTool(ctx, use)
+				result, remote := r.executeTool(ctx, use)
 				err = r.emit(runstate.Record{Protocol: runstate.ToolResultProtocol, ToolResult: &runstate.ToolResultRecord{
 					ToolUseID: use.ID,
-					Result:    block,
+					Result:    result,
 					Remote:    remote,
 				}})
 				if err != nil {
 					return runstate.ReasonError, err
 				}
-				results = append(results, block)
+				results = append(results, llm.ContentBlock{ToolResult: &result})
 			}
-			r.messages = append(r.messages, anthropic.NewUserMessage(results...))
+			r.messages = append(r.messages, llm.Message{Role: llm.RoleUser, Content: results})
 		}
 	}
 
@@ -526,50 +495,36 @@ func (r *runner) loop(ctx context.Context) (runstate.TerminalReason, error) {
 func (r *runner) completePending(ctx context.Context) error {
 	p := r.pending
 
-	results := make([]anthropic.ContentBlockParamUnion, 0, len(p.Assistant.Content))
-	results = append(results, p.Results...)
+	results := make([]llm.ContentBlock, 0, len(p.Assistant.Content))
+	for i := range p.Results {
+		res := p.Results[i]
+		results = append(results, llm.ContentBlock{ToolResult: &res})
+	}
 
 	for _, block := range p.Assistant.Content {
-		if block.OfToolUse == nil {
+		if block.ToolUse == nil {
 			continue
 		}
-		id := block.OfToolUse.ID
+		id := block.ToolUse.ID
 		if p.Answered[id] {
 			continue
 		}
 
-		use, err := toolUseFromParam(block.OfToolUse)
-		if err != nil {
-			return fmt.Errorf("resuming tool %q: %w", id, err)
-		}
-
-		resBlock, remote := r.executeTool(ctx, use)
-		err = r.emit(runstate.Record{Protocol: runstate.ToolResultProtocol, ToolResult: &runstate.ToolResultRecord{
+		result, remote := r.executeTool(ctx, *block.ToolUse)
+		err := r.emit(runstate.Record{Protocol: runstate.ToolResultProtocol, ToolResult: &runstate.ToolResultRecord{
 			ToolUseID: id,
-			Result:    resBlock,
+			Result:    result,
 			Remote:    remote,
 		}})
 		if err != nil {
 			return err
 		}
-		results = append(results, resBlock)
+		results = append(results, llm.ContentBlock{ToolResult: &result})
 	}
 
-	r.messages = append(r.messages, p.Assistant, anthropic.NewUserMessage(results...))
+	r.messages = append(r.messages, p.Assistant, llm.Message{Role: llm.RoleUser, Content: results})
 
 	return nil
-}
-
-// toolUseFromParam rebuilds a response ToolUseBlock from a stored tool_use param
-// block so a restored in-flight call can be executed by the same code path as a
-// live one. Only the id, name and input are needed downstream.
-func toolUseFromParam(p *anthropic.ToolUseBlockParam) (anthropic.ToolUseBlock, error) {
-	input, err := json.Marshal(p.Input)
-	if err != nil {
-		return anthropic.ToolUseBlock{}, fmt.Errorf("marshaling tool input: %w", err)
-	}
-
-	return anthropic.ToolUseBlock{ID: p.ID, Name: p.Name, Input: input}, nil
 }
 
 // executeTool dispatches a single tool call. It looks the tool up once in the
@@ -578,13 +533,13 @@ func toolUseFromParam(p *anthropic.ToolUseBlockParam) (anthropic.ToolUseBlock, e
 // interfaces, and the kind-specific call trace is built by a type switch, so a tool
 // of any kind executes the same way. The second return reports whether the call was
 // dispatched to a remote agent, for the journal and stats.
-func (r *runner) executeTool(ctx context.Context, use anthropic.ToolUseBlock) (anthropic.ContentBlockParamUnion, bool) {
+func (r *runner) executeTool(ctx context.Context, use llm.ToolUseBlock) (llm.ToolResultBlock, bool) {
 	r.stats.ToolCalls++
 
 	tool, ok := r.tools[use.Name]
 	if !ok {
 		r.events.Warn(Warning{Kind: WarnUnknownTool, Name: use.Name})
-		return anthropic.NewToolResultBlock(use.ID, fmt.Sprintf("unknown tool %q", use.Name), true), false
+		return llm.ToolResultBlock{ToolUseID: use.ID, Content: fmt.Sprintf("unknown tool %q", use.Name), IsError: true}, false
 	}
 
 	// fisk does not enforce a command's required flags or arguments: a missing one
@@ -599,7 +554,7 @@ func (r *runner) executeTool(ctx context.Context, use anthropic.ToolUseBlock) (a
 	if v, ok := tool.(toolkit.ArgumentValidator); ok {
 		if missing := v.MissingRequired(use.Input); len(missing) > 0 {
 			r.events.Warn(Warning{Kind: WarnMissingRequired, Name: use.Name, Params: missing})
-			return anthropic.NewToolResultBlock(use.ID, v.MissingRequiredMessage(missing), true), false
+			return llm.ToolResultBlock{ToolUseID: use.ID, Content: v.MissingRequiredMessage(missing), IsError: true}, false
 		}
 	}
 
@@ -627,9 +582,9 @@ func (r *runner) executeTool(ctx context.Context, use anthropic.ToolUseBlock) (a
 		r.stats.RemoteToolCalls++
 	}
 
-	block := tool.ExecuteUse(ctx, use, deps)
-	r.events.ToolResult(toolResultTrace(kind, block))
-	return block, remote
+	result := tool.ExecuteUse(ctx, use, deps)
+	r.events.ToolResult(toolResultTrace(kind, result))
+	return result, remote
 }
 
 // traceCall emits the ToolCall trace for a dispatched call and returns the kind
@@ -640,7 +595,7 @@ func (r *runner) executeTool(ctx context.Context, use anthropic.ToolUseBlock) (a
 // names the agent it runs on; a local command tool carries the full call line and a
 // short form with long argument values elided, so a width-aware surface can fall
 // back to the short one only when the full line would overflow.
-func (r *runner) traceCall(use anthropic.ToolUseBlock) (ToolKind, toolkit.ExecDeps, bool) {
+func (r *runner) traceCall(use llm.ToolUseBlock) (ToolKind, toolkit.ExecDeps, bool) {
 	switch t := r.tools[use.Name].(type) {
 	case *builtin.BuiltinTool:
 		kind := ToolBuiltin
@@ -666,25 +621,8 @@ func (r *runner) traceCall(use anthropic.ToolUseBlock) (ToolKind, toolkit.ExecDe
 	}
 }
 
-// toolResultTrace extracts the display fields from a tool result block: its text
-// content joined in order, and whether the tool reported a failure. It nil-guards
-// a block that is not a tool result, yielding an empty output rather than
-// panicking, so a future dispatch branch returning another block shape is safe.
-func toolResultTrace(kind ToolKind, block anthropic.ContentBlockParamUnion) ToolResultTrace {
-	tr := ToolResultTrace{Kind: kind}
-	if block.OfToolResult == nil {
-		return tr
-	}
-
-	tr.IsError = block.OfToolResult.IsError.Or(false)
-
-	var out strings.Builder
-	for _, c := range block.OfToolResult.Content {
-		if c.OfText != nil {
-			out.WriteString(c.OfText.Text)
-		}
-	}
-	tr.Output = out.String()
-
-	return tr
+// toolResultTrace extracts the display fields from a tool result: its text content
+// and whether the tool reported a failure.
+func toolResultTrace(kind ToolKind, result llm.ToolResultBlock) ToolResultTrace {
+	return ToolResultTrace{Kind: kind, IsError: result.IsError, Output: result.Content}
 }

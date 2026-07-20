@@ -9,8 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/anthropics/anthropic-sdk-go"
-
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 )
 
@@ -79,17 +78,16 @@ func (r *RemoteTool) Description() string { return r.description }
 // InputSchema is the tool's JSON schema, as advertised by the remote agent.
 func (r *RemoteTool) InputSchema() map[string]any { return r.inputSchema }
 
-// ToolParam renders the remote tool as an Anthropic tool definition. Deferral is
+// Definition renders the remote tool as a neutral tool definition. Deferral is
 // decided the same way as for local tools (see BuildToolParams); a remote tool
 // carries no tags, so it is always eligible for deferral.
-func (r *RemoteTool) ToolParam(deferLoading bool) anthropic.ToolUnionParam {
-	return anthropic.ToolUnionParam{OfTool: &anthropic.ToolParam{
-		Type:         anthropic.ToolTypeCustom,
+func (r *RemoteTool) Definition(deferLoading bool) llm.ToolDef {
+	return llm.ToolDef{
 		Name:         r.localName,
-		Description:  anthropic.String(r.description),
-		DeferLoading: anthropic.Bool(deferLoading),
-		InputSchema:  toolkit.AnthropicInputSchema(r.inputSchema),
-	}}
+		Description:  r.description,
+		InputSchema:  r.inputSchema,
+		DeferLoading: deferLoading,
+	}
 }
 
 // A RemoteTool is a model-facing Tool. It is not Confirmable: it carries no local
@@ -97,19 +95,19 @@ func (r *RemoteTool) ToolParam(deferLoading bool) anthropic.ToolUnionParam {
 var _ toolkit.Tool = (*RemoteTool)(nil)
 
 // ExecuteUse invokes the remote tool for a model tool_use block and returns the
-// matching tool_result content block. The result is mapped so the model sees a
-// remote tool identically to a local one: a transport failure or a remote harness
-// failure becomes an error result, while a command that ran (even one that exited
+// matching tool result. The result is mapped so the model sees a remote tool
+// identically to a local one: a transport failure or a remote harness failure
+// becomes an error result, while a command that ran (even one that exited
 // non-zero) becomes a successful result carrying the same CommandResult JSON a
 // local command tool produces. It takes no ExecDeps: a remote tool never prompts.
-func (r *RemoteTool) ExecuteUse(ctx context.Context, use anthropic.ToolUseBlock, _ toolkit.ExecDeps) anthropic.ContentBlockParamUnion {
+func (r *RemoteTool) ExecuteUse(ctx context.Context, use llm.ToolUseBlock, _ toolkit.ExecDeps) llm.ToolResultBlock {
 	reply, err := r.invoker.InvokeTool(ctx, r.agent, r.remoteName, use.Input)
 	if err != nil {
-		return anthropic.NewToolResultBlock(use.ID, fmt.Sprintf("calling tool %q on agent %q: %v", r.remoteName, r.agent, err), true)
+		return llm.ToolResultBlock{ToolUseID: use.ID, Content: fmt.Sprintf("calling tool %q on agent %q: %v", r.remoteName, r.agent, err), IsError: true}
 	}
 
 	if reply.IsError {
-		return anthropic.NewToolResultBlock(use.ID, reply.Output, true)
+		return llm.ToolResultBlock{ToolUseID: use.ID, Content: reply.Output, IsError: true}
 	}
 
 	result := toolkit.CommandResult{Output: reply.Output}
@@ -121,8 +119,8 @@ func (r *RemoteTool) ExecuteUse(ctx context.Context, use anthropic.ToolUseBlock,
 
 	data, err := json.Marshal(result)
 	if err != nil {
-		return anthropic.NewToolResultBlock(use.ID, fmt.Sprintf("marshaling tool result: %v", err), true)
+		return llm.ToolResultBlock{ToolUseID: use.ID, Content: fmt.Sprintf("marshaling tool result: %v", err), IsError: true}
 	}
 
-	return anthropic.NewToolResultBlock(use.ID, string(data), false)
+	return llm.ToolResultBlock{ToolUseID: use.ID, Content: string(data)}
 }

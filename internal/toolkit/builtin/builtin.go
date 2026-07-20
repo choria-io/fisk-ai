@@ -10,11 +10,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/config"
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/choria-io/fisk-ai/internal/util"
-
-	"github.com/choria-io/fisk-ai/config"
 )
 
 // The built-in human-in-the-loop tool names share the ask_human_ prefix, which
@@ -99,18 +98,17 @@ func (b *BuiltinTool) Call(ctx context.Context, input json.RawMessage, prompter 
 	return b.handler(ctx, input, prompter)
 }
 
-// ToolParam renders the built-in as an Anthropic tool definition. It is never
+// Definition renders the built-in as a neutral tool definition. It is never
 // deferred: built-in tools are few and always relevant, and deferring one behind
 // the tool-search tool could leave it undiscovered. The deferLoading argument is
-// ignored to satisfy the Tool contract; a built-in never opts into deferral.
-func (b *BuiltinTool) ToolParam(_ bool) anthropic.ToolUnionParam {
-	return anthropic.ToolUnionParam{OfTool: &anthropic.ToolParam{
-		Type:         anthropic.ToolTypeCustom,
-		Name:         b.name,
-		Description:  anthropic.String(b.description),
-		DeferLoading: anthropic.Bool(false),
-		InputSchema:  toolkit.AnthropicInputSchema(b.schema),
-	}}
+// ignored to satisfy the Tool contract; a built-in never opts into deferral, so
+// DeferLoading is left false.
+func (b *BuiltinTool) Definition(_ bool) llm.ToolDef {
+	return llm.ToolDef{
+		Name:        b.name,
+		Description: b.description,
+		InputSchema: b.schema,
+	}
 }
 
 // HITLTools returns the built-in human-in-the-loop tools enabled by cfg, or nil
@@ -156,16 +154,16 @@ func HITLSystemNote(builtins []*BuiltinTool) string {
 var _ toolkit.Tool = (*BuiltinTool)(nil)
 
 // ExecuteUse runs the built-in for a model tool_use block and returns the matching
-// tool_result content block, mirroring the command tool: a handler error becomes an
-// error result; its output becomes a normal result. A human-in-the-loop built-in
-// reaches the operator through deps.Prompter.
-func (b *BuiltinTool) ExecuteUse(ctx context.Context, use anthropic.ToolUseBlock, deps toolkit.ExecDeps) anthropic.ContentBlockParamUnion {
+// tool result, mirroring the command tool: a handler error becomes an error
+// result; its output becomes a normal result. A human-in-the-loop built-in reaches
+// the operator through deps.Prompter.
+func (b *BuiltinTool) ExecuteUse(ctx context.Context, use llm.ToolUseBlock, deps toolkit.ExecDeps) llm.ToolResultBlock {
 	out, err := b.handler(ctx, use.Input, deps.Prompter)
 	if err != nil {
-		return anthropic.NewToolResultBlock(use.ID, err.Error(), true)
+		return llm.ToolResultBlock{ToolUseID: use.ID, Content: err.Error(), IsError: true}
 	}
 
-	return anthropic.NewToolResultBlock(use.ID, out, false)
+	return llm.ToolResultBlock{ToolUseID: use.ID, Content: out}
 }
 
 // askHumanConfirmTool builds the ask_human_confirm confirmation tool.

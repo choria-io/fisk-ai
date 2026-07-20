@@ -7,29 +7,24 @@ package main
 import (
 	"encoding/json"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/agent"
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/tui"
 )
 
 var _ = Describe("tcellEvents mapping", func() {
-	mustMessage := func(body string) *anthropic.Message {
-		GinkgoHelper()
-		var msg anthropic.Message
-		Expect(json.Unmarshal([]byte(body), &msg)).To(Succeed())
-		return &msg
-	}
+	thinking := func(s string) llm.ContentBlock { return llm.ContentBlock{Thinking: &llm.ThinkingBlock{Text: s}} }
+	text := func(s string) llm.ContentBlock { return llm.ContentBlock{Text: &llm.TextBlock{Text: s}} }
+	resp := func(blocks ...llm.ContentBlock) llm.Response { return llm.Response{Content: blocks} }
 
 	Describe("messageLines", func() {
 		It("Should map thinking then prose and set apart a terminal answer", func() {
-			msg := mustMessage(`{"content":[{"type":"thinking","thinking":"pondering"},{"type":"text","text":"the answer"}]}`)
-
-			lines, answer := messageLines(msg, true)
+			lines, answer := messageLines(resp(thinking("pondering"), text("the answer")), true)
 			Expect(answer).To(Equal("the answer"))
 			Expect(lines).To(HaveLen(3))
 			Expect(lines[0].Kind).To(Equal(tui.LineThinking))
@@ -41,16 +36,14 @@ var _ = Describe("tcellEvents mapping", func() {
 		})
 
 		It("Should not add the answer delimiter for an intermediate turn", func() {
-			msg := mustMessage(`{"content":[{"type":"text","text":"working on it"}]}`)
-
-			lines, _ := messageLines(msg, false)
+			lines, _ := messageLines(resp(text("working on it")), false)
 			Expect(lines).To(HaveLen(1))
 			Expect(lines[0].Kind).To(Equal(tui.LineNarration))
 			Expect(lines[0].Text).To(Equal("working on it"))
 		})
 
 		It("Should return nothing for a turn with no text", func() {
-			lines, answer := messageLines(mustMessage(`{"content":[]}`), true)
+			lines, answer := messageLines(resp(), true)
 			Expect(lines).To(BeEmpty())
 			Expect(answer).To(BeEmpty())
 		})
@@ -155,6 +148,16 @@ var _ = Describe("tcellEvents mapping", func() {
 		It("Should format a warning without the leading prefix so both UIs share the wording", func() {
 			Expect(warningMessage(agent.Warning{Kind: agent.WarnUnknownTool, Name: "frob"})).To(Equal(`model called unknown tool "frob"`))
 			Expect(warningMessage(agent.Warning{Kind: agent.WarnConfirmNoTerminal, Count: 3})).To(ContainSubstring("3 tool(s) require confirmation"))
+		})
+
+		It("Should name the tool count and the cause-specific remedy for a tool-search degradation", func() {
+			unsupported := warningMessage(agent.Warning{Kind: agent.WarnToolSearchUnsupported, Count: 12})
+			Expect(unsupported).To(ContainSubstring("12 tools"))
+			Expect(unsupported).To(ContainSubstring("does not support server-side tool search"))
+
+			disabled := warningMessage(agent.Warning{Kind: agent.WarnToolSearchDisabled, Count: 12})
+			Expect(disabled).To(ContainSubstring("12 tools"))
+			Expect(disabled).To(ContainSubstring("no_tool_search"))
 		})
 	})
 

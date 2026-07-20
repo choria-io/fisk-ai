@@ -9,8 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anthropics/anthropic-sdk-go"
-
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 )
 
@@ -28,6 +27,12 @@ const ToolSearchThreshold = 10
 // applied to the combined set, so a small local set plus enough remote tools
 // still switches to deferred discovery.
 //
+// toolSearchAllowed short-circuits the threshold: when it is false every tool is
+// sent directly regardless of count and no tool search tool is added. It is the
+// caller's resolved gate, the active provider supporting tool search and the
+// operator not having disabled it (no_tool_search), so a backend that cannot honor
+// deferred loading never receives a deferred tool or the search tool.
+//
 // builtins is the number of built-in tools (human-in-the-loop, memory) the caller
 // appends separately after this returns. Those tools are never deferred, but they
 // still occupy the model's context, so they count toward the threshold: Anthropic
@@ -36,51 +41,39 @@ const ToolSearchThreshold = 10
 // threshold on its command tools alone tip into deferred discovery once the
 // built-ins are added, rather than silently sending an oversized direct set.
 //
-// Each tool decides whether it honors deferral through its own ToolParam: a local
+// Each tool decides whether it honors deferral through its own Definition: a local
 // tool tagged ai:no_defer is always sent directly even when the set is deferred,
-// while a remote tool always defers when asked. The tool search tool is appended
-// only when at least one tool actually deferred for it to discover, detected from
-// the built definitions rather than assumed from the request to defer.
-func BuildToolParams(tools []toolkit.Tool, builtins int) []anthropic.ToolUnionParam {
-	deferLoading := len(tools)+builtins >= ToolSearchThreshold
+// while a remote tool always defers when asked. The second return reports whether
+// any tool actually deferred, so the caller requests the tool search tool only when
+// there is something for it to discover, detected from the built definitions rather
+// than assumed from the request to defer.
+func BuildToolParams(tools []toolkit.Tool, builtins int, toolSearchAllowed bool) ([]llm.ToolDef, bool) {
+	deferLoading := toolSearchAllowed && len(tools)+builtins >= ToolSearchThreshold
 
-	out := make([]anthropic.ToolUnionParam, 0, len(tools)+1)
+	out := make([]llm.ToolDef, 0, len(tools))
 	anyDeferred := false
 	for _, t := range tools {
-		p := t.ToolParam(deferLoading)
-		if p.OfTool != nil && p.OfTool.DeferLoading.Value {
+		td := t.Definition(deferLoading)
+		if td.DeferLoading {
 			anyDeferred = true
 		}
-		out = append(out, p)
+		out = append(out, td)
 	}
 
-	if anyDeferred {
-		out = append(out, AnthropicToolSearchTool())
-	}
-
-	return out
-}
-
-// AnthropicToolSearchTool returns the BM25 tool search server tool. It is never
-// deferred, so it is always present in the request and lets the model search the
-// deferred custom tools by name and description and pull in the ones it needs.
-func AnthropicToolSearchTool() anthropic.ToolUnionParam {
-	return anthropic.ToolUnionParam{OfToolSearchToolBm25_20251119: &anthropic.ToolSearchToolBm25_20251119Param{
-		Type: anthropic.ToolSearchToolBm25_20251119TypeToolSearchToolBm25,
-	}}
+	return out, anyDeferred
 }
 
 // LLMRequestSummary renders a one-line summary of an outgoing model request for
 // tracing: a short preview of the latest turn being sent, the number of messages
 // in the conversation, and its serialized size. The size grows each turn, so the
 // summary gives a sense of how large the context has become.
-func LLMRequestSummary(messages []anthropic.MessageParam) string {
+func LLMRequestSummary(messages []llm.Message) string {
 	return fmt.Sprintf("%s (msgs=%d, %s)", latestTurnPreview(messages), len(messages), humanBytes(messagesSize(messages)))
 }
 
 // latestTurnPreview summarizes the most recent message: a short quote of its
 // first text block, or a count of the tool results it carries.
-func latestTurnPreview(messages []anthropic.MessageParam) string {
+func latestTurnPreview(messages []llm.Message) string {
 	if len(messages) == 0 {
 		return "(empty)"
 	}
@@ -91,9 +84,9 @@ func latestTurnPreview(messages []anthropic.MessageParam) string {
 	var toolResults int
 	for _, block := range last.Content {
 		switch {
-		case block.OfText != nil && text == "":
-			text = block.OfText.Text
-		case block.OfToolResult != nil:
+		case block.Text != nil && text == "":
+			text = block.Text.Text
+		case block.ToolResult != nil:
 			toolResults++
 		}
 	}
@@ -112,7 +105,7 @@ func latestTurnPreview(messages []anthropic.MessageParam) string {
 
 // messagesSize is the serialized byte size of the conversation, the part of the
 // request that grows each turn.
-func messagesSize(messages []anthropic.MessageParam) int {
+func messagesSize(messages []llm.Message) int {
 	data, err := json.Marshal(messages)
 	if err != nil {
 		return 0

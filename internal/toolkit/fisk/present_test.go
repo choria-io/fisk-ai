@@ -9,31 +9,17 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/choria-io/fisk"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
-// marshalTool renders a tool param to its API JSON form, as the SDK would send
-// it, so assertions check what the model actually receives. param.Opt fields are
-// only observable after marshaling, so this is the only faithful way to test them.
-func marshalTool(t *FiskCommandTool, deferLoading bool) map[string]any {
-	GinkgoHelper()
-
-	data, err := json.Marshal(AnthropicTool(t, deferLoading))
-	Expect(err).NotTo(HaveOccurred())
-
-	out := map[string]any{}
-	Expect(json.Unmarshal(data, &out)).To(Succeed())
-	return out
-}
-
-var _ = Describe("AnthropicTool", func() {
-	It("Should map name, description and deferred loading, and not be strict", func() {
+var _ = Describe("FiskCommandTool.Definition", func() {
+	It("Should map name, description and deferred loading", func() {
 		app := fisk.New("app", "an app")
 		app.Command("deploy", "deploy things")
 
@@ -41,17 +27,13 @@ var _ = Describe("AnthropicTool", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(tools).To(HaveLen(1))
 
-		got := marshalTool(tools[0], true)
-		Expect(got["name"]).To(Equal("deploy"))
-		Expect(got["description"]).To(Equal("deploy things"))
-		Expect(got["defer_loading"]).To(BeTrue())
-		Expect(got["type"]).To(Equal("custom"))
-		// Strict mode is not used: its grammar compilation caps total optional
-		// parameters across all tools, which a broad command tree exceeds.
-		Expect(got).NotTo(HaveKey("strict"))
+		def := tools[0].Definition(true)
+		Expect(def.Name).To(Equal("deploy"))
+		Expect(def.Description).To(Equal("deploy things"))
+		Expect(def.DeferLoading).To(BeTrue())
 	})
 
-	It("Should not set defer_loading when loading is not deferred", func() {
+	It("Should not defer loading when loading is not deferred", func() {
 		app := fisk.New("app", "an app")
 		app.Command("deploy", "deploy things")
 
@@ -59,10 +41,7 @@ var _ = Describe("AnthropicTool", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(tools).To(HaveLen(1))
 
-		got := marshalTool(tools[0], false)
-		// defer_loading:false is sent explicitly, telling the API to load the
-		// tool immediately rather than behind tool search.
-		Expect(got["defer_loading"]).To(BeFalse())
+		Expect(tools[0].Definition(false).DeferLoading).To(BeFalse())
 	})
 
 	It("Should carry the restricted schema including additionalProperties and required", func() {
@@ -75,10 +54,7 @@ var _ = Describe("AnthropicTool", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(tools).To(HaveLen(1))
 
-		got := marshalTool(tools[0], true)
-
-		schema, ok := got["input_schema"].(map[string]any)
-		Expect(ok).To(BeTrue())
+		schema := tools[0].Definition(true).InputSchema
 		Expect(schema["type"]).To(Equal("object"))
 		// additionalProperties:false is forwarded verbatim; strict mode requires it.
 		Expect(schema["additionalProperties"]).To(Equal(false))
@@ -90,16 +66,16 @@ var _ = Describe("AnthropicTool", func() {
 
 		Expect(schema["required"]).To(ConsistOf("target"))
 
-		// Optionality is marked in the description: the required parameter is
-		// left as written, the optional one is annotated so the model does not
-		// mistake it for mandatory.
+		// The neutral schema carries each parameter's own description verbatim; the
+		// "(optional)" annotation is applied later, when the provider codec renders the
+		// schema to its wire form, so it is covered in the codec tests, not here.
 		target, ok := props["target"].(map[string]any)
 		Expect(ok).To(BeTrue())
 		Expect(target["description"]).To(Equal("where to deploy"))
 
 		force, ok := props["force"].(map[string]any)
 		Expect(ok).To(BeTrue())
-		Expect(force["description"]).To(Equal("force the deploy (optional)"))
+		Expect(force["description"]).To(Equal("force the deploy"))
 	})
 
 	It("Should produce an object schema even for a command with no arguments", func() {
@@ -109,12 +85,19 @@ var _ = Describe("AnthropicTool", func() {
 		tools, err := ApplicationTools(introspect(app))
 		Expect(err).NotTo(HaveOccurred())
 
-		got := marshalTool(tools[0], true)
-		schema, ok := got["input_schema"].(map[string]any)
-		Expect(ok).To(BeTrue())
-		Expect(schema["type"]).To(Equal("object"))
+		Expect(tools[0].Definition(true).InputSchema["type"]).To(Equal("object"))
 	})
 })
+
+// toolkitSlice adapts application tools to the toolkit.Tool interface BuildToolParams
+// takes, so the deferral logic can be exercised over a real command set.
+func toolkitSlice(tools []*FiskCommandTool) []toolkit.Tool {
+	out := make([]toolkit.Tool, len(tools))
+	for i, t := range tools {
+		out[i] = t
+	}
+	return out
+}
 
 // appWithCommands builds an application exposing n distinct tools, named cmd0..cmdN-1.
 func appWithCommands(n int) []*FiskCommandTool {
@@ -132,85 +115,38 @@ func appWithCommands(n int) []*FiskCommandTool {
 	return tools
 }
 
-var _ = Describe("AnthropicTools", func() {
-	It("Should convert every tool, preserving order", func() {
-		app := fisk.New("app", "an app")
-		app.Command("one", "first command")
-		app.Command("two", "second command")
-
-		tools, err := ApplicationTools(introspect(app))
-		Expect(err).NotTo(HaveOccurred())
-
-		params := AnthropicTools(tools, true)
-		Expect(params).To(HaveLen(2))
-
-		got := make([]string, len(params))
-		for i, p := range params {
-			Expect(p.OfTool).NotTo(BeNil())
-			got[i] = p.OfTool.Name
-		}
-		Expect(got).To(Equal([]string{"one", "two"}))
-	})
-
-	It("Should return an empty slice for no tools", func() {
-		Expect(AnthropicTools(nil, true)).To(BeEmpty())
-	})
-})
-
-var _ = Describe("AnthropicToolParams", func() {
-	// deferred reports whether the marshaled tool param carries defer_loading:true.
-	deferred := func(p anthropic.ToolUnionParam) bool {
+var _ = Describe("BuildToolParams over application tools", func() {
+	// defByName finds the tool definition for a named tool.
+	defByName := func(defs []llm.ToolDef, name string) llm.ToolDef {
 		GinkgoHelper()
-
-		data, err := json.Marshal(p)
-		Expect(err).NotTo(HaveOccurred())
-
-		got := map[string]any{}
-		Expect(json.Unmarshal(data, &got)).To(Succeed())
-		return got["defer_loading"] == true
-	}
-
-	It("Should send every tool directly without a search tool below the threshold", func() {
-		params := AnthropicToolParams(appWithCommands(util.ToolSearchThreshold - 1))
-
-		Expect(params).To(HaveLen(util.ToolSearchThreshold - 1))
-		for _, p := range params {
-			Expect(p.OfTool).NotTo(BeNil())
-			Expect(deferred(p)).To(BeFalse())
-		}
-	})
-
-	It("Should defer every tool and append the search tool at the threshold", func() {
-		params := AnthropicToolParams(appWithCommands(util.ToolSearchThreshold))
-
-		// One extra entry for the appended tool search tool.
-		Expect(params).To(HaveLen(util.ToolSearchThreshold + 1))
-
-		last := params[len(params)-1]
-		Expect(last.OfToolSearchToolBm25_20251119).NotTo(BeNil())
-
-		for _, p := range params[:len(params)-1] {
-			Expect(p.OfTool).NotTo(BeNil())
-			Expect(deferred(p)).To(BeTrue())
-		}
-	})
-
-	It("Should return no tools for an empty tool set", func() {
-		Expect(AnthropicToolParams(nil)).To(BeEmpty())
-	})
-
-	// paramByName finds the tool param for a named custom tool.
-	paramByName := func(params []anthropic.ToolUnionParam, name string) anthropic.ToolUnionParam {
-		GinkgoHelper()
-
-		for _, p := range params {
-			if p.OfTool != nil && p.OfTool.Name == name {
-				return p
+		for _, d := range defs {
+			if d.Name == name {
+				return d
 			}
 		}
-		Fail(fmt.Sprintf("tool %q not found in params", name))
-		return anthropic.ToolUnionParam{}
+		Fail(fmt.Sprintf("tool %q not found in definitions", name))
+		return llm.ToolDef{}
 	}
+
+	It("Should send every tool directly without tool search below the threshold", func() {
+		defs, toolSearch := util.BuildToolParams(toolkitSlice(appWithCommands(util.ToolSearchThreshold-1)), 0, true)
+
+		Expect(defs).To(HaveLen(util.ToolSearchThreshold - 1))
+		Expect(toolSearch).To(BeFalse())
+		for _, d := range defs {
+			Expect(d.DeferLoading).To(BeFalse())
+		}
+	})
+
+	It("Should defer every tool and request tool search at the threshold", func() {
+		defs, toolSearch := util.BuildToolParams(toolkitSlice(appWithCommands(util.ToolSearchThreshold)), 0, true)
+
+		Expect(defs).To(HaveLen(util.ToolSearchThreshold))
+		Expect(toolSearch).To(BeTrue())
+		for _, d := range defs {
+			Expect(d.DeferLoading).To(BeTrue())
+		}
+	})
 
 	It("Should keep ai:no_defer tools loaded directly while deferring the rest", func() {
 		app := fisk.New("app", "an app")
@@ -223,18 +159,17 @@ var _ = Describe("AnthropicToolParams", func() {
 		tools, err := ApplicationTools(introspect(app))
 		Expect(err).NotTo(HaveOccurred())
 
-		params := AnthropicToolParams(tools)
+		defs, toolSearch := util.BuildToolParams(toolkitSlice(tools), 0, true)
 
 		// The pinned tool is sent directly; a deferred peer is not.
-		Expect(deferred(paramByName(params, "always"))).To(BeFalse())
-		Expect(deferred(paramByName(params, "cmd0"))).To(BeTrue())
+		Expect(defByName(defs, "always").DeferLoading).To(BeFalse())
+		Expect(defByName(defs, "cmd0").DeferLoading).To(BeTrue())
 
-		// Something is still deferred, so the search tool is present.
-		last := params[len(params)-1]
-		Expect(last.OfToolSearchToolBm25_20251119).NotTo(BeNil())
+		// Something is still deferred, so tool search is requested.
+		Expect(toolSearch).To(BeTrue())
 	})
 
-	It("Should omit the search tool when every deferred-eligible tool is pinned", func() {
+	It("Should not request tool search when every deferred-eligible tool is pinned", func() {
 		app := fisk.New("app", "an app")
 		for i := 0; i < util.ToolSearchThreshold; i++ {
 			app.Command(fmt.Sprintf("cmd%d", i), "a command").Tag(noDeferTag)
@@ -243,21 +178,21 @@ var _ = Describe("AnthropicToolParams", func() {
 		tools, err := ApplicationTools(introspect(app))
 		Expect(err).NotTo(HaveOccurred())
 
-		params := AnthropicToolParams(tools)
+		defs, toolSearch := util.BuildToolParams(toolkitSlice(tools), 0, true)
 
-		// Nothing was deferred, so no tool search tool is appended.
-		Expect(params).To(HaveLen(util.ToolSearchThreshold))
-		for _, p := range params {
-			Expect(p.OfTool).NotTo(BeNil())
-			Expect(deferred(p)).To(BeFalse())
+		// Nothing was deferred, so tool search is not requested.
+		Expect(defs).To(HaveLen(util.ToolSearchThreshold))
+		Expect(toolSearch).To(BeFalse())
+		for _, d := range defs {
+			Expect(d.DeferLoading).To(BeFalse())
 		}
 	})
 })
 
 var _ = Describe("FiskCommandTool.ExecuteUse", func() {
 	// useBlock builds a tool_use block addressing tool t with the given raw input.
-	useBlock := func(t *FiskCommandTool, id, input string) anthropic.ToolUseBlock {
-		return anthropic.ToolUseBlock{ID: id, Name: t.Name(), Input: json.RawMessage(input)}
+	useBlock := func(t *FiskCommandTool, id, input string) llm.ToolUseBlock {
+		return llm.ToolUseBlock{ID: id, Name: t.Name(), Input: json.RawMessage(input)}
 	}
 
 	// doTool builds an "app do" command tool with a required argument, bound to
@@ -277,15 +212,9 @@ var _ = Describe("FiskCommandTool.ExecuteUse", func() {
 		return tool
 	}
 
-	// resultBlock extracts the tool_result fields from a content block param.
-	resultBlock := func(block anthropic.ContentBlockParamUnion) (id string, text string, isError bool) {
-		GinkgoHelper()
-
-		Expect(block.OfToolResult).NotTo(BeNil())
-		res := block.OfToolResult
-		Expect(res.Content).To(HaveLen(1))
-		Expect(res.Content[0].OfText).NotTo(BeNil())
-		return res.ToolUseID, res.Content[0].OfText.Text, res.IsError.Value
+	// resultBlock extracts the tool_result fields from a neutral tool result.
+	resultBlock := func(block llm.ToolResultBlock) (id string, text string, isError bool) {
+		return block.ToolUseID, block.Content, block.IsError
 	}
 
 	It("Should return a successful tool_result carrying the command JSON", func() {

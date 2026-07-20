@@ -22,6 +22,8 @@ import (
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/a2a"
+	"github.com/choria-io/fisk-ai/internal/llm"
+	llmanthropic "github.com/choria-io/fisk-ai/internal/llm/anthropic"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	runstatefile "github.com/choria-io/fisk-ai/internal/runstate/file"
@@ -47,7 +49,7 @@ func (nopEvents) ResumeTranscript(*runstate.RunState, map[string]*fisk2.FiskComm
 func (nopEvents) LLMRequest(string)                                                      {}
 func (nopEvents) ToolCall(ToolTrace)                                                     {}
 func (nopEvents) ToolResult(ToolResultTrace)                                             {}
-func (nopEvents) Message(*anthropic.Message, bool)                                       {}
+func (nopEvents) Message(llm.Response, bool)                                             {}
 func (nopEvents) SessionRotated(string)                                                  {}
 
 // captureEvents records the tool traces so a test can assert what was emitted; it
@@ -107,6 +109,36 @@ func mustMessage(j string) *anthropic.Message {
 	return &m
 }
 
+// mustResponse builds a neutral llm.Response from an Anthropic message JSON, so the
+// test data stays the wire form the model returns while the loop consumes neutral.
+func mustResponse(j string) *llm.Response {
+	GinkgoHelper()
+	resp, err := llmanthropic.ResponseToNeutral(mustMessage(j))
+	Expect(err).NotTo(HaveOccurred())
+	return &resp
+}
+
+// providerFunc adapts a plain function to the llm.Provider interface so a test can
+// drive the loop with scripted responses in place of a live API call.
+type providerFunc func(context.Context, llm.Request) (*llm.Response, error)
+
+func (f providerFunc) Call(ctx context.Context, req llm.Request) (*llm.Response, error) {
+	return f(ctx, req)
+}
+
+func (providerFunc) Capabilities() llm.Caps {
+	return llm.Caps{Provider: "anthropic", SupportsToolSearch: true}
+}
+
+// userMsg and assistantTextMsg build the neutral turns a test conversation seeds.
+func userMsg(text string) llm.Message {
+	return llm.Message{Role: llm.RoleUser, Content: []llm.ContentBlock{{Text: &llm.TextBlock{Text: text}}}}
+}
+
+func assistantTextMsg(text string) llm.Message {
+	return llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Text: &llm.TextBlock{Text: text}}}}
+}
+
 // failOnUserJournal wraps a real journal but rejects the interactive user record, so a
 // test can exercise the "journaling a follow-up failed" path without corrupting a real
 // store. Every other record is appended normally.
@@ -122,20 +154,6 @@ func (j failOnUserJournal) Append(seq uint64, rec runstate.Record) error {
 }
 
 var _ = Describe("runner", func() {
-	Describe("toolUseFromParam", func() {
-		It("rebuilds id, name and input from a stored tool_use block", func() {
-			p := &anthropic.ToolUseBlockParam{ID: "toolu_1", Name: "shell", Input: map[string]any{"cmd": "ls"}}
-			use, err := toolUseFromParam(p)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(use.ID).To(Equal("toolu_1"))
-			Expect(use.Name).To(Equal("shell"))
-
-			var in map[string]any
-			Expect(json.Unmarshal(use.Input, &in)).To(Succeed())
-			Expect(in).To(HaveKeyWithValue("cmd", "ls"))
-		})
-	})
-
 	Describe("resumeHazards", func() {
 		It("warns when resuming at a paused-turn boundary", func() {
 			rs := &runstate.RunState{LastStopReason: "pause_turn"}
@@ -175,14 +193,14 @@ var _ = Describe("runner", func() {
 			var suspendNow atomic.Bool
 			rA := &runner{
 				cfg: cfg, stats: &util.RunStats{}, maxIter: 10, events: nopEvents{},
-				messages:         []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
+				messages:         []llm.Message{userMsg("go")},
 				journal:          jA,
 				seq:              1,
 				suspendRequested: suspendNow.Load,
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
 					suspendNow.Store(true)
-					return mustMessage(toolMsg), nil
-				},
+					return mustResponse(toolMsg), nil
+				}),
 			}
 			emptyTools(rA)
 
@@ -209,9 +227,9 @@ var _ = Describe("runner", func() {
 				seq:       jB.LastSeq(),
 				startIter: mid.NextIteration,
 				pending:   mid.Pending,
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
-					return mustMessage(finalMsg), nil
-				},
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
+					return mustResponse(finalMsg), nil
+				}),
 			}
 			emptyTools(rB)
 
@@ -236,10 +254,10 @@ var _ = Describe("runner", func() {
 				tools:  map[string]toolkit.Tool{},
 			}
 
-			block, remote := r.executeTool(context.Background(), anthropic.ToolUseBlock{ID: "t1", Name: "nope"})
+			block, remote := r.executeTool(context.Background(), llm.ToolUseBlock{ID: "t1", Name: "nope"})
 			Expect(remote).To(BeFalse())
-			Expect(block.OfToolResult).NotTo(BeNil())
-			Expect(block.OfToolResult.IsError.Or(false)).To(BeTrue())
+			Expect(block.ToolUseID).To(Equal("t1"))
+			Expect(block.IsError).To(BeTrue())
 
 			// An unknown tool is reported as a warning only; it never ran, so it leaves
 			// no call or result line in the transcript.
@@ -267,10 +285,10 @@ var _ = Describe("runner", func() {
 				tools:  map[string]toolkit.Tool{"do": tool},
 			}
 
-			block, remote := r.executeTool(context.Background(), anthropic.ToolUseBlock{ID: "t1", Name: "do", Input: json.RawMessage(`{"level":"info"}`)})
+			block, remote := r.executeTool(context.Background(), llm.ToolUseBlock{ID: "t1", Name: "do", Input: json.RawMessage(`{"level":"info"}`)})
 			Expect(remote).To(BeFalse())
-			Expect(block.OfToolResult).NotTo(BeNil())
-			Expect(block.OfToolResult.IsError.Or(false)).To(BeTrue())
+			Expect(block.ToolUseID).To(Equal("t1"))
+			Expect(block.IsError).To(BeTrue())
 
 			// Like an unknown tool, a rejected call never ran, so it emits only a
 			// warning naming the missing parameters and no call or result line.
@@ -290,10 +308,10 @@ var _ = Describe("runner", func() {
 			tool := &fisk2.FiskCommandTool{Path: []string{"do"}, AppPath: app, Model: &fisk.CmdModel{}}
 			r := &runner{stats: &util.RunStats{}, events: ev, tools: map[string]toolkit.Tool{"do": tool}}
 
-			block, remote := r.executeTool(context.Background(), anthropic.ToolUseBlock{ID: "t1", Name: "do", Input: json.RawMessage(`{}`)})
+			block, remote := r.executeTool(context.Background(), llm.ToolUseBlock{ID: "t1", Name: "do", Input: json.RawMessage(`{}`)})
 			Expect(remote).To(BeFalse())
-			Expect(block.OfToolResult).NotTo(BeNil())
-			Expect(block.OfToolResult.IsError.Or(false)).To(BeFalse())
+			Expect(block.ToolUseID).To(Equal("t1"))
+			Expect(block.IsError).To(BeFalse())
 
 			Expect(ev.calls).To(HaveLen(1))
 			Expect(ev.calls[0].Kind).To(Equal(ToolLocal))
@@ -310,11 +328,11 @@ var _ = Describe("runner", func() {
 
 			r := &runner{stats: &util.RunStats{}, events: ev, tools: map[string]toolkit.Tool{"nats_info": rt}}
 
-			block, remote := r.executeTool(context.Background(), anthropic.ToolUseBlock{ID: "t1", Name: "nats_info"})
+			block, remote := r.executeTool(context.Background(), llm.ToolUseBlock{ID: "t1", Name: "nats_info"})
 			Expect(remote).To(BeTrue())
 			Expect(r.stats.RemoteToolCalls).To(Equal(int64(1)))
-			Expect(block.OfToolResult).NotTo(BeNil())
-			Expect(block.OfToolResult.IsError.Or(false)).To(BeFalse())
+			Expect(block.ToolUseID).To(Equal("t1"))
+			Expect(block.IsError).To(BeFalse())
 
 			Expect(ev.calls).To(HaveLen(1))
 			Expect(ev.calls[0].Kind).To(Equal(ToolRemote))
@@ -340,10 +358,10 @@ var _ = Describe("runner", func() {
 			// With no interactive terminal there is no operator to approve, so the gate
 			// denies. The gated tool is never run: no call or result line is emitted, and
 			// the denial is an authoritative non-error result to the model.
-			block, remote := r.executeTool(context.Background(), anthropic.ToolUseBlock{ID: "t1", Name: "stream_rm"})
+			block, remote := r.executeTool(context.Background(), llm.ToolUseBlock{ID: "t1", Name: "stream_rm"})
 			Expect(remote).To(BeFalse())
-			Expect(block.OfToolResult).NotTo(BeNil())
-			Expect(block.OfToolResult.IsError.Or(false)).To(BeFalse())
+			Expect(block.ToolUseID).To(Equal("t1"))
+			Expect(block.IsError).To(BeFalse())
 			Expect(ev.calls).To(BeEmpty())
 			Expect(ev.results).To(BeEmpty())
 		})
@@ -357,18 +375,18 @@ var _ = Describe("runner", func() {
 
 			// Journal a run whose assistant turn called two (unknown) tools but
 			// only the first was answered before the "crash": a partial batch.
-			assistant := anthropic.MessageParam{
-				Role: anthropic.MessageParamRoleAssistant,
-				Content: []anthropic.ContentBlockParamUnion{
-					anthropic.NewToolUseBlock("toolu_a", map[string]any{}, "missing_a"),
-					anthropic.NewToolUseBlock("toolu_b", map[string]any{}, "missing_b"),
+			assistant := llm.Message{
+				Role: llm.RoleAssistant,
+				Content: []llm.ContentBlock{
+					{ToolUse: &llm.ToolUseBlock{ID: "toolu_a", Name: "missing_a", Input: json.RawMessage(`{}`)}},
+					{ToolUse: &llm.ToolUseBlock{ID: "toolu_b", Name: "missing_b", Input: json.RawMessage(`{}`)}},
 				},
 			}
 
 			j, err := store.Create(runID, runstate.MetaRecord{Version: runstate.Version, RunID: runID, Prompt: "go"})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(j.Append(2, runstate.Record{Protocol: runstate.AssistantProtocol, Assistant: &runstate.AssistantRecord{Iteration: 0, Message: assistant}})).To(Succeed())
-			Expect(j.Append(3, runstate.Record{Protocol: runstate.ToolResultProtocol, ToolResult: &runstate.ToolResultRecord{ToolUseID: "toolu_a", Result: anthropic.NewToolResultBlock("toolu_a", "already done", false)}})).To(Succeed())
+			Expect(j.Append(3, runstate.Record{Protocol: runstate.ToolResultProtocol, ToolResult: &runstate.ToolResultRecord{ToolUseID: "toolu_a", Result: llm.ToolResultBlock{ToolUseID: "toolu_a", Content: "already done"}}})).To(Succeed())
 			Expect(j.Close()).To(Succeed())
 
 			rs, err := store.Load(runID)
@@ -428,12 +446,12 @@ var _ = Describe("runner", func() {
 
 			r := &runner{
 				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: nopEvents{},
-				messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
+				messages: []llm.Message{userMsg("go")},
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
 					m := answers[calls]
 					calls++
-					return mustMessage(m), nil
-				},
+					return mustResponse(m), nil
+				}),
 				nextPrompt: func(context.Context) Continuation {
 					prompts++
 					if prompts == 1 {
@@ -452,7 +470,7 @@ var _ = Describe("runner", func() {
 			Expect(r.stats.LlmCalls).To(Equal(int64(2)))
 			// The follow-up became a user turn between the two assistant answers.
 			Expect(r.messages).To(HaveLen(4))
-			Expect(r.messages[2].Role).To(Equal(anthropic.MessageParamRoleUser))
+			Expect(r.messages[2].Role).To(Equal(llm.RoleUser))
 			// The iteration index stayed monotonic across the two turns.
 			Expect(r.iter).To(Equal(int64(2)))
 		})
@@ -464,13 +482,13 @@ var _ = Describe("runner", func() {
 
 			r := &runner{
 				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: nopEvents{},
-				messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
-				callLLM: func(_ context.Context, _ anthropic.Client, p anthropic.MessageNewParams, _ time.Duration) (*anthropic.Message, error) {
+				messages: []llm.Message{userMsg("go")},
+				provider: providerFunc(func(_ context.Context, p llm.Request) (*llm.Response, error) {
 					seenLens = append(seenLens, len(p.Messages))
 					m := answers[calls]
 					calls++
-					return mustMessage(m), nil
-				},
+					return mustResponse(m), nil
+				}),
 				nextPrompt: func(context.Context) Continuation {
 					prompts++
 					if prompts == 1 {
@@ -490,7 +508,7 @@ var _ = Describe("runner", func() {
 			// message) rather than the three it would have accumulated without the clear.
 			Expect(seenLens).To(Equal([]int{1, 1}))
 			Expect(r.messages).To(HaveLen(2))
-			Expect(r.messages[0].Role).To(Equal(anthropic.MessageParamRoleUser))
+			Expect(r.messages[0].Role).To(Equal(llm.RoleUser))
 		})
 
 		It("reopens the input on a bare reset without running an extra turn", func() {
@@ -499,12 +517,12 @@ var _ = Describe("runner", func() {
 
 			r := &runner{
 				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: nopEvents{},
-				messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
+				messages: []llm.Message{userMsg("go")},
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
 					m := answers[calls]
 					calls++
-					return mustMessage(m), nil
-				},
+					return mustResponse(m), nil
+				}),
 				nextPrompt: func(context.Context) Continuation {
 					prompts++
 					switch prompts {
@@ -553,15 +571,15 @@ var _ = Describe("runner", func() {
 			rec := &rotateRecorder{}
 			r := &runner{
 				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: rec,
-				messages:   []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
+				messages:   []llm.Message{userMsg("go")},
 				journal:    jA,
 				seq:        1,
 				sessionID:  oldID,
 				newSession: newSession,
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
 					calls++
-					return mustMessage(finalMsg("answer")), nil
-				},
+					return mustResponse(finalMsg("answer")), nil
+				}),
 				nextPrompt: func(context.Context) Continuation {
 					prompts++
 					if prompts == 1 {
@@ -595,7 +613,7 @@ var _ = Describe("runner", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(fresh.Counters.LlmCalls).To(Equal(int64(1)))
 			Expect(fresh.Messages).To(HaveLen(2))
-			Expect(fresh.Messages[0].Role).To(Equal(anthropic.MessageParamRoleUser))
+			Expect(fresh.Messages[0].Role).To(Equal(llm.RoleUser))
 		})
 
 		It("defers a bare reset until the next prompt before rotating (checkpointed)", func() {
@@ -621,15 +639,15 @@ var _ = Describe("runner", func() {
 			var calls, prompts int
 			r := &runner{
 				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: nopEvents{},
-				messages:   []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
+				messages:   []llm.Message{userMsg("go")},
 				journal:    jA,
 				seq:        1,
 				sessionID:  oldID,
 				newSession: newSession,
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
 					calls++
-					return mustMessage(finalMsg("answer")), nil
-				},
+					return mustResponse(finalMsg("answer")), nil
+				}),
 				nextPrompt: func(context.Context) Continuation {
 					prompts++
 					switch prompts {
@@ -677,15 +695,15 @@ var _ = Describe("runner", func() {
 			we := &warnRecorder{}
 			r := &runner{
 				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: we,
-				messages:   []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
+				messages:   []llm.Message{userMsg("go")},
 				journal:    jA,
 				seq:        1,
 				sessionID:  oldID,
 				newSession: newSession,
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
 					calls++
-					return mustMessage(finalMsg("answer")), nil
-				},
+					return mustResponse(finalMsg("answer")), nil
+				}),
 				nextPrompt: func(context.Context) Continuation {
 					prompts++
 					if prompts == 1 {
@@ -719,10 +737,10 @@ var _ = Describe("runner", func() {
 
 			r := &runner{
 				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 1, events: we,
-				messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
-					return mustMessage(toolMsg), nil
-				},
+				messages: []llm.Message{userMsg("go")},
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
+					return mustResponse(toolMsg), nil
+				}),
 				nextPrompt: func(context.Context) Continuation {
 					prompts++
 					return Continuation{}
@@ -743,14 +761,14 @@ var _ = Describe("runner", func() {
 
 			r := &runner{
 				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: we,
-				messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
+				messages: []llm.Message{userMsg("go")},
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
 					calls++
 					if calls == 1 {
 						return nil, errors.New("llm call: context deadline exceeded")
 					}
-					return mustMessage(finalMsg("recovered")), nil
-				},
+					return mustResponse(finalMsg("recovered")), nil
+				}),
 				nextPrompt: func(context.Context) Continuation {
 					prompts++
 					if prompts == 1 {
@@ -771,9 +789,9 @@ var _ = Describe("runner", func() {
 			// folded into it rather than adding a second user message in a row: one user
 			// turn carrying both texts, then the recovered assistant answer.
 			Expect(r.messages).To(HaveLen(2))
-			Expect(r.messages[0].Role).To(Equal(anthropic.MessageParamRoleUser))
+			Expect(r.messages[0].Role).To(Equal(llm.RoleUser))
 			Expect(r.messages[0].Content).To(HaveLen(2))
-			Expect(r.messages[1].Role).To(Equal(anthropic.MessageParamRoleAssistant))
+			Expect(r.messages[1].Role).To(Equal(llm.RoleAssistant))
 		})
 
 		It("journals interactive follow-ups and suspends a checkpointed chat on a clean end", func() {
@@ -787,13 +805,13 @@ var _ = Describe("runner", func() {
 			answers := []string{finalMsg("first"), finalMsg("second")}
 			r := &runner{
 				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: nopEvents{},
-				messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
+				messages: []llm.Message{userMsg("go")},
 				journal:  j, seq: 1,
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
 					m := answers[calls]
 					calls++
-					return mustMessage(m), nil
-				},
+					return mustResponse(m), nil
+				}),
 				nextPrompt: func(context.Context) Continuation {
 					prompts++
 					if prompts == 1 {
@@ -816,7 +834,7 @@ var _ = Describe("runner", func() {
 			Expect(rs.Interactive).To(BeTrue())
 			// prompt, assistant(first), user(follow-up), assistant(second)
 			Expect(rs.Messages).To(HaveLen(4))
-			Expect(rs.Messages[2].Role).To(Equal(anthropic.MessageParamRoleUser))
+			Expect(rs.Messages[2].Role).To(Equal(llm.RoleUser))
 			Expect(rs.NextIteration).To(Equal(int64(2)))
 		})
 
@@ -827,14 +845,14 @@ var _ = Describe("runner", func() {
 				startIter:             2,
 				resumeAtInputBoundary: true,
 				// The restored conversation rests on an assistant turn awaiting a follow-up.
-				messages: []anthropic.MessageParam{
-					anthropic.NewUserMessage(anthropic.NewTextBlock("go")),
-					anthropic.NewAssistantMessage(anthropic.NewTextBlock("answer")),
+				messages: []llm.Message{
+					userMsg("go"),
+					assistantTextMsg("answer"),
 				},
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
 					calls++
-					return mustMessage(finalMsg("follow-up answer")), nil
-				},
+					return mustResponse(finalMsg("follow-up answer")), nil
+				}),
 				nextPrompt: func(context.Context) Continuation {
 					prompts++
 					if prompts == 1 {
@@ -867,11 +885,11 @@ var _ = Describe("runner", func() {
 			var prompts int
 			r := &runner{
 				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: we,
-				messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
+				messages: []llm.Message{userMsg("go")},
 				journal:  failOnUserJournal{Journal: j}, seq: 1,
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
-					return mustMessage(finalMsg("answer")), nil
-				},
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
+					return mustResponse(finalMsg("answer")), nil
+				}),
 				nextPrompt: func(context.Context) Continuation {
 					prompts++
 					return Continuation{Text: "a follow-up", Continue: true}
@@ -894,10 +912,10 @@ var _ = Describe("runner", func() {
 
 			r := &runner{
 				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: nopEvents{},
-				messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
-					return mustMessage(finalMsg("done")), nil
-				},
+				messages: []llm.Message{userMsg("go")},
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
+					return mustResponse(finalMsg("done")), nil
+				}),
 				nextPrompt: func(context.Context) Continuation {
 					// The operator aborted (Ctrl-C) while the field was up: ctx is
 					// canceled and the prompt reports no continuation.
@@ -910,109 +928,6 @@ var _ = Describe("runner", func() {
 			reason, err := r.run(ctx)
 			Expect(reason).To(Equal(runstate.ReasonError))
 			Expect(err).To(MatchError(context.Canceled))
-		})
-	})
-
-	Describe("prompt caching", func() {
-		newCfg := func() *config.Config {
-			cfg := &config.Config{}
-			cfg.LLM.Model = "test-model"
-			cfg.LLM.Budget.CallTimeoutParsed = time.Second
-			return cfg
-		}
-		emptyTools := func(r *runner) {
-			r.tools = map[string]toolkit.Tool{}
-		}
-		// A tool turn then a final answer gives two LLM calls, so the request assertions
-		// cover a resend of the growing conversation, not just the first turn.
-		toolMsg := `{"id":"m1","type":"message","role":"assistant","model":"m","stop_reason":"tool_use","content":[{"type":"tool_use","id":"toolu_1","name":"missing","input":{}}],"usage":{"input_tokens":10,"output_tokens":5}}`
-		finalMsg := `{"id":"m2","type":"message","role":"assistant","model":"m","stop_reason":"end_turn","content":[{"type":"text","text":"done"}],"usage":{"input_tokens":3,"output_tokens":2}}`
-		newSystem := func() []anthropic.TextBlockParam {
-			return []anthropic.TextBlockParam{{Text: "sys one"}, {Text: "sys two"}}
-		}
-		var zeroCC anthropic.CacheControlEphemeralParam
-
-		captureRun := func(r *runner) []anthropic.MessageNewParams {
-			GinkgoHelper()
-			var captured []anthropic.MessageNewParams
-			answers := []string{toolMsg, finalMsg}
-			var calls int
-			r.callLLM = func(_ context.Context, _ anthropic.Client, p anthropic.MessageNewParams, _ time.Duration) (*anthropic.Message, error) {
-				captured = append(captured, p)
-				m := answers[calls]
-				calls++
-				return mustMessage(m), nil
-			}
-			emptyTools(r)
-			reason, err := r.run(context.Background())
-			Expect(err).NotTo(HaveOccurred())
-			Expect(reason).To(Equal(runstate.ReasonCompleted))
-			Expect(captured).To(HaveLen(2))
-			return captured
-		}
-
-		It("places both breakpoints and leaves persistent state marker-free across iterations", func() {
-			r := &runner{
-				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: nopEvents{},
-				system:      newSystem(),
-				promptCache: true,
-				messages:    []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
-			}
-			captured := captureRun(r)
-
-			for _, p := range captured {
-				last := p.System[len(p.System)-1]
-				Expect(last.CacheControl).NotTo(Equal(zeroCC), "tools+system breakpoint set")
-				Expect(p.CacheControl).NotTo(Equal(zeroCC), "conversation-tail breakpoint set")
-			}
-
-			// The value copy must not write the marker back through to r.system, or the
-			// fingerprint would be poisoned; the runner's own slice stays clean.
-			Expect(r.system[len(r.system)-1].CacheControl).To(Equal(zeroCC))
-
-			// The tail breakpoint is a request-level field, so no marker is ever written
-			// into the journaled conversation, however many turns run.
-			raw, err := json.Marshal(r.messages)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(string(raw)).NotTo(ContainSubstring("cache_control"))
-		})
-
-		It("sets no breakpoints when caching is disabled", func() {
-			r := &runner{
-				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: nopEvents{},
-				system:      newSystem(),
-				promptCache: false,
-				messages:    []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
-			}
-			captured := captureRun(r)
-
-			for _, p := range captured {
-				Expect(p.System[len(p.System)-1].CacheControl).To(Equal(zeroCC))
-				Expect(p.CacheControl).To(Equal(zeroCC))
-			}
-		})
-
-		It("selects a 1h TTL for an interactive run and the 5m default for an autonomous one", func() {
-			interactive := &runner{
-				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: nopEvents{},
-				system: newSystem(), promptCache: true, interactive: true,
-				messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
-			}
-			for _, p := range captureRun(interactive) {
-				Expect(p.CacheControl.TTL).To(Equal(anthropic.CacheControlEphemeralTTLTTL1h))
-				Expect(p.System[len(p.System)-1].CacheControl.TTL).To(Equal(anthropic.CacheControlEphemeralTTLTTL1h))
-			}
-
-			autonomous := &runner{
-				cfg: newCfg(), stats: &util.RunStats{}, maxIter: 10, events: nopEvents{},
-				system: newSystem(), promptCache: true, interactive: false,
-				messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
-			}
-			for _, p := range captureRun(autonomous) {
-				// The 5m default leaves TTL at its zero value (the SDK omits it).
-				Expect(p.CacheControl.TTL).To(BeEmpty())
-				Expect(p.System[len(p.System)-1].CacheControl.TTL).To(BeEmpty())
-			}
 		})
 	})
 
@@ -1042,12 +957,12 @@ var _ = Describe("runner", func() {
 
 			r := &runner{
 				cfg: cfg, stats: &util.RunStats{}, maxIter: 10, maxTokens: cfg.LLM.Budget.MaxTokens, events: nopEvents{},
-				messages: []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock("go"))},
+				messages: []llm.Message{userMsg("go")},
 				journal:  j,
 				seq:      1,
-				callLLM: func(context.Context, anthropic.Client, anthropic.MessageNewParams, time.Duration) (*anthropic.Message, error) {
-					return mustMessage(cachedTurn), nil
-				},
+				provider: providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
+					return mustResponse(cachedTurn), nil
+				}),
 			}
 			emptyTools(r)
 
@@ -1126,5 +1041,55 @@ var _ = Describe("Run tool availability guard", func() {
 		_, err := Run(context.Background(), opts, nopEvents{}, nil)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).ToNot(ContainSubstring("no tools available after filtering"))
+	})
+})
+
+var _ = Describe("resolveMaxOutputTokens", func() {
+	It("Should use the default when max_output_tokens is unset and thinking is off", func() {
+		cfg := &config.Config{}
+		Expect(resolveMaxOutputTokens(cfg, false)).To(Equal(int64(defaultMaxOutputTokens)))
+	})
+
+	It("Should raise the default for thinking when max_output_tokens is unset", func() {
+		cfg := &config.Config{}
+		Expect(resolveMaxOutputTokens(cfg, true)).To(Equal(int64(thinkingMaxOutputTokens)))
+	})
+
+	It("Should let an explicit max_output_tokens win over the default", func() {
+		cfg := &config.Config{}
+		cfg.LLM.Budget.MaxOutputTokens = 4096
+		Expect(resolveMaxOutputTokens(cfg, false)).To(Equal(int64(4096)))
+	})
+
+	It("Should let an explicit max_output_tokens win over the thinking increase", func() {
+		cfg := &config.Config{}
+		cfg.LLM.Budget.MaxOutputTokens = 4096
+		Expect(resolveMaxOutputTokens(cfg, true)).To(Equal(int64(4096)))
+	})
+})
+
+var _ = Describe("toolSearchDegradation", func() {
+	supports := llm.Caps{SupportsToolSearch: true}
+	noSupport := llm.Caps{SupportsToolSearch: false}
+
+	It("Should not warn when tool search is allowed", func() {
+		Expect(toolSearchDegradation(util.ToolSearchThreshold, supports, true)).To(BeNil())
+	})
+
+	It("Should not warn when the set is below the threshold", func() {
+		Expect(toolSearchDegradation(util.ToolSearchThreshold-1, supports, false)).To(BeNil())
+	})
+
+	It("Should report the operator-disabled cause when the provider supports tool search", func() {
+		w := toolSearchDegradation(util.ToolSearchThreshold, supports, false)
+		Expect(w).NotTo(BeNil())
+		Expect(w.Kind).To(Equal(WarnToolSearchDisabled))
+		Expect(w.Count).To(Equal(util.ToolSearchThreshold))
+	})
+
+	It("Should report the provider-unsupported cause when the provider cannot do tool search", func() {
+		w := toolSearchDegradation(util.ToolSearchThreshold, noSupport, false)
+		Expect(w).NotTo(BeNil())
+		Expect(w.Kind).To(Equal(WarnToolSearchUnsupported))
 	})
 })

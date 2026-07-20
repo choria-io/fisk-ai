@@ -459,6 +459,60 @@ llm:
 		})
 	})
 
+	Describe("LLMProvider", func() {
+		It("Should default to anthropic when llm.provider is unset", func() {
+			cfg, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+`))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.LLMProvider()).To(Equal("anthropic"))
+		})
+
+		It("Should return the configured provider when llm.provider is set", func() {
+			cfg, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+  provider: openai
+`))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.LLMProvider()).To(Equal("openai"))
+		})
+	})
+
+	Describe("ToolSearchEnabled", func() {
+		It("Should allow tool search by default when no_tool_search is absent", func() {
+			cfg, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+`))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.ToolSearchEnabled()).To(BeTrue())
+		})
+
+		It("Should disable tool search when no_tool_search is true", func() {
+			cfg, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+  no_tool_search: true
+`))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.ToolSearchEnabled()).To(BeFalse())
+		})
+	})
+
 	Describe("Expose helpers", func() {
 		It("Should report a2a enabled only when expose.agent.agent_to_agent is true", func() {
 			cfg, err := ParseConfigForMode([]byte(`
@@ -691,6 +745,23 @@ application_path: /usr/bin/nats
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("invalid llm max_iterations"))
 		})
+
+		It("Should error on a negative max_output_tokens", func() {
+			b := &LLMBudget{MaxOutputTokens: -1}
+			err := b.prepare()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("invalid llm max_output_tokens"))
+		})
+
+		It("Should leave max_output_tokens unset so the agent applies its default", func() {
+			b := &LLMBudget{MaxOutputTokens: 4096}
+			Expect(b.prepare()).To(Succeed())
+			Expect(b.MaxOutputTokens).To(Equal(int64(4096)))
+
+			b = &LLMBudget{}
+			Expect(b.prepare()).To(Succeed())
+			Expect(b.MaxOutputTokens).To(Equal(int64(0)))
+		})
 	})
 
 	Describe("Memory", func() {
@@ -780,6 +851,29 @@ harness:
 `))
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("sessions"))
+		})
+	})
+
+	Describe("CredentialEnvNames", func() {
+		It("Should be empty when the vector tier is off", func() {
+			cfg := &Config{Harness: HarnessConfig{RAG: &RAGConfig{Enabled: true}}}
+			Expect(cfg.CredentialEnvNames()).To(BeEmpty())
+		})
+
+		It("Should return the embeddings api_key_env when the vector tier is on", func() {
+			cfg := &Config{Harness: HarnessConfig{RAG: &RAGConfig{
+				Enabled:    true,
+				Embeddings: &RAGEmbeddingsConfig{APIKeyEnv: "MY_EMBED_KEY"},
+			}}}
+			Expect(cfg.CredentialEnvNames()).To(Equal([]string{"MY_EMBED_KEY"}))
+		})
+
+		It("Should trim and drop an empty or whitespace api_key_env", func() {
+			cfg := &Config{Harness: HarnessConfig{RAG: &RAGConfig{
+				Enabled:    true,
+				Embeddings: &RAGEmbeddingsConfig{APIKeyEnv: "   "},
+			}}}
+			Expect(cfg.CredentialEnvNames()).To(BeEmpty())
 		})
 	})
 })

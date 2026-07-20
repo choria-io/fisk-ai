@@ -8,10 +8,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 
 	"github.com/choria-io/fisk-ai/internal/agent"
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/tui"
@@ -119,20 +119,20 @@ func (e *tcellEvents) ToolResult(t agent.ToolResultTrace) {
 	e.live.Append(toolResultLine(t.Output, t.IsError))
 }
 
-func (e *tcellEvents) Message(msg *anthropic.Message, terminal bool) {
+func (e *tcellEvents) Message(resp llm.Response, terminal bool) {
 	// The first response is ready to draw, so drop the startup card even if this message
 	// carries only a tool call and appends no lines. Idempotent, so later messages are
 	// no-ops.
 	e.live.HideSplash()
 
-	lines, answer := messageLines(msg, terminal)
+	lines, answer := messageLines(resp, terminal)
 	if terminal && answer != "" {
 		e.answer = answer
 	}
 
 	// Accumulate the live token counter from the same usage the runner sums into
 	// RunStats, so the statusbar number and the end-of-run summary agree.
-	e.live.AddUsage(msg.Usage.InputTokens, msg.Usage.OutputTokens, msg.Usage.CacheReadInputTokens, msg.Usage.CacheCreationInputTokens)
+	e.live.AddUsage(resp.Usage.In, resp.Usage.Out, resp.Usage.CacheRead, resp.Usage.CacheCreate)
 	e.live.Append(lines...)
 }
 
@@ -168,19 +168,19 @@ func toolTraceLine(t agent.ToolTrace, verbose bool) (tui.Line, bool) {
 // its prose. A terminal turn's prose is the final answer, set apart with a delimiter
 // since the viewport has no separate answer channel; its raw text is returned so the
 // caller can re-print it on exit.
-func messageLines(msg *anthropic.Message, terminal bool) ([]tui.Line, string) {
+func messageLines(resp llm.Response, terminal bool) ([]tui.Line, string) {
 	var lines []tui.Line
 
-	for _, block := range msg.Content {
-		if t, ok := block.AsAny().(anthropic.ThinkingBlock); ok && t.Thinking != "" {
-			lines = append(lines, tui.Line{Kind: tui.LineThinking, Text: t.Thinking})
+	for _, block := range resp.Content {
+		if block.Thinking != nil && block.Thinking.Text != "" {
+			lines = append(lines, tui.Line{Kind: tui.LineThinking, Text: block.Thinking.Text})
 		}
 	}
 
 	var answer strings.Builder
-	for _, block := range msg.Content {
-		if t, ok := block.AsAny().(anthropic.TextBlock); ok {
-			answer.WriteString(t.Text)
+	for _, block := range resp.Content {
+		if block.Text != nil {
+			answer.WriteString(block.Text.Text)
 		}
 	}
 

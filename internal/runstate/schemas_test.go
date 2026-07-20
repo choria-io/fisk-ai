@@ -8,10 +8,10 @@ import (
 	"encoding/json"
 	"time"
 
-	"github.com/anthropics/anthropic-sdk-go"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/choria-io/fisk-ai/internal/llm"
 )
 
 var _ = Describe("Validator", func() {
@@ -117,7 +117,7 @@ var _ = Describe("assistant record message", func() {
 
 		asst := &AssistantRecord{
 			Iteration: 0,
-			Message:   anthropic.NewAssistantMessage(anthropic.NewTextBlock("hello")),
+			Message:   llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Text: &llm.TextBlock{Text: "hello"}}}},
 			InTokens:  1,
 			OutTokens: 2,
 		}
@@ -130,7 +130,7 @@ var _ = Describe("assistant record message", func() {
 
 		asst := &AssistantRecord{
 			Iteration:         0,
-			Message:           anthropic.NewAssistantMessage(anthropic.NewTextBlock("hello")),
+			Message:           llm.Message{Role: llm.RoleAssistant, Content: []llm.ContentBlock{{Text: &llm.TextBlock{Text: "hello"}}}},
 			InTokens:          1,
 			OutTokens:         2,
 			CacheReadTokens:   100,
