@@ -14,13 +14,13 @@ Below it are three drivers. `internal/agent` runs the agentic loop for `run`. `i
 
 The center is the tool model. `internal/toolkit` defines the contracts every tool kind satisfies, `internal/toolkit/fisk` introspects and runs the wrapped application's commands, and `internal/toolkit/builtin` holds the tools Fisk AI implements itself. `config` is the single `agent.yaml` schema and its mode-based validation.
 
-The base is four packages that import nothing else internal: `internal/toolkit`, `internal/runstate`, `internal/conns`, and `config`. Everything else layers on top of them.
+The base is three packages that import nothing else internal: `internal/llm`, `internal/conns`, and `config`. `internal/toolkit` and `internal/runstate` sit just above them, because both now speak the provider-neutral conversation model and so import `internal/llm`. Everything else layers on top.
 
-{{% notice style="note" title="The toolkit tree is not one layer" %}}
-A shared import prefix does not mean a shared position in the graph. `internal/toolkit` is at the base, but `internal/toolkit/fisk` sits above `internal/util`, and `internal/toolkit/builtin` sits above `internal/memory` and `internal/rag` because it wraps both as tools. Reading "toolkit" as a single tier inverts real dependency edges. Derive the graph with `go list -deps` rather than from the directory names.
+{{% notice style="note" title="A shared prefix is not a shared layer" %}}
+A shared import prefix does not mean a shared position in the graph. `internal/toolkit/fisk` sits above `internal/util`, and `internal/toolkit/builtin` sits above `internal/memory` and `internal/rag` because it wraps both as tools. The `llm` tree splits the same way and in the opposite direction from what the names suggest: `internal/llm` is at the very base, but `internal/llm/anthropic` imports `internal/toolkit` for its schema helpers, so the codec sits above the tool contracts rather than beside the neutral model. Reading either prefix as a single tier inverts real dependency edges. Derive the graph with `go list -deps` rather than from the directory names.
 {{% /notice %}}
 
-`internal/util` is no longer the core it once was. It kept the cross-cutting helpers that have no better home: the confirm gate, the model call, run statistics and tracing, terminal detection and sanitization, markdown rendering, and the Anthropic request shaping in `anthropic.go`. It defines no tools and owns no prompter; both moved into `internal/toolkit`.
+`internal/util` holds the cross-cutting helpers that have no better home: the confirm gate, run statistics and tracing, terminal detection and sanitization, markdown rendering, base-URL validation, and tool-set assembly. It defines no tools, owns no prompter, and makes no model call; the model call is `Provider.Call`, covered in [Providers and the Neutral Model]({{% relref "llm-providers" %}}). Despite its name, `anthropic.go` imports no SDK: it builds neutral `llm.ToolDef` values and decides which of them defer.
 
 Like memory, `internal/rag` is reached only through a built-in tool: `internal/toolkit/builtin/builtin_rag.go` opens a `rag.Store` and wraps it as `knowledge_search`. The agent and MCP drivers open the store read-only while the `knowledge` command is its single writer, so an index can be rebuilt while an agent runs. It is the one subsystem that reaches an external system of its own, an optional local embeddings server, and only when the vector tier is on.
 
@@ -50,15 +50,15 @@ Like memory, `internal/rag` is reached only through a built-in tool: `internal/t
     <!-- layer 5: shared helpers -->
     <rect class="cm-svg-box" x="40" y="264" width="680" height="46" rx="8"/>
     <text class="cm-svg-label" x="380" y="290" text-anchor="middle">Shared helpers</text>
-    <text class="cm-svg-sub"   x="380" y="307" text-anchor="middle">internal/util: confirm gate, model call, tracing, sanitization</text>
+    <text class="cm-svg-sub"   x="380" y="307" text-anchor="middle">internal/util: confirm gate, tool-set assembly, tracing, sanitization</text>
     <!-- layer 6: base (accent) -->
     <rect x="40" y="326" width="680" height="46" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
-    <text class="cm-svg-label" x="380" y="352" text-anchor="middle" style="fill:var(--cm-accent)">Contracts and state (no internal dependencies)</text>
-    <text class="cm-svg-sub"   x="380" y="369" text-anchor="middle">internal/toolkit, internal/runstate, internal/conns, config</text>
+    <text class="cm-svg-label" x="380" y="352" text-anchor="middle" style="fill:var(--cm-accent)">Contracts and state</text>
+    <text class="cm-svg-sub"   x="380" y="369" text-anchor="middle">internal/llm, internal/toolkit, internal/runstate, internal/conns, config</text>
     <!-- layer 7: externals -->
     <rect class="cm-svg-box" x="40" y="388" width="680" height="46" rx="8"/>
     <text class="cm-svg-label" x="380" y="414" text-anchor="middle">External systems</text>
-    <text class="cm-svg-sub"   x="380" y="431" text-anchor="middle">fisk binaries (exec), Anthropic API, NATS, embeddings server</text>
+    <text class="cm-svg-sub"   x="380" y="431" text-anchor="middle">fisk binaries (exec), LLM provider API, NATS, embeddings server</text>
     <!-- downward dependency arrows -->
     <line x1="380" y1="62"  x2="380" y2="76"  stroke="var(--cm-faint)" stroke-width="1.5" marker-end="url(#ad)"/>
     <line x1="380" y1="124" x2="380" y2="138" stroke="var(--cm-faint)" stroke-width="1.5" marker-end="url(#ad)"/>
@@ -81,11 +81,12 @@ The tiers stay independent because the boundaries between them are narrow interf
   <dt>Store / Journal</dt><dd>`internal/runstate/store.go`. A run is an append-only record stream behind a pluggable backend registry; the `file` backend exists, a JetStream backend is the planned second. `Fold` turns records into resumable state with no IO.</dd>
   <dt>memory.Store</dt><dd>`internal/memory/store.go`. A pluggable key/value store; the `file` backend exists, a NATS KV backend is the planned second.</dd>
   <dt>a2a.Transport</dt><dd>`internal/a2a/transport.go`. The wire binding the protocol engine rides on, selected by name from a registry. The engine owns validation and back-pressure; a transport only moves bytes.</dd>
+  <dt>llm.Provider</dt><dd>`internal/llm/provider.go`. The model backend, selected by name from a registry. `Call` owns one wire call end to end, including its own timeout, so it is the single place a concrete SDK is spoken; `Capabilities` reports what the backend supports.</dd>
   <dt>rag.Embedder</dt><dd>`internal/rag/embed.go`. The knowledge vector-tier seam; the OpenAI-compatible client is the only implementation, tests mock it, and a nil embedder is the lexical-only path, so the vector tier is fully optional.</dd>
   <dt>RemoteInvoker</dt><dd>`internal/a2a/remote.go`. A one-method interface so a remote tool depends only on the ability to invoke, not on a client or a transport, which lets tests supply a fake.</dd>
 </dl>
 
-Three of these are selected by name at runtime rather than chosen in code: session stores, memory backends, and a2a transports each have a registry and a backend package that registers itself from `init`. The pages for [Sessions and Resume]({{% relref "sessions" %}}), [Memory]({{% relref "memory" %}}), and [MCP and A2A]({{% relref "interop" %}}) each cover their own.
+Four of these are selected by name at runtime rather than chosen in code: model providers, session stores, memory backends, and a2a transports each have a registry and a backend package that registers itself from `init`. The pages for [Providers and the Neutral Model]({{% relref "llm-providers" %}}), [Sessions and Resume]({{% relref "sessions" %}}), [Memory]({{% relref "memory" %}}), and [MCP and A2A]({{% relref "interop" %}}) each cover their own.
 
 `internal/conns` is the one genuinely new cross-cutting package. It is not a registry. It is a shared provider that establishes a connection once and hands it to whichever backend needs it, so backends do not each dial their own. Ownership is explicit and one-directional: the provider owns the connection, a transport borrows it, and only the command that created the provider closes it.
 
@@ -101,7 +102,7 @@ The `run` path threads every tier together in a fixed order.
 
 <ol class="cm-steps">
   <li><b>Parse and select tools</b> `main` parses the config, then `fisk.LoadTools` introspects the fisk binary, strips `ai:deny`, and applies include and exclude rules.</li>
-  <li><b>Set up the run</b> `agent.Run` injects the built-in tools, imports any remote tools, builds the Anthropic tool params, constructs the confirm gate, and opens or resumes the journal.</li>
+  <li><b>Set up the run</b> `agent.Run` injects the built-in tools, imports any remote tools, builds the neutral tool definitions, resolves the model provider by name, constructs the confirm gate, and opens or resumes the journal.</li>
   <li><b>Drive the loop</b> The `runner` calls the model and runs the tools it asks for. `executeTool` looks the name up in one map, checks the capability interfaces, then calls `ExecuteUse` on whatever kind it found.</li>
   <li><b>Surface it</b> Every step is reported through `Events` to whichever UI is active, and the operator answers gates through the `Prompter`.</li>
 </ol>

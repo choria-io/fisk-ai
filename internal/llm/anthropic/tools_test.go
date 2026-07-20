@@ -37,9 +37,10 @@ var _ = Describe("ToolDefToAnthropic", func() {
 		Expect(got).NotTo(HaveKey("strict"))
 	})
 
-	It("emits defer_loading:false as a present field, distinct from omitting it", func() {
-		// A present false tells the API to load the tool directly; it is not the same
-		// as an absent field, and the run fingerprint distinguishes the two.
+	It("emits defer_loading as a present field even when false", func() {
+		// The field is rendered unconditionally so the wire form stays a pure function
+		// of the neutral value. A present false and an absent field request the same
+		// thing, since false is the API default; this pins which one is sent.
 		got := marshal(llm.ToolDef{Name: "deploy", DeferLoading: false})
 		Expect(got).To(HaveKey("defer_loading"))
 		Expect(got["defer_loading"]).To(BeFalse())

@@ -22,9 +22,10 @@ second provider must satisfy, and the list of work still outstanding.
   back verbatim to accept the turn on a later call (an Anthropic signature, an
   OpenAI `encrypted_content`). The neutral model never inspects or renders it.
 - `ToolDef` (`types.go`): a neutral tool definition. `DeferLoading` asks for the
-  tool to be hidden behind server-side tool search; a codec that supports deferral
-  OMITS the field when it is false rather than emitting an explicit `false`, since
-  on Anthropic a present `defer_loading:false` is a distinct, non-default state.
+  tool to be hidden behind server-side tool search, leaving the model to discover
+  it through the search tool rather than receiving it up front. How a codec spells
+  that on the wire is its own concern; false is the default in every format seen so
+  far, so emitting it and omitting it are equivalent.
 - `Request` (`request.go`): one call, carrying only neutral data (model, system
   blocks, messages, tools, flags). No client, credentials or timeout: those live on
   the `Provider`, so a `Request` is a plain value a test can build and assert on.
@@ -106,13 +107,16 @@ linked in by adding a second blank import there.
   the backend semantics are identical.
 - Opaque payloads. `ThinkingBlock.Signature` and `ProviderBlock.Raw` must round-trip
   byte-for-byte; the model rejects a turn whose signature was dropped or altered.
-- Deferral. Honor `ToolDef.DeferLoading` with the OMIT-when-false rule, and add the
-  server-side tool-search tool only when the request asks for it (`Request.ToolSearch`,
-  set only when at least one tool actually deferred). Report `SupportsToolSearch`
-  truthfully; a provider that returns false makes the agent send every tool directly
-  and raise a degradation warning.
+- Deferral. Render `ToolDef.DeferLoading` in whatever form the wire format takes, and
+  add the server-side tool-search tool only when the request asks for it
+  (`Request.ToolSearch`, set only when at least one tool actually deferred). Report
+  `SupportsToolSearch` truthfully; a provider that returns false makes the agent send
+  every tool directly and raise a degradation warning.
 - Truncation. Map an output-cap stop to `StopMaxTokens`; a truncated turn's trailing
   `tool_use` is not safe to execute.
+- Per-call timeout. `Call` owns `Config.Timeout` and must bound the wire call with it.
+  Nothing outside the provider enforces this, so a provider that ignores it silently
+  drops the `llm.budget.call_timeout` guarantee with no test catching the loss.
 - Prompt cache stays out of the fingerprint, so toggling it never refuses a resume.
 
 ## Credential handling (security boundary)
