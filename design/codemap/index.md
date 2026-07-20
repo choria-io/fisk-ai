@@ -1,9 +1,9 @@
 # Code Map
 
-Fisk AI turns any [fisk](https://github.com/choria-io/fisk)-based command-line application into a safety-first LLM agent. It introspects the application's command tree, exposes the allowed commands as tools, and runs an agent loop against the Anthropic API that calls those tools to satisfy a prompt. This code map explains how that is built.
+Fisk AI turns any [fisk](https://github.com/choria-io/fisk)-based command-line application into a safety-first LLM agent. It introspects the application's command tree, exposes the allowed commands as tools, and runs an agent loop against a model provider that calls those tools to satisfy a prompt. This code map explains how that is built.
 
 {{% notice style="note" title="Snapshot" %}}
-Generated 2026-07-20 against commit `60d1f94` on branch `main`. Commits after this one may make parts of this map stale.
+Generated 2026-07-20 against commit `be9a03b` on branch `main`. Commits after this one may make parts of this map stale.
 
 Create a Code Map for your code using the [Choria Codemap Plugin for Claude Code](https://github.com/choria-io/agent-plugins)
 {{% /notice %}}
@@ -12,7 +12,7 @@ Create a Code Map for your code using the [Choria Codemap Plugin for Claude Code
 
 There is one core and several faces. The core is the tool model: a fisk application is introspected once, its runnable leaf commands become named tools, and reserved tags plus include and exclude rules decide which of them an LLM may ever see. That same tool set is then consumed three ways. The `run` command wraps it in an agent loop that calls the model, runs the tools the model asks for, and feeds results back under a budget. The `mcp` command serves the tools over the Model Context Protocol for an external client. The `a2a` command serves them to peer agents. Safety is not a layer on top; it is built into the core, so every face inherits the same guardrails: commands run through `exec` with an argument vector rather than a shell, output is capped, credentials are stripped from the child environment, and a tagged command can require a human to approve it before it runs.
 
-A second axis runs underneath. The core is fixed, but the edges are swappable: where a run is journaled, where the model's notes are kept, and which wire the agent-to-agent protocol rides on are each chosen by name at startup from a registry, with the implementation linked into the binary by import. Only one implementation of each exists today, so the seams matter less for what they currently offer than for where the code draws its boundaries.
+A second axis runs underneath. The core is fixed, but the edges are swappable: which model backend is called, where a run is journaled, where the model's notes are kept, and which wire the agent-to-agent protocol rides on are each chosen by name at startup from a registry, with the implementation linked into the binary by import. Only one implementation of each exists today, so the seams matter less for what they currently offer than for where the code draws its boundaries.
 
 <figure class="cm-diagram">
   <svg viewBox="0 0 760 360" role="img" aria-label="A fisk application is introspected into a shared tool model that is served three ways, over pluggable backends">
@@ -38,7 +38,7 @@ A second axis runs underneath. The core is fixed, but the edges are swappable: w
     <text class="cm-svg-label" x="505" y="241" text-anchor="middle">A2A server</text>
     <!-- endpoints -->
     <rect class="cm-svg-box" x="610" y="40"  width="132" height="46" rx="8"/>
-    <text class="cm-svg-label" x="676" y="67" text-anchor="middle">Anthropic API</text>
+    <text class="cm-svg-label" x="676" y="67" text-anchor="middle">LLM provider</text>
     <rect class="cm-svg-box" x="610" y="127" width="132" height="46" rx="8"/>
     <text class="cm-svg-label" x="676" y="154" text-anchor="middle">MCP client</text>
     <rect class="cm-svg-box" x="610" y="214" width="132" height="46" rx="8"/>
@@ -57,7 +57,7 @@ A second axis runs underneath. The core is fixed, but the edges are swappable: w
     <!-- pluggable backends band -->
     <rect class="cm-svg-box" x="206" y="292" width="374" height="48" rx="8" stroke-dasharray="5 4"/>
     <text class="cm-svg-label" x="393" y="314" text-anchor="middle">Pluggable backends</text>
-    <text class="cm-svg-sub"   x="393" y="331" text-anchor="middle">session store, memory, a2a transport</text>
+    <text class="cm-svg-sub"   x="393" y="331" text-anchor="middle">llm provider, session store, memory, a2a transport</text>
     <!-- dashed connectors down to the backends band -->
     <line x1="294" y1="188" x2="294" y2="290" stroke="var(--cm-faint)" stroke-width="1.5" stroke-dasharray="4 3"/>
     <line x1="505" y1="260" x2="505" y2="290" stroke="var(--cm-faint)" stroke-width="1.5" stroke-dasharray="4 3"/>

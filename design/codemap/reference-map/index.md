@@ -23,9 +23,11 @@ A quick index into the codebase: what each command does, where each package live
 | `main` (root) | CLI wiring, flag parsing, mode and UI selection, signal contract. | `main.go`, `run_command.go`, `run_events.go`, `run_tui_events.go`, `resume_replay.go`, `rag_command.go`, `rag_watch.go`, `remote_tools.go` |
 | `config` | The single `agent.yaml` schema, mode-based validation, accessors. | `config.go` |
 | `internal/toolkit` | The kind-agnostic tool contracts: `Tool`, the capability interfaces, the prompter, schema and result shapes. | `tool.go`, `schema.go`, `result.go`, `prompter.go`, `survey_prompter.go` |
-| `internal/toolkit/fisk` | Introspecting and running the wrapped fisk application's commands. | `fisk.go`, `load.go`, `fisk_tool.go`, `fisk_present.go` |
+| `internal/toolkit/fisk` | Introspecting and running the wrapped fisk application's commands. | `fisk.go`, `load.go`, `fisk_tool.go` |
 | `internal/toolkit/builtin` | The tools Fisk AI implements itself: `ask_human_*`, memory, `knowledge_search`. | `builtin.go`, `builtin_memory.go`, `builtin_rag.go` |
-| `internal/util` | Cross-cutting helpers: confirm gate, LLM call, tracing, stats, terminal detection and sanitization, rendering. | `confirm.go`, `llm.go`, `anthropic.go`, `terminal.go`, `text.go`, `trace.go`, `stats.go`, `util.go` |
+| `internal/llm` | The provider-neutral conversation model, the `Provider` seam, and the backend registry. | `types.go`, `request.go`, `response.go`, `provider.go`, `middleware.go`, `registry.go` |
+| `internal/llm/anthropic` | The only provider: the codec in both directions and the wire call, registered by import. | `codec.go`, `tools.go`, `provider.go` |
+| `internal/util` | Cross-cutting helpers: confirm gate, tool-set assembly, tracing, stats, terminal detection and sanitization, rendering, base-URL validation. | `confirm.go`, `anthropic.go`, `terminal.go`, `text.go`, `trace.go`, `stats.go`, `url.go`, `util.go` |
 | `internal/conns` | Shared connection establishment handed to backends, so they do not each dial their own. | `conns.go` |
 | `internal/agent` | The agentic loop: setup, iteration, events. | `agent.go`, `runner.go`, `events.go` |
 | `internal/runstate` | The backend-agnostic session store: records, fold, `Store`/`Journal` interfaces, backend registry, id and append validation, fingerprint. | `record.go`, `state.go`, `store.go`, `registry.go`, `validate.go`, `fingerprint.go` |
@@ -47,6 +49,10 @@ A quick index into the codebase: what each command does, where each package live
 | `fisk.FiskCommandTool` | One introspected command as a tool: path, model, schema, tags. The only kind that is `Confirmable`. | [Tools and Introspection]({{% relref "tools" %}}) |
 | `builtin.BuiltinTool` | A tool Fisk AI implements in-process rather than shelling out. | [Tools and Introspection]({{% relref "tools" %}}) |
 | `a2a.RemoteTool` | A peer agent's tool, presented to the model as if it were local. | [MCP and A2A]({{% relref "interop" %}}) |
+| `llm.Provider` | The model backend seam: one call, plus declared capabilities. | [Providers and the Neutral Model]({{% relref "llm-providers" %}}) |
+| `llm.Message` | A conversation turn in neutral terms; what the journal stores. | [Providers and the Neutral Model]({{% relref "llm-providers" %}}) |
+| `llm.ContentBlock` | The block union: text, thinking, tool use, tool result, or an opaque provider block. | [Providers and the Neutral Model]({{% relref "llm-providers" %}}) |
+| `llm.ToolDef` | A neutral tool definition; what every tool kind's `Definition` returns. | [Tools and Introspection]({{% relref "tools" %}}) |
 | `config.Config` | The parsed `agent.yaml` for any mode. | [Architecture]({{% relref "architecture" %}}) |
 | `agent.runner` | The loop state, split into rebuilt infrastructure and resumable state. | [The Agent Loop]({{% relref "agent-loop" %}}) |
 | `util.ConfirmGate` | The default-deny approval enforcement for gated commands. | [Safety and Human in the Loop]({{% relref "safety" %}}) |
@@ -67,15 +73,18 @@ A quick index into the codebase: what each command does, where each package live
   <dt>Tool kind</dt><dd>One of the three implementations of `toolkit.Tool`: a command tool from the wrapped application, a built-in Fisk AI implements itself, or a remote tool imported from a peer.</dd>
   <dt>Command tool</dt><dd>A single runnable fisk leaf command exposed to the model, named by its command path joined with underscores.</dd>
   <dt>Capability interface</dt><dd>A narrow optional interface the runner type-asserts on, carrying policy that does not belong to every kind: `Confirmable` for the approval gate, `ArgumentValidator` for the missing-parameter check.</dd>
-  <dt>Backend registry</dt><dd>A name-to-factory map a subsystem exposes so an implementation is chosen at startup rather than compiled in; used by session stores, memory, and a2a transports.</dd>
+  <dt>Backend registry</dt><dd>A name-to-factory map a subsystem exposes so an implementation is chosen at startup rather than compiled in; used by model providers, session stores, memory, and a2a transports.</dd>
+  <dt>Neutral model</dt><dd>The provider-agnostic conversation types in `internal/llm` that every subsystem speaks, so no vendor SDK type reaches the journal, the fingerprint, or the renderers.</dd>
+  <dt>Codec</dt><dd>The per-provider translation between the neutral model and one vendor's wire format, and the only place that vendor's SDK is spoken.</dd>
+  <dt>Provider block</dt><dd>A server-side block the neutral model does not name, carried verbatim as raw JSON so it survives a round trip unchanged.</dd>
   <dt>Blank import</dt><dd>An import taken only for its `init` side effect, which is how a backend registers itself and links into the binary.</dd>
   <dt>Introspection</dt><dd>Running a fisk binary with `--fisk-introspect` to read its command tree as a model.</dd>
-  <dt>Deferral</dt><dd>Sending tool definitions on demand through the tool-search tool once the set reaches ten tools, rather than all up front.</dd>
+  <dt>Deferral</dt><dd>Sending tool definitions on demand through the tool-search tool once the set reaches ten tools, rather than all up front. Offered only when the provider reports support for it and the operator has not disabled it.</dd>
   <dt>Confirm gate</dt><dd>The default-deny check that makes an operator approve a command tagged `ai:confirm` or a `confirm_tags` tag before it runs.</dd>
   <dt>HITL</dt><dd>Human in the loop: the `ask_human_*` tools the model can call to ask the operator a question.</dd>
   <dt>Journal</dt><dd>The append-only record stream a checkpointed run writes to disk, event by event.</dd>
   <dt>Fold</dt><dd>Replaying a record stream into a resumable `RunState` with no IO.</dd>
-  <dt>Fingerprint</dt><dd>A hash of model, prompt, tool set, thinking mode, and budgets that must match for a resume to proceed.</dd>
+  <dt>Fingerprint</dt><dd>A record of provider, model, prompt, tool set, thinking mode, and budgets that must match for a resume to proceed. All but the provider can be overridden with `--force`.</dd>
   <dt>Identity</dt><dd>An agent's logical name, defaulting to the binary base name, used for the memory directory and to address the agent over A2A.</dd>
   <dt>Elicitation</dt><dd>The MCP mechanism by which a served command asks the calling client to approve it.</dd>
   <dt>Agent card</dt><dd>An A2A agent's self-description: name, version, protocols, and tools.</dd>

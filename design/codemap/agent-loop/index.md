@@ -1,14 +1,14 @@
 # The Agent Loop
 
-The agent loop is what `fisk-ai run` drives. It calls the Anthropic model, runs the tools the model asks for, feeds the results back, and repeats until the model gives a final answer or a budget stops it.
+The agent loop is what `fisk-ai run` drives. It calls the model, runs the tools the model asks for, feeds the results back, and repeats until the model gives a final answer or a budget stops it.
 
 {{% notice style="note" title="Where it lives" %}}
-`internal/agent`: one-time setup in `agent.go`, the loop itself in `runner.go`, the reporting contract in `events.go`. The single model call with its per-call timeout is `util.CallLLM` in `internal/util/llm.go`.
+`internal/agent`: one-time setup in `agent.go`, the loop itself in `runner.go`, the reporting contract in `events.go`. The single model call, with its per-call timeout, is `Provider.Call`, described in [Providers and the Neutral Model]({{% relref "llm-providers" %}}).
 {{% /notice %}}
 
 ## Setup, then loop
 
-`agent.Run` does all the one-time work before the loop starts: load and validate tools, inject the built-in tools, import any remote tools, build the Anthropic tool params, construct the confirm gate, build the client, seed the conversation, compute the resume fingerprint, and open or resume the journal. It then constructs a `runner` and calls its loop. The `runner` splits its state in two: infrastructure that is rebuilt from config on every start or resume, and mutable conversation state that is resumable. That split is what makes a run suspendable.
+`agent.Run` does all the one-time work before the loop starts: load and validate tools, inject the built-in tools, import any remote tools, build the neutral tool definitions, construct the confirm gate, resolve the model provider by name, seed the conversation, compute the resume fingerprint, and open or resume the journal. It then constructs a `runner` and calls its loop. The `runner` splits its state in two: infrastructure that is rebuilt from config on every start or resume, and mutable conversation state that is resumable. That split is what makes a run suspendable.
 
 Setup also claims every tool name into one flat namespace. A collision between a command tool, a built-in, and an imported remote tool aborts the run rather than letting one silently shadow another.
 
@@ -18,8 +18,9 @@ The loop runs while the iteration count is below `max_iterations`.
 
 <ol class="cm-steps">
   <li><b>Check for suspend</b> Only at the loop boundary, before the iteration index is consumed, never mid-tool, so the conversation is always left coherent.</li>
-  <li><b>Call the model</b> Under a per-call timeout derived from `call_timeout`. `util.CallLLM` wraps the single request in its own context.</li>
+  <li><b>Call the model</b> `Provider.Call` bounds the single request with a timeout derived from `call_timeout`.</li>
   <li><b>Journal the turn</b> The assistant response is appended to the conversation and journaled before any tool runs, so a crash mid-batch resumes without re-paying for the call.</li>
+  <li><b>Reject a truncated turn</b> A turn that stopped at the output cap ends the run as an error before any tool executes, because it may carry a partial tool call.</li>
   <li><b>Decide terminality</b> A turn with no tool-use blocks, and not a paused turn, is the final answer and ends the run. Otherwise the tool calls are executed.</li>
   <li><b>Run tools and feed back</b> Each tool result is journaled as it completes, then all results are appended as one user message that becomes the next iteration's input.</li>
 </ol>
@@ -78,9 +79,11 @@ Only one type switch remains, inside `traceCall`, and it exists solely to choose
 
 ## Budgets
 
-Two different token caps apply. `defaultMaxOutputTokens` (8192, or `thinkingMaxOutputTokens` at 16384 with thinking enabled) bounds a single response so a call stays under the non-streaming ceiling. The configured `llm.budget.max_tokens` bounds the whole run. The run budget is a soft cap checked after each call but before that turn's tools run, so an over-budget turn incurs no further tool side effects. All four token tiers, input, output, cache read, and cache create, are summed so the cap measures total throughput.
+Two different token caps apply. One bounds a single response so a call stays under the non-streaming ceiling: `resolveMaxOutputTokens` takes an explicit `llm.budget.max_output_tokens` when the operator sets one, and otherwise uses 8192, or 16384 when thinking is enabled. The configured `llm.budget.max_tokens` bounds the whole run. The run budget is a soft cap checked after each call but before that turn's tools run, so an over-budget turn incurs no further tool side effects. All four token tiers, input, output, cache read, and cache create, are summed so the cap measures total throughput.
 
 `max_iterations` bounds the loop count and `call_timeout` bounds each call. The defaults are 200000 tokens, 50 iterations, and 120 seconds.
+
+A response that stops at the per-response cap is not a normal turn. The model may have been cut off mid-`tool_use`, leaving arguments that are incomplete but syntactically inviting, so the loop ends the run with an error rather than executing them or reporting a truncated answer as complete. The partial text is still delivered, and in a chat run the operator is handed back to the input bar.
 
 {{% notice style="warning" title="Load-bearing decision" %}}
 The assistant turn is journaled before any tool executes, and each tool result is journaled the instant that tool finishes. This ordering is what gives the durability guarantee in [Sessions and Resume]({{% relref "sessions" %}}): a clean suspend is exactly-once and a crash repeats at most one tool call.
@@ -91,5 +94,5 @@ The assistant turn is journaled before any tool executes, and each tool result i
 The loop never draws anything. It emits typed callbacks through the `Events` interface, and the caller decides how they look. The same callbacks back both the line UI and the full-screen UI, which keeps the loop free of terminal concerns. Tracing distinguishes the three tool kinds so each is described correctly; the memory and `knowledge_search` tools are built-ins and trace as such.
 
 {{% notice style="tip" title="Next" %}}
-Continue to [Safety and Human in the Loop]({{% relref "safety" %}}) for the guardrails around each tool call.
+Continue to [Providers and the Neutral Model]({{% relref "llm-providers" %}}) for the model call itself and how a backend is chosen.
 {{% /notice %}}

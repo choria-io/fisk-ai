@@ -8,7 +8,11 @@ By default a run lives only in memory. With `--checkpoint` it is journaled to di
 
 ## A run is a record stream
 
-A run is an ordered sequence of self-describing records. A `MetaRecord` is always first at sequence one. Each model turn is an `AssistantRecord` stored verbatim, each tool result a `ToolResultRecord`, each interactive follow-up a `UserRecord`, and the run ends with a single `TerminalRecord` carrying its reason. The schema is at `Version = 2`; a reader accepts any older version but refuses a newer one, because every version only adds records or optional fields.
+A run is an ordered sequence of self-describing records. A `MetaRecord` is always first at sequence one. Each model turn is an `AssistantRecord` holding a neutral `llm.Message`, each tool result a `ToolResultRecord` holding an `llm.ToolResultBlock`, each interactive follow-up a `UserRecord`, and the run ends with a single `TerminalRecord` carrying its reason. Because the records store the provider-neutral model described in [Providers and the Neutral Model]({{% relref "llm-providers" %}}), the journal names no vendor type.
+
+The schema is at `Version = 3`, and `Fold` accepts that version only. This is a break rather than the usual additive bump: earlier journals hold the Anthropic wire form, which does not round-trip through neutral records, so they are refused rather than mis-folded. There is no converter.
+
+The refusal is louder in some commands than others. `run --resume` and `session show` both fail with a message naming the unsupported version, but `session ls` folds each run to summarize it and skips any that fails, so an older journal does not appear in the listing at all. `session rm` never folds, so removing one still works.
 
 `Fold` in `state.go` replays a record set into a resumable `RunState` with no IO. The state carries the committed conversation prefix, cumulative counters derived from the journal so they can never drift, the next iteration number, and any in-flight tool batch. It deliberately holds no client, credentials, or config; those are rebuilt on resume.
 
@@ -66,6 +70,8 @@ Every append is a write followed by an fsync, and the first append also fsyncs t
 ## The resume guard
 
 Continuing a conversation against a changed model, prompt, or tool set can be incoherent, so a resume is refused when the configuration no longer matches. The `Fingerprint` in `fingerprint.go` covers the model, a hash of the system prompt, a hash of the tool set, the thinking mode, and both budgets. Hashes are stored, never the prompt itself, so nothing leaks. A mismatch names exactly what changed and refuses unless `--force` is given.
+
+The provider is the exception, and it is a harder gate. `Fingerprint.Provider` records the resolved backend's own id rather than the configured selector, so the record names the backend the journal was actually written against. A resume across a provider change is refused unconditionally, and `--force` does not reach it. That is why the field is deliberately excluded from `Equal` and `Diff`, which govern only the drift `--force` is allowed to override: the check runs first, so a provider change gives its own message instead of being folded into a generic diff.
 
 {{% notice style="warning" title="Load-bearing decision" %}}
 Prompt caching, the memory index, and the resume reminder are all appended after the fingerprint is computed, so none of them can perturb the comparison. Memory drift between suspend and resume never blocks a resume; memory is data, not configuration.
