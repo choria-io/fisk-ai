@@ -11,9 +11,10 @@ import (
 	"os"
 	"unicode/utf8"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/choria-io/fisk-ai/internal/llm"
 )
 
 // captureStdoutStderr swaps os.Stdout and os.Stderr for pipes while fn runs and
@@ -54,37 +55,25 @@ func captureStdoutStderr(fn func()) (string, string) {
 	return <-outCh, <-errCh
 }
 
-// newMessage builds a Message from block payloads by marshaling and unmarshaling
-// them, the way the SDK parses an API response. ContentBlockUnion.AsText and
-// AsThinking read the block's raw JSON, which only the unmarshal path populates,
-// so a hand-built struct would decode as empty.
-func newMessage(blocks ...map[string]any) *anthropic.Message {
-	GinkgoHelper()
-
-	data, err := json.Marshal(map[string]any{"content": blocks})
-	Expect(err).NotTo(HaveOccurred())
-
-	var msg anthropic.Message
-	Expect(json.Unmarshal(data, &msg)).To(Succeed())
-
-	return &msg
+func newResponse(blocks ...llm.ContentBlock) llm.Response {
+	return llm.Response{Content: blocks}
 }
 
-func textBlock(text string) map[string]any {
-	return map[string]any{"type": "text", "text": text}
+func textBlock(text string) llm.ContentBlock {
+	return llm.ContentBlock{Text: &llm.TextBlock{Text: text}}
 }
 
-func thinkingBlock(thinking string) map[string]any {
-	return map[string]any{"type": "thinking", "thinking": thinking, "signature": "sig"}
+func thinkingBlock(thinking string) llm.ContentBlock {
+	return llm.ContentBlock{Thinking: &llm.ThinkingBlock{Text: thinking, Signature: []byte("sig")}}
 }
 
-func toolUseBlock(name string) map[string]any {
-	return map[string]any{"type": "tool_use", "id": "tool-1", "name": name, "input": map[string]any{}}
+func toolUseBlock(name string) llm.ContentBlock {
+	return llm.ContentBlock{ToolUse: &llm.ToolUseBlock{ID: "tool-1", Name: name, Input: json.RawMessage("{}")}}
 }
 
 var _ = Describe("PrintText", func() {
 	It("Should render the final answer as markdown on stdout", func() {
-		msg := newMessage(textBlock("# Title\n\nhello"))
+		msg := newResponse(textBlock("# Title\n\nhello"))
 
 		stdout, stderr := captureStdoutStderr(func() {
 			PrintText(msg, true, true)
@@ -96,7 +85,7 @@ var _ = Describe("PrintText", func() {
 	})
 
 	It("Should keep intermediate prose on stderr so a piped result carries only the answer", func() {
-		msg := newMessage(textBlock("mid-conversation update"))
+		msg := newResponse(textBlock("mid-conversation update"))
 
 		stdout, stderr := captureStdoutStderr(func() {
 			PrintText(msg, false, true)
@@ -108,7 +97,7 @@ var _ = Describe("PrintText", func() {
 	})
 
 	It("Should mark thinking with a bubble on stderr while the answer stays on stdout", func() {
-		msg := newMessage(
+		msg := newResponse(
 			thinkingBlock("weighing the options"),
 			textBlock("the answer"),
 		)
@@ -123,7 +112,7 @@ var _ = Describe("PrintText", func() {
 	})
 
 	It("Should strip terminal escapes the model emits so a style cannot bleed past the answer", func() {
-		msg := newMessage(textBlock("safe \x1b[31mred-injection\x1b[0m tail"))
+		msg := newResponse(textBlock("safe \x1b[31mred-injection\x1b[0m tail"))
 
 		stdout, _ := captureStdoutStderr(func() {
 			PrintText(msg, true, true)
@@ -134,7 +123,7 @@ var _ = Describe("PrintText", func() {
 	})
 
 	It("Should strip terminal escapes from thinking so an injected style cannot bleed on stderr", func() {
-		msg := newMessage(
+		msg := newResponse(
 			thinkingBlock("mulling \x1b[32mgreen\x1b[0m over it"),
 			textBlock("answer"),
 		)
@@ -148,7 +137,7 @@ var _ = Describe("PrintText", func() {
 	})
 
 	It("Should skip empty thinking blocks so no stray bubble is shown", func() {
-		msg := newMessage(
+		msg := newResponse(
 			thinkingBlock(""),
 			textBlock("answer"),
 		)
@@ -162,7 +151,7 @@ var _ = Describe("PrintText", func() {
 	})
 
 	It("Should concatenate text blocks so markdown spanning blocks is not split", func() {
-		msg := newMessage(
+		msg := newResponse(
 			textBlock("| a | b |\n"),
 			textBlock("|---|---|\n"),
 			textBlock("| 1 | 2 |\n"),
@@ -177,7 +166,7 @@ var _ = Describe("PrintText", func() {
 	})
 
 	It("Should emit nothing for a turn carrying neither text nor thinking", func() {
-		msg := newMessage(toolUseBlock("foo"))
+		msg := newResponse(toolUseBlock("foo"))
 
 		stdout, stderr := captureStdoutStderr(func() {
 			PrintText(msg, false, true)

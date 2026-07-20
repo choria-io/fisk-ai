@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 )
 
@@ -114,14 +114,14 @@ type confirmDeniedOutcome struct {
 	Reason string `json:"reason,omitempty"`
 }
 
-// ConfirmDeniedResult builds the tool_result content block for a confirm-tagged
-// command the gate did not permit. It is a non-error result so the model treats
-// the refusal as authoritative rather than as a failure to work around.
-func ConfirmDeniedResult(useID, reason string) anthropic.ContentBlockParamUnion {
+// ConfirmDeniedResult builds the tool_result for a confirm-tagged command the gate
+// did not permit. It is a non-error result so the model treats the refusal as
+// authoritative rather than as a failure to work around.
+func ConfirmDeniedResult(useID, reason string) llm.ToolResultBlock {
 	data, err := json.Marshal(confirmDeniedOutcome{Reason: reason})
 	if err != nil {
-		return anthropic.NewToolResultBlock(useID, `{"allowed":false}`, false)
+		return llm.ToolResultBlock{ToolUseID: useID, Content: `{"allowed":false}`}
 	}
 
-	return anthropic.NewToolResultBlock(useID, string(data), false)
+	return llm.ToolResultBlock{ToolUseID: useID, Content: string(data)}
 }

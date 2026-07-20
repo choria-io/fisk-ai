@@ -16,9 +16,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anthropics/anthropic-sdk-go/option"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/choria-io/fisk-ai/internal/llm"
 )
 
 // readTrace reads a JSON-lines trace file back into events.
@@ -53,7 +54,7 @@ func newTraceReq(bodyJSON string) *http.Request {
 }
 
 // okNext returns a middleware terminator yielding a fixed response.
-func okNext(status int, body string) option.MiddlewareNext {
+func okNext(status int, body string) llm.MiddlewareNext {
 	return func(_ *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: status,

@@ -26,7 +26,7 @@
         },
         "message": {
           "type": "object",
-          "description": "The assistant turn stored verbatim as the provider represents it (anthropic MessageParam). Opaque here so provider block shapes, including thinking signatures and server-side tool blocks, are preserved without this schema constraining them."
+          "description": "The assistant turn in the provider-neutral llm.Message model (role and a content block list). Opaque here so provider-specific blocks, including thinking signatures and server-side tool blocks carried as neutral provider blocks, are preserved without this schema constraining them."
         },
         "stop_reason": {
           "type": "string"

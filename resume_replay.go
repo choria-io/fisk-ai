@@ -13,11 +13,11 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 	"golang.org/x/term"
 
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/tui"
 	"github.com/choria-io/fisk-ai/internal/util"
@@ -39,9 +39,9 @@ func printResumeTranscript(w io.Writer, rs *runstate.RunState, byName map[string
 			if prompt != "" {
 				fmt.Fprintf(w, "\n> %s\n", prompt)
 			}
-		case msg.Role == anthropic.MessageParamRoleAssistant:
+		case msg.Role == llm.RoleAssistant:
 			printAssistantTurn(w, msg, byName, noColor)
-		case msg.Role == anthropic.MessageParamRoleUser:
+		case msg.Role == llm.RoleUser:
 			// An interior user message is a chat follow-up: show its text as a prompt.
 			// Its tool_result blocks (if it also carries any) are the prior turn's results,
 			// not shown in this narration view, matching the live run's stderr output.
@@ -62,7 +62,7 @@ func printResumeTranscript(w io.Writer, rs *runstate.RunState, byName map[string
 
 // printAssistantTurn renders one assistant turn's narration and the tools it
 // called, mirroring the live run's stderr output.
-func printAssistantTurn(w io.Writer, msg anthropic.MessageParam, byName map[string]*fisk.FiskCommandTool, noColor bool) {
+func printAssistantTurn(w io.Writer, msg llm.Message, byName map[string]*fisk.FiskCommandTool, noColor bool) {
 	text := messageText(msg)
 	if text != "" {
 		fmt.Fprintln(w)
@@ -70,8 +70,8 @@ func printAssistantTurn(w io.Writer, msg anthropic.MessageParam, byName map[stri
 	}
 
 	for _, block := range msg.Content {
-		if block.OfToolUse != nil {
-			fmt.Fprintf(w, "-> %s\n", toolCallDisplay(byName, block.OfToolUse))
+		if block.ToolUse != nil {
+			fmt.Fprintf(w, "-> %s\n", toolCallDisplay(byName, block.ToolUse))
 		}
 	}
 }
@@ -80,9 +80,9 @@ func printAssistantTurn(w io.Writer, msg anthropic.MessageParam, byName map[stri
 // full resolved command line when the tool is known, so the resume transcript
 // reads identically to interactive output. It falls back to the raw name and JSON
 // arguments for a tool not in the registry (removed, built-in or remote).
-func toolCallDisplay(byName map[string]*fisk.FiskCommandTool, use *anthropic.ToolUseBlockParam) string {
-	input, err := json.Marshal(use.Input)
-	if err != nil {
+func toolCallDisplay(byName map[string]*fisk.FiskCommandTool, use *llm.ToolUseBlock) string {
+	input := use.Input
+	if len(input) == 0 {
 		input = []byte("<unrenderable input>")
 	}
 
@@ -102,7 +102,7 @@ func dumpTranscript(w io.Writer, rs *runstate.RunState, noColor, toolOutput bool
 		switch {
 		case i == 0:
 			fmt.Fprintf(w, "> %s\n", messageText(msg))
-		case msg.Role == anthropic.MessageParamRoleAssistant:
+		case msg.Role == llm.RoleAssistant:
 			dumpAssistant(w, msg, noColor)
 		default:
 			// An interior user message carries a chat follow-up's text and/or the prior
@@ -112,7 +112,7 @@ func dumpTranscript(w io.Writer, rs *runstate.RunState, noColor, toolOutput bool
 				fmt.Fprintf(w, "\n> %s\n", text)
 			}
 			if toolOutput {
-				dumpToolResults(w, msg.Content)
+				dumpToolResults(w, toolResults(msg.Content))
 			}
 		}
 	}
@@ -125,10 +125,10 @@ func dumpTranscript(w io.Writer, rs *runstate.RunState, noColor, toolOutput bool
 	}
 }
 
-func dumpAssistant(w io.Writer, msg anthropic.MessageParam, noColor bool) {
+func dumpAssistant(w io.Writer, msg llm.Message, noColor bool) {
 	for _, block := range msg.Content {
-		if block.OfThinking != nil && block.OfThinking.Thinking != "" {
-			fmt.Fprintf(w, "\n[thinking]\n%s\n", util.SanitizeForDisplay(block.OfThinking.Thinking))
+		if block.Thinking != nil && block.Thinking.Text != "" {
+			fmt.Fprintf(w, "\n[thinking]\n%s\n", util.SanitizeForDisplay(block.Thinking.Text))
 		}
 	}
 
@@ -139,10 +139,10 @@ func dumpAssistant(w io.Writer, msg anthropic.MessageParam, noColor bool) {
 	}
 
 	for _, block := range msg.Content {
-		if block.OfToolUse == nil {
+		if block.ToolUse == nil {
 			continue
 		}
-		full, short := toolCallDump(block.OfToolUse)
+		full, short := toolCallDump(block.ToolUse)
 		fmt.Fprintf(w, "-> %s\n", fitToolCall(full, short))
 	}
 }
@@ -201,28 +201,14 @@ func stdoutWidth() (int, bool) {
 	return width, true
 }
 
-func dumpToolResults(w io.Writer, blocks []anthropic.ContentBlockParamUnion) {
-	for _, block := range blocks {
-		if block.OfToolResult == nil {
-			continue
-		}
+func dumpToolResults(w io.Writer, results []llm.ToolResultBlock) {
+	for _, res := range results {
 		tag := ""
-		if block.OfToolResult.IsError.Or(false) {
+		if res.IsError {
 			tag = " (error)"
 		}
-		fmt.Fprintf(w, "<- [%s]%s %s\n", block.OfToolResult.ToolUseID, tag, util.SanitizeForDisplay(toolResultText(block.OfToolResult)))
+		fmt.Fprintf(w, "<- [%s]%s %s\n", res.ToolUseID, tag, util.SanitizeForDisplay(res.Content))
 	}
-}
-
-func toolResultText(res *anthropic.ToolResultBlockParam) string {
-	var out strings.Builder
-	for _, c := range res.Content {
-		if c.OfText != nil {
-			out.WriteString(c.OfText.Text)
-		}
-	}
-
-	return out.String()
 }
 
 // transcriptLines flattens a saved session into the structured lines the
@@ -240,7 +226,7 @@ func transcriptLines(rs *runstate.RunState, toolOutput bool) []tui.Line {
 	results := map[string]tui.Line{}
 	if toolOutput {
 		for _, msg := range rs.Messages {
-			collectToolResults(results, msg.Content)
+			collectToolResults(results, toolResults(msg.Content))
 		}
 		if rs.Pending != nil {
 			collectToolResults(results, rs.Pending.Results)
@@ -253,9 +239,9 @@ func transcriptLines(rs *runstate.RunState, toolOutput bool) []tui.Line {
 		switch {
 		case i == 0:
 			out = appendLine(out, tui.LinePrompt, messageText(msg))
-		case msg.Role == anthropic.MessageParamRoleAssistant:
+		case msg.Role == llm.RoleAssistant:
 			out = append(out, assistantLines(msg, results)...)
-		case msg.Role == anthropic.MessageParamRoleUser:
+		case msg.Role == llm.RoleUser:
 			// An interior user message is a chat follow-up: show its text as a prompt line.
 			// Any tool_result blocks it also carries are the prior turn's results, already
 			// paired with the assistant's calls above through the results map, so only the
@@ -276,24 +262,24 @@ func transcriptLines(rs *runstate.RunState, toolOutput bool) []tui.Line {
 // tool_use id in results, so a call and its output stay together as they do live. A
 // call with no matching result -- an unanswered tool in a suspended turn -- shows on
 // its own. results is empty when tool output is not being shown, so only calls emit.
-func assistantLines(msg anthropic.MessageParam, results map[string]tui.Line) []tui.Line {
+func assistantLines(msg llm.Message, results map[string]tui.Line) []tui.Line {
 	var out []tui.Line
 
 	for _, block := range msg.Content {
-		if block.OfThinking != nil && block.OfThinking.Thinking != "" {
-			out = appendLine(out, tui.LineThinking, block.OfThinking.Thinking)
+		if block.Thinking != nil && block.Thinking.Text != "" {
+			out = appendLine(out, tui.LineThinking, block.Thinking.Text)
 		}
 	}
 
 	out = appendLine(out, tui.LineNarration, messageText(msg))
 
 	for _, block := range msg.Content {
-		if block.OfToolUse == nil {
+		if block.ToolUse == nil {
 			continue
 		}
-		full, short := toolCallDump(block.OfToolUse)
+		full, short := toolCallDump(block.ToolUse)
 		out = append(out, tui.Line{Kind: tui.LineToolCall, Text: full, Short: short})
-		if res, ok := results[block.OfToolUse.ID]; ok {
+		if res, ok := results[block.ToolUse.ID]; ok {
 			out = append(out, res)
 		}
 	}
@@ -305,12 +291,9 @@ func assistantLines(msg anthropic.MessageParam, results map[string]tui.Line) []t
 // as the viewer lines they will render to, so each call can later be paired with its
 // result. The internal tool_use id that the text dump carries is not shown: it is
 // debug noise in the operator's viewport and does not appear on live results.
-func collectToolResults(into map[string]tui.Line, blocks []anthropic.ContentBlockParamUnion) {
-	for _, block := range blocks {
-		if block.OfToolResult == nil {
-			continue
-		}
-		into[block.OfToolResult.ToolUseID] = toolResultLine(toolResultText(block.OfToolResult), block.OfToolResult.IsError.Or(false))
+func collectToolResults(into map[string]tui.Line, results []llm.ToolResultBlock) {
+	for _, res := range results {
+		into[res.ToolUseID] = toolResultLine(res.Content, res.IsError)
 	}
 }
 
@@ -379,9 +362,9 @@ func commandResultOutput(output string) (string, bool) {
 // form with long string values elided; a width-aware viewer shows the full form when
 // it fits a row and falls back to the short one otherwise, matching what the live
 // view does for a resolved command line.
-func toolCallDump(use *anthropic.ToolUseBlockParam) (full, short string) {
-	input, err := json.Marshal(use.Input)
-	if err != nil {
+func toolCallDump(use *llm.ToolUseBlock) (full, short string) {
+	input := use.Input
+	if len(input) == 0 {
 		s := fmt.Sprintf("%s %s", use.Name, "<unrenderable input>")
 		return s, s
 	}
@@ -454,13 +437,24 @@ func appendLine(out []tui.Line, kind tui.LineKind, text string) []tui.Line {
 }
 
 // messageText concatenates the text blocks of a message.
-func messageText(msg anthropic.MessageParam) string {
+func messageText(msg llm.Message) string {
 	var text strings.Builder
 	for _, block := range msg.Content {
-		if block.OfText != nil {
-			text.WriteString(block.OfText.Text)
+		if block.Text != nil {
+			text.WriteString(block.Text.Text)
 		}
 	}
 
 	return text.String()
+}
+
+// toolResults extracts the tool_result blocks from a message's content, in order.
+func toolResults(content []llm.ContentBlock) []llm.ToolResultBlock {
+	var out []llm.ToolResultBlock
+	for _, block := range content {
+		if block.ToolResult != nil {
+			out = append(out, *block.ToolResult)
+		}
+	}
+	return out
 }

@@ -54,3 +54,4 @@
 - Change public APIs outside the scope of the requested task.
 - Modify `ABTaskFile`, `Dockerfile.goreleaser`, or CI configuration.
 - Run destructive git operations (force-push, reset --hard, branch -D) or skip hooks.
+- Change any git configuration

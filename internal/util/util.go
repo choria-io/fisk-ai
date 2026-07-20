@@ -13,11 +13,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/charmbracelet/glamour"
 	"github.com/muesli/termenv"
 	"golang.org/x/term"
+
+	"github.com/choria-io/fisk-ai/internal/llm"
 )
 
 // PrintText renders an assistant turn for display, routing by block type rather
@@ -35,14 +35,13 @@ import (
 // piped result. Either way the turn's text blocks are concatenated and rendered
 // once, so markdown spanning several blocks (a table, a fenced code block) is not
 // split across separate renders.
-func PrintText(resp *anthropic.Message, terminal, noColor bool) {
+func PrintText(resp llm.Response, terminal, noColor bool) {
 	for _, block := range resp.Content {
-		thinking, ok := block.AsAny().(anthropic.ThinkingBlock)
-		if !ok || thinking.Thinking == "" {
+		if block.Thinking == nil || block.Thinking.Text == "" {
 			continue
 		}
 
-		for _, line := range strings.Split(SanitizeForDisplay(thinking.Thinking), "\n") {
+		for _, line := range strings.Split(SanitizeForDisplay(block.Thinking.Text), "\n") {
 			if line == "" {
 				fmt.Fprintln(os.Stderr)
 				continue
@@ -53,11 +52,10 @@ func PrintText(resp *anthropic.Message, terminal, noColor bool) {
 
 	var answer strings.Builder
 	for _, block := range resp.Content {
-		text, ok := block.AsAny().(anthropic.TextBlock)
-		if !ok {
+		if block.Text == nil {
 			continue
 		}
-		answer.WriteString(text.Text)
+		answer.WriteString(block.Text.Text)
 	}
 
 	if answer.Len() == 0 {
@@ -237,8 +235,8 @@ func DumpJSONBody(out io.Writer, raw []byte) {
 // The sink is injected so a caller can direct the dump to a file rather than stderr,
 // letting debugging coexist with the full-screen UI whose alt-screen stderr would
 // otherwise be corrupted.
-func HttpDebugMiddleware(out io.Writer) option.Middleware {
-	return func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+func HttpDebugMiddleware(out io.Writer) llm.Middleware {
+	return func(req *http.Request, next llm.MiddlewareNext) (*http.Response, error) {
 		fmt.Fprintf(out, "\n=== HTTP request: %s %s ===\n", req.Method, req.URL)
 		if req.GetBody != nil {
 			body, err := req.GetBody()

@@ -10,13 +10,13 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/choria-io/fisk-ai/internal/util"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/choria-io/fisk-ai/config"
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
+	"github.com/choria-io/fisk-ai/internal/util"
 )
 
 var _ = Describe("Built-in tools", func() {
@@ -64,9 +64,7 @@ var _ = Describe("Built-in tools", func() {
 
 		It("Should never defer the built-in tools", func() {
 			for _, tool := range []*BuiltinTool{askHumanConfirmTool(), askHumanSelectTool(), askHumanInputTool()} {
-				param := tool.ToolParam(false)
-				Expect(param.OfTool).NotTo(BeNil())
-				Expect(param.OfTool.DeferLoading.Value).To(BeFalse())
+				Expect(tool.Definition(false).DeferLoading).To(BeFalse())
 			}
 		})
 	})
@@ -299,18 +297,13 @@ var _ = Describe("Built-in tools", func() {
 	})
 
 	Describe("ExecuteBuiltinUse", func() {
-		resultBlock := func(block anthropic.ContentBlockParamUnion) (text string, isError bool) {
-			GinkgoHelper()
-			Expect(block.OfToolResult).NotTo(BeNil())
-			res := block.OfToolResult
-			Expect(res.Content).To(HaveLen(1))
-			Expect(res.Content[0].OfText).NotTo(BeNil())
-			return res.Content[0].OfText.Text, res.IsError.Value
+		resultBlock := func(block llm.ToolResultBlock) (text string, isError bool) {
+			return block.Content, block.IsError
 		}
 
 		It("Should return a declined confirmation as a normal result, not an error", func() {
 			prompter.confirmFn = func(string) (bool, error) { return false, nil }
-			use := anthropic.ToolUseBlock{ID: "tu_1", Name: "ask_human_confirm", Input: json.RawMessage(`{"question":"Proceed?"}`)}
+			use := llm.ToolUseBlock{ID: "tu_1", Name: "ask_human_confirm", Input: json.RawMessage(`{"question":"Proceed?"}`)}
 
 			text, isError := resultBlock(askHumanConfirmTool().ExecuteUse(context.Background(), use, toolkit.ExecDeps{Prompter: prompter}))
 			Expect(isError).To(BeFalse())
@@ -318,7 +311,7 @@ var _ = Describe("Built-in tools", func() {
 		})
 
 		It("Should return malformed input as an error result", func() {
-			use := anthropic.ToolUseBlock{ID: "tu_2", Name: "ask_human_confirm", Input: json.RawMessage(`{"question":`)}
+			use := llm.ToolUseBlock{ID: "tu_2", Name: "ask_human_confirm", Input: json.RawMessage(`{"question":`)}
 
 			text, isError := resultBlock(askHumanConfirmTool().ExecuteUse(context.Background(), use, toolkit.ExecDeps{Prompter: prompter}))
 			Expect(isError).To(BeTrue())

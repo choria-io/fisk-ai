@@ -17,12 +17,34 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/choria-io/fisk-ai/config"
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 )
 
 func TestFisk(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Toolkit/Fisk")
+}
+
+// fakeCredEnvVar is the sentinel credential variable the fake provider below
+// declares, so the credential-strip test can prove the mechanism without linking a
+// real provider or duplicating its list (the authoritative per-provider list is
+// asserted in that provider's own package).
+const fakeCredEnvVar = "FISK_FAKE_PROVIDER_SECRET"
+
+type fakeProvider struct{}
+
+func (fakeProvider) Call(context.Context, llm.Request) (*llm.Response, error) { return nil, nil }
+func (fakeProvider) Capabilities() llm.Caps                                   { return llm.Caps{} }
+
+// init registers a fake provider so llm.CredentialEnvNames is non-empty in this
+// test binary; commandEnv strips whatever a linked provider declared, and this
+// package links none of the real ones. It runs before any spec, so the strip is
+// never computed and cached empty.
+func init() {
+	llm.Register("fisktest-fake", func(llm.Config) (llm.Provider, error) {
+		return fakeProvider{}, nil
+	}, []string{fakeCredEnvVar})
 }
 
 // writeExecutable writes body to an executable file in a temp dir and returns its
@@ -587,26 +609,31 @@ var _ = Describe("Command execution", func() {
 		Expect(result.Output).To(Equal("LLMFORMAT=1\n"))
 	})
 
-	It("Should strip every agent credential variable from the command environment", func() {
-		for _, name := range []string{
-			"ANTHROPIC_API_KEY",
-			"ANTHROPIC_AUTH_TOKEN",
-			"ANTHROPIC_IDENTITY_TOKEN",
-			"ANTHROPIC_WEBHOOK_SIGNING_KEY",
-			"ANTHROPIC_CUSTOM_HEADERS",
-		} {
-			GinkgoT().Setenv(name, "super-secret")
-		}
+	It("Should strip a linked provider's declared credential variables", func() {
+		// Canary: an empty union means the strip is vacuous, so fail loudly here
+		// rather than let the assertion below pass because nothing was registered.
+		Expect(llm.CredentialEnvNames()).To(ContainElement(fakeCredEnvVar))
+
+		GinkgoT().Setenv(fakeCredEnvVar, "super-secret")
 		tool := doTool(writeExecutable("#!/bin/sh\n" +
-			"printf 'ANTHROPIC_API_KEY=[%s]\\n' \"$ANTHROPIC_API_KEY\"\n" +
-			"printf 'ANTHROPIC_AUTH_TOKEN=[%s]\\n' \"$ANTHROPIC_AUTH_TOKEN\"\n" +
-			"printf 'ANTHROPIC_IDENTITY_TOKEN=[%s]\\n' \"$ANTHROPIC_IDENTITY_TOKEN\"\n" +
-			"printf 'ANTHROPIC_WEBHOOK_SIGNING_KEY=[%s]\\n' \"$ANTHROPIC_WEBHOOK_SIGNING_KEY\"\n" +
-			"printf 'ANTHROPIC_CUSTOM_HEADERS=[%s]\\n' \"$ANTHROPIC_CUSTOM_HEADERS\"\n"))
+			"printf '" + fakeCredEnvVar + "=[%s]\\n' \"$" + fakeCredEnvVar + "\"\n"))
 
 		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`))
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.Output).To(Equal("ANTHROPIC_API_KEY=[]\nANTHROPIC_AUTH_TOKEN=[]\nANTHROPIC_IDENTITY_TOKEN=[]\nANTHROPIC_WEBHOOK_SIGNING_KEY=[]\nANTHROPIC_CUSTOM_HEADERS=[]\n"))
+		Expect(result.Output).To(Equal(fakeCredEnvVar + "=[]\n"))
+	})
+
+	It("Should strip operator-named credential variables carried on the tool", func() {
+		GinkgoT().Setenv("MY_EMBED_KEY", "super-secret")
+		GinkgoT().Setenv("MY_OTHER_VAR", "keep-me")
+		tool := doTool(writeExecutable("#!/bin/sh\n" +
+			"printf 'MY_EMBED_KEY=[%s]\\n' \"$MY_EMBED_KEY\"\n" +
+			"printf 'MY_OTHER_VAR=[%s]\\n' \"$MY_OTHER_VAR\"\n"))
+		tool.SensitiveEnvVars = []string{"MY_EMBED_KEY"}
+
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Output).To(Equal("MY_EMBED_KEY=[]\nMY_OTHER_VAR=[keep-me]\n"))
 	})
 
 	It("Should preserve non-credential environment variables", func() {

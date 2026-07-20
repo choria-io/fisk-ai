@@ -20,8 +20,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
 	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
@@ -33,6 +31,10 @@ import (
 	// transport today.
 	_ "github.com/choria-io/fisk-ai/internal/a2a/nats"
 	"github.com/choria-io/fisk-ai/internal/conns"
+	"github.com/choria-io/fisk-ai/internal/llm"
+	// Link the anthropic provider in so it registers itself; llm.NewProvider resolves
+	// the configured provider from the registry, and this is the sole provider today.
+	_ "github.com/choria-io/fisk-ai/internal/llm/anthropic"
 	"github.com/choria-io/fisk-ai/internal/memory"
 	// Link the file memory backend in so it registers itself; memory.New resolves
 	// the configured backend from the registry, and this is the sole backend today.
@@ -57,6 +59,39 @@ const defaultMaxOutputTokens = 8192
 // this per-response limit. It stays within the non-streaming ceiling that keeps
 // responses clear of SDK HTTP timeouts.
 const thinkingMaxOutputTokens = 16384
+
+// resolveMaxOutputTokens picks the per-call output cap. An explicit
+// llm.budget.max_output_tokens wins so an operator can fit an endpoint whose
+// per-response limit is below the default; otherwise the built-in default is used,
+// raised when thinking is on so the reasoning summary and the answer both fit.
+func resolveMaxOutputTokens(cfg *config.Config, thinking bool) int64 {
+	if n := cfg.LLM.Budget.MaxOutputTokens; n > 0 {
+		return n
+	}
+	if thinking {
+		return thinkingMaxOutputTokens
+	}
+	return defaultMaxOutputTokens
+}
+
+// toolSearchDegradation returns the advisory to raise when totalTools crosses the
+// tool-search threshold but tool search cannot run, so every tool is sent to the
+// model directly. It returns nil when there is nothing to warn about (tool search is
+// available, or the set is small enough to send directly anyway). The remedy differs
+// by cause, so the kind names it: the provider cannot do tool search, or the operator
+// disabled it with no_tool_search.
+func toolSearchDegradation(totalTools int, caps llm.Caps, toolSearchAllowed bool) *Warning {
+	if toolSearchAllowed || totalTools < util.ToolSearchThreshold {
+		return nil
+	}
+
+	kind := WarnToolSearchDisabled
+	if !caps.SupportsToolSearch {
+		kind = WarnToolSearchUnsupported
+	}
+
+	return &Warning{Kind: kind, Count: totalTools}
+}
 
 // resumeReminder is appended to the system prompt of a resumed run so the model
 // re-verifies external state before acting on results captured before the
@@ -259,27 +294,6 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 		return res, fmt.Errorf("no tools available after filtering; check include/exclude in %q", opts.ConfigFile)
 	}
 
-	// Large tool sets are deferred and discovered via the tool search tool; small
-	// ones are sent directly. Deferral is decided over the combined local and
-	// remote set. Built-in tools are appended after, never deferred.
-	deferrable := make([]toolkit.Tool, 0, len(tools)+len(remoteTools))
-	for _, t := range tools {
-		deferrable = append(deferrable, t)
-	}
-	for _, rt := range remoteTools {
-		deferrable = append(deferrable, rt)
-	}
-	toolParams := util.BuildToolParams(deferrable, len(builtins)+len(memBuiltins)+len(ragBuiltins))
-	for _, b := range builtins {
-		toolParams = append(toolParams, b.ToolParam(false))
-	}
-	for _, b := range memBuiltins {
-		toolParams = append(toolParams, b.ToolParam(false))
-	}
-	for _, b := range ragBuiltins {
-		toolParams = append(toolParams, b.ToolParam(false))
-	}
-
 	// The confirm gate enforces confirmation tags: a tool carrying ai:confirm (always
 	// on) or any tag listed in confirm_tags must be approved by the operator before
 	// each run, with an "allow for the session" answer remembered for the rest of the
@@ -323,12 +337,18 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	stats := &util.RunStats{Start: time.Now(), Model: cfg.LLM.Model}
 	res.Stats = stats
 
-	clientOpts := []option.RequestOption{option.WithAPIKey(opts.APIKey)}
 	if opts.BaseURL != "" {
-		clientOpts = append(clientOpts, option.WithBaseURL(opts.BaseURL))
+		if err := util.ValidateBaseURL("--base-url / ANTHROPIC_BASE_URL", opts.BaseURL); err != nil {
+			return res, err
+		}
 	}
+
+	// The provider owns the wire call. Its cross-cutting request hooks (the HTTP debug
+	// dump and the request tracer) are assembled here, where their lifecycle lives: the
+	// tracer's summary and close are deferred against this run's stats and exit paths.
+	var middlewares []llm.Middleware
 	if opts.HTTPDebugOut != nil {
-		clientOpts = append(clientOpts, option.WithMiddleware(util.HttpDebugMiddleware(opts.HTTPDebugOut)))
+		middlewares = append(middlewares, util.HttpDebugMiddleware(opts.HTTPDebugOut))
 	}
 
 	if opts.TraceFile != "" {
@@ -346,12 +366,58 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 		defer tracer.RecordSummary(stats)
 
 		tracer.RecordSession(cfg.LLM.Model, opts.ConfigFile, util.Version())
-		clientOpts = append(clientOpts, option.WithMiddleware(tracer.Middleware))
+		middlewares = append(middlewares, tracer.Middleware)
 	}
 
-	client := anthropic.NewClient(clientOpts...)
-	messages := []anthropic.MessageParam{
-		anthropic.NewUserMessage(anthropic.NewTextBlock(strings.Join(prompt, " "))),
+	// The provider is resolved from the registry by name rather than constructed
+	// directly, so a second backend is linked in the same way the a2a, memory and
+	// session backends are. The name comes from llm.provider, which defaults to
+	// anthropic, the only provider linked in today.
+	provider, err := llm.NewProvider(cfg.LLMProvider(), llm.Config{
+		APIKey:      opts.APIKey,
+		BaseURL:     opts.BaseURL,
+		Timeout:     cfg.LLM.Budget.CallTimeoutParsed,
+		Middlewares: middlewares,
+	})
+	if err != nil {
+		return res, err
+	}
+
+	// Large tool sets are deferred and discovered via the tool search tool; small
+	// ones are sent directly. Deferral is decided over the combined local and remote
+	// set. Built-in tools are appended after, never deferred. Deferral is offered only
+	// when the resolved provider supports tool search and the operator has not disabled
+	// it, so a backend that cannot honor deferred loading always gets every tool direct.
+	caps := provider.Capabilities()
+	toolSearchAllowed := caps.SupportsToolSearch && cfg.ToolSearchEnabled()
+	deferrable := make([]toolkit.Tool, 0, len(tools)+len(remoteTools))
+	for _, t := range tools {
+		deferrable = append(deferrable, t)
+	}
+	for _, rt := range remoteTools {
+		deferrable = append(deferrable, rt)
+	}
+	toolDefs, toolSearch := util.BuildToolParams(deferrable, len(builtins)+len(memBuiltins)+len(ragBuiltins), toolSearchAllowed)
+	for _, b := range builtins {
+		toolDefs = append(toolDefs, b.Definition(false))
+	}
+	for _, b := range memBuiltins {
+		toolDefs = append(toolDefs, b.Definition(false))
+	}
+	for _, b := range ragBuiltins {
+		toolDefs = append(toolDefs, b.Definition(false))
+	}
+
+	// A tool set that crosses the tool-search threshold but cannot use tool search is
+	// sent to the model in full every request, spending context the search tool exists
+	// to save. That is a silent degradation worth surfacing.
+	totalTools := len(deferrable) + len(builtins) + len(memBuiltins) + len(ragBuiltins)
+	if w := toolSearchDegradation(totalTools, caps, toolSearchAllowed); w != nil {
+		events.Warn(*w)
+	}
+
+	messages := []llm.Message{
+		{Role: llm.RoleUser, Content: []llm.ContentBlock{{Text: &llm.TextBlock{Text: strings.Join(prompt, " ")}}}},
 	}
 
 	maxIter := cfg.LLM.Budget.MaxIterations
@@ -362,31 +428,22 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	// a text-only turn, so without it the model tends to "ask the user" in prose and
 	// silently end the run instead of calling a tool. It is constant across
 	// iterations, so build it once.
-	system := []anthropic.TextBlockParam{{Text: cfg.SystemPrompt}}
+	system := []string{cfg.SystemPrompt}
 	if note := builtin.HITLSystemNote(builtins); note != "" {
-		system = append(system, anthropic.TextBlockParam{Text: note})
+		system = append(system, note)
 	}
 	if note := builtin.MemorySystemNote(cfg); note != "" {
-		system = append(system, anthropic.TextBlockParam{Text: note})
+		system = append(system, note)
 	}
 	if note := builtin.RAGSystemNote(cfg); note != "" {
-		system = append(system, anthropic.TextBlockParam{Text: note})
+		system = append(system, note)
 	}
 
-	// Thinking is requested only when enabled; the zero union omits it from the
-	// request, so the model and backend use their default behavior. Summarized
-	// display returns readable reasoning even on models that omit it by default
-	// (e.g. Opus 4.7/4.8). Both are constant across iterations, so build them once.
-	maxOutputTokens := int64(defaultMaxOutputTokens)
-	var thinking anthropic.ThinkingConfigParamUnion
-	if cfg.ThinkingEnabled() {
-		maxOutputTokens = thinkingMaxOutputTokens
-		thinking = anthropic.ThinkingConfigParamUnion{
-			OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{
-				Display: anthropic.ThinkingConfigAdaptiveDisplaySummarized,
-			},
-		}
-	}
+	// Thinking is requested only when enabled; the provider omits it otherwise so the
+	// model and backend use their default behavior. The per-call output cap is constant
+	// across iterations, so resolve it once.
+	thinking := cfg.ThinkingEnabled()
+	maxOutputTokens := resolveMaxOutputTokens(cfg, thinking)
 
 	checkpointing := opts.Checkpoint.Enabled || opts.Checkpoint.ResumeID != ""
 	interactive := opts.NextPrompt != nil
@@ -411,7 +468,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	)
 
 	if checkpointing {
-		fp, err := computeFingerprint(cfg, system, toolParams)
+		fp, err := computeFingerprint(cfg, provider.Capabilities().Provider, system, toolDefs)
 		if err != nil {
 			return res, err
 		}
@@ -442,6 +499,13 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 			}
 			if !rs.Interactive && interactive {
 				return res, fmt.Errorf("session %q was not started as a chat session and cannot be resumed as one", sessionID)
+			}
+			// Provider is a hard gate: a turn from another provider cannot be folded
+			// coherently, so --force (which is for configuration drift) must not cross
+			// it. Checked before the forceable drift so the message is unambiguous.
+			if rs.Fingerprint.Provider != fp.Provider {
+				return res, fmt.Errorf("cannot resume %q: it was started with provider %q but the current configuration uses %q; a run cannot change provider, and --force does not apply",
+					sessionID, rs.Fingerprint.Provider, fp.Provider)
 			}
 			if !rs.Fingerprint.Equal(fp) && !opts.Checkpoint.Force {
 				return res, fmt.Errorf("cannot resume %q, the configuration changed since it was saved:\n  %s\nre-run against the original configuration, or pass --force to continue with the current one",
@@ -475,7 +539,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 			resumeAtInputBoundary = rs.Interactive &&
 				rs.Pending == nil &&
 				endsOnAssistant(messages) &&
-				rs.LastStopReason != string(anthropic.StopReasonPauseTurn)
+				rs.LastStopReason != string(llm.StopPauseTurn)
 
 			stats.LlmCalls = rs.Counters.LlmCalls
 			stats.ToolCalls = rs.Counters.ToolCalls
@@ -489,7 +553,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 			// acting on possibly-stale results. Appended after the fingerprint was
 			// computed so it never perturbs the fingerprint comparison, and it is
 			// never persisted.
-			system = append(system, anthropic.TextBlockParam{Text: resumeReminder})
+			system = append(system, resumeReminder)
 
 			info.SessionID = sessionID
 			info.Resumed = true
@@ -563,7 +627,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 		if lerr != nil {
 			events.Warn(Warning{Kind: WarnMemoryIndex, Err: lerr})
 		} else {
-			system = append(system, anthropic.TextBlockParam{Text: builtin.MemoryIndexBlock(entries)})
+			system = append(system, builtin.MemoryIndexBlock(entries))
 		}
 	}
 
@@ -585,10 +649,11 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 
 	r := &runner{
 		cfg:             cfg,
-		client:          client,
+		provider:        provider,
 		stats:           stats,
 		system:          system,
-		toolParams:      toolParams,
+		toolDefs:        toolDefs,
+		toolSearch:      toolSearch,
 		thinking:        thinking,
 		maxOutputTokens: maxOutputTokens,
 		maxIter:         maxIter,
@@ -601,7 +666,6 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 		interactive:     interactive,
 		events:          events,
 		prompter:        prompter,
-		callLLM:         util.CallLLM,
 		messages:        messages,
 		journal:         journal,
 		seq:             seq,
@@ -642,9 +706,9 @@ func closeJournal(j runstate.Journal) {
 // endsOnAssistant reports whether the conversation's last message is an assistant
 // turn, which for an interactive session means it rests at an input boundary (the
 // operator's turn) rather than mid-flight awaiting the next LLM call.
-func endsOnAssistant(messages []anthropic.MessageParam) bool {
+func endsOnAssistant(messages []llm.Message) bool {
 	n := len(messages)
-	return n > 0 && messages[n-1].Role == anthropic.MessageParamRoleAssistant
+	return n > 0 && messages[n-1].Role == llm.RoleAssistant
 }
 
 // SessionInteractive reports whether a stored session was started as an interactive
@@ -670,7 +734,7 @@ func SessionInteractive(cfg *config.Config, id string) (bool, error) {
 func resumeHazards(rs *runstate.RunState) []Warning {
 	var out []Warning
 
-	if rs.Pending == nil && rs.LastStopReason == string(anthropic.StopReasonPauseTurn) {
+	if rs.Pending == nil && rs.LastStopReason == string(llm.StopPauseTurn) {
 		out = append(out, Warning{Kind: WarnResumePausedTurn})
 	}
 
@@ -679,13 +743,15 @@ func resumeHazards(rs *runstate.RunState) []Warning {
 
 // computeFingerprint captures the configuration a checkpointed run depends on, so
 // a resume against a changed model, prompt, tool set or budget is caught. The
-// system prompt is hashed, never stored.
-func computeFingerprint(cfg *config.Config, system []anthropic.TextBlockParam, toolParams []anthropic.ToolUnionParam) (runstate.Fingerprint, error) {
+// system prompt is hashed, never stored. providerID is the resolved provider's own
+// id (Capabilities().Provider), not the config selector, so the fingerprint records
+// the backend the journal was actually written against.
+func computeFingerprint(cfg *config.Config, providerID string, system []string, toolDefs []llm.ToolDef) (runstate.Fingerprint, error) {
 	sys, err := json.Marshal(system)
 	if err != nil {
 		return runstate.Fingerprint{}, fmt.Errorf("hashing system prompt: %w", err)
 	}
-	tools, err := json.Marshal(toolParams)
+	tools, err := json.Marshal(toolDefs)
 	if err != nil {
 		return runstate.Fingerprint{}, fmt.Errorf("hashing tool set: %w", err)
 	}
@@ -696,6 +762,7 @@ func computeFingerprint(cfg *config.Config, system []anthropic.TextBlockParam, t
 	}
 
 	return runstate.Fingerprint{
+		Provider:      providerID,
 		Model:         cfg.LLM.Model,
 		SystemHash:    runstate.HashHex(sys),
 		ToolsHash:     runstate.HashHex(tools),

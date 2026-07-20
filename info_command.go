@@ -11,6 +11,7 @@ import (
 
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
 	fisktool "github.com/choria-io/fisk-ai/internal/toolkit/fisk"
@@ -81,6 +82,8 @@ func infoAction(_ *fisk.ParseContext) error {
 
 	c := columns.New()
 	defer c.WriteTo(os.Stdout)
+
+	printModelSection(c, cfg)
 
 	tbl := table.NewTableWriter("")
 	tbl.AddHeaders("Tool", "Source", "Confirm", "Description", "Tags")
@@ -179,6 +182,50 @@ func infoAction(_ *fisk.ParseContext) error {
 	c.Printf("These tools can also be served over MCP with: {bold}fisk-ai mcp --config %s{/bold}", configFile)
 
 	return nil
+}
+
+// printModelSection shows the resolved model, provider, thinking state and how tool
+// search will behave, so an operator can confirm the backend and the feature gates
+// without starting a run. It is skipped for a config with no model (an MCP-only config
+// parsed in ModeMCP), which has no LLM run to describe.
+func printModelSection(c *columns.Document, cfg *config.Config) {
+	if cfg.LLM.Model == "" {
+		return
+	}
+
+	c.Section("Model", func(c *columns.Document) {
+		c.Item("Model", cfg.LLM.Model)
+		c.Item("Provider", cfg.LLMProvider())
+
+		thinking := "disabled"
+		if cfg.ThinkingEnabled() {
+			thinking = "enabled"
+		}
+		c.Item("Thinking", thinking)
+
+		c.Item("Tool search", toolSearchStatus(cfg))
+	})
+}
+
+// toolSearchStatus describes how server-side tool search will behave for a run of
+// cfg: disabled by the operator, unsupported by (or unknown to) the provider, or
+// enabled and used once the tool count crosses the threshold. It resolves the
+// provider only to read its capabilities, never to make a call, so it works offline
+// and with no credentials.
+func toolSearchStatus(cfg *config.Config) string {
+	if !cfg.ToolSearchEnabled() {
+		return "disabled (no_tool_search)"
+	}
+
+	provider, err := llm.NewProvider(cfg.LLMProvider(), llm.Config{})
+	if err != nil {
+		return fmt.Sprintf("unknown (provider %q is not available)", cfg.LLMProvider())
+	}
+	if !provider.Capabilities().SupportsToolSearch {
+		return fmt.Sprintf("unavailable (provider %q does not support it)", cfg.LLMProvider())
+	}
+
+	return fmt.Sprintf("enabled (used when %d or more tools are available)", util.ToolSearchThreshold)
 }
 
 // splitRemoteDescription separates a remote tool's advertised description into its

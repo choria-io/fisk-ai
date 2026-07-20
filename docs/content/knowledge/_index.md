@@ -348,7 +348,8 @@ at-rest encryption, so the posture matches the [memory](../agents/#memory) featu
   backups, or a stolen copy, so do not index secrets.
 * Retrieved chunks are framed as untrusted reference data and stripped of terminal control sequences before any TUI
   render, so indexed text cannot spoof the display or inject instructions.
-* Embeddings secrets are supplied by environment-variable name and never logged. A non-loopback embeddings `base_url`
-  must use `https`, and the request timeout is enforced.
+* Embeddings secrets are supplied by environment-variable name and never logged, and are stripped from the environment of
+  model-chosen command tools, so a tool cannot read the embeddings credential. A non-loopback embeddings `base_url` must
+  use `https`, and the request timeout is enforced.
 * Over MCP the allowlist is the only gate, and only the read-only `knowledge_search` is ever served; no index or write
   path is reachable over MCP.

@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/choria-io/fisk-ai/internal/llm"
 )
 
 // traceCtxKey is the context key under which the agent loop stashes the current
@@ -97,11 +97,12 @@ func NewTracer(path string) (*Tracer, error) {
 	return &Tracer{w: f}, nil
 }
 
-// Middleware records the request and its response (or error) as trace lines. It
-// matches the SDK middleware signature. Tracing never changes the call's outcome:
-// the request body is read non-destructively, the response body is buffered and
+// Middleware records the request and its response (or error) as trace lines. Its
+// http-shaped signature is an llm.Middleware, so the provider installs it without
+// the caller naming an SDK type. Tracing never changes the call's outcome: the
+// request body is read non-destructively, the response body is buffered and
 // restored, and a trace-side read failure is logged rather than propagated.
-func (t *Tracer) Middleware(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+func (t *Tracer) Middleware(req *http.Request, next llm.MiddlewareNext) (*http.Response, error) {
 	if t == nil {
 		return next(req)
 	}

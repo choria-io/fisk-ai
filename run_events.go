@@ -9,11 +9,11 @@ import (
 	"os"
 	"strings"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 	"golang.org/x/term"
 
 	"github.com/choria-io/fisk-ai/internal/agent"
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/tui"
@@ -64,8 +64,10 @@ func warningMessage(w agent.Warning) string {
 		return fmt.Sprintf("the previous turn failed: %v; send a follow-up to retry, or Ctrl-D to end", w.Err)
 	case agent.WarnMemoryIndex:
 		return fmt.Sprintf("reading memory for the start-of-run index failed: %v; continuing without it, the memory tools still work", w.Err)
-	case agent.WarnSessionRotate:
-		return fmt.Sprintf("starting a fresh session for the cleared context failed: %v; continuing in the current session", w.Err)
+	case agent.WarnToolSearchUnsupported:
+		return fmt.Sprintf("%d tools are available but the model backend does not support server-side tool search, so all are sent to the model directly and use more context each request; use a provider that supports tool search to defer them", w.Count)
+	case agent.WarnToolSearchDisabled:
+		return fmt.Sprintf("%d tools are available but tool search is disabled (no_tool_search), so all are sent to the model directly and use more context each request; unset no_tool_search to defer them behind the search tool", w.Count)
 	default:
 		return ""
 	}
@@ -149,8 +151,8 @@ func (c *cliEvents) ToolResult(t agent.ToolResultTrace) {
 	fmt.Fprintf(os.Stderr, "<-\n%s\n", toolResultLine(t.Output, t.IsError).Text)
 }
 
-func (c *cliEvents) Message(msg *anthropic.Message, terminal bool) {
-	util.PrintText(msg, terminal, c.noColor)
+func (c *cliEvents) Message(resp llm.Response, terminal bool) {
+	util.PrintText(resp, terminal, c.noColor)
 }
 
 // SessionRotated reports the previous session's resume command after a context reset

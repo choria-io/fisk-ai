@@ -179,18 +179,28 @@ func runAction(_ *fisk.ParseContext) error {
 const httpDebugFilename = "http-debug.log"
 
 // resolveHTTPDebugOut opens the http-debug dump file when --http-debug is set,
-// truncating any previous run's dump, and returns nil when it is not set. The caller
+// discarding any previous run's dump, and returns nil when it is not set. The caller
 // owns closing the returned writer.
+//
+// The file holds the full conversation, so it is created 0600. It is removed first
+// and then created exclusively: removing drops a symlink an attacker may have planted
+// at the fixed name (which O_TRUNC would otherwise follow and overwrite), and O_EXCL
+// fails rather than following one re-created in the race window.
 func resolveHTTPDebugOut() (io.Writer, error) {
 	if !httpDebug {
 		return nil, nil
 	}
 
-	f, err := os.Create(httpDebugFilename)
+	err := os.Remove(httpDebugFilename)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("opening http-debug file %q: %w", httpDebugFilename, err)
+	}
+
+	f, err := os.OpenFile(httpDebugFilename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("opening http-debug file %q: %w", httpDebugFilename, err)
 	}
-	fmt.Fprintf(os.Stderr, "Dumping Anthropic API request and response bodies to %s\n", httpDebugFilename)
+	fmt.Fprintf(os.Stderr, "Dumping Anthropic API request and response bodies to %s (contains the full conversation; file is created mode 0600, do not share it)\n", httpDebugFilename)
 
 	return f, nil
 }
@@ -327,6 +337,13 @@ func validateRunFlags() error {
 	}
 	if forceResume && resumeID == "" {
 		return fmt.Errorf("--force only applies when resuming")
+	}
+	// Validate at the CLI boundary so a bad base URL fails on a normal terminal,
+	// before the http-debug file is created or the full-screen UI is launched.
+	if baseURL != "" {
+		if err := util.ValidateBaseURL("--base-url / ANTHROPIC_BASE_URL", baseURL); err != nil {
+			return err
+		}
 	}
 
 	return nil

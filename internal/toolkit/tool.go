@@ -8,7 +8,7 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/internal/llm"
 )
 
 // ExecDeps carries the per-run dependencies a tool may need to run a model
@@ -33,15 +33,15 @@ type Tool interface {
 	Description() string
 	// InputSchema is the JSON schema advertised to the model.
 	InputSchema() map[string]any
-	// ToolParam renders the tool as an Anthropic tool definition. deferLoading asks
+	// Definition renders the tool as a provider-neutral definition. deferLoading asks
 	// for the tool to be hidden behind tool search; a kind may decline it (a
 	// built-in is never deferred, a tool tagged ai:no_defer opts out).
-	ToolParam(deferLoading bool) anthropic.ToolUnionParam
+	Definition(deferLoading bool) llm.ToolDef
 	// ExecuteUse runs the tool for a model tool_use block and returns the matching
-	// tool_result content block. A harness failure is reported as an error result;
-	// an outcome the model should reason about (including a non-zero exit) is a
-	// normal result, so the model sees every kind the same way.
-	ExecuteUse(ctx context.Context, use anthropic.ToolUseBlock, deps ExecDeps) anthropic.ContentBlockParamUnion
+	// tool result. A harness failure is reported as an error result; an outcome the
+	// model should reason about (including a non-zero exit) is a normal result, so
+	// the model sees every kind the same way.
+	ExecuteUse(ctx context.Context, use llm.ToolUseBlock, deps ExecDeps) llm.ToolResultBlock
 }
 
 // Confirmable is implemented by the tool kinds that can require operator

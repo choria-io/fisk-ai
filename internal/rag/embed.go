@@ -10,15 +10,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"unicode/utf8"
 
 	"github.com/choria-io/fisk-ai/config"
+	"github.com/choria-io/fisk-ai/internal/util"
 )
 
 // maxQueryChars caps the length of a single query sent to the embeddings server. A
@@ -90,7 +89,7 @@ func buildEmbedder(cfg *config.Config) (Embedder, error) {
 		return nil, fmt.Errorf("knowledge.embeddings.model is required when the embeddings block is present")
 	}
 
-	if err := validateEmbedURL(ec.BaseURL); err != nil {
+	if err := util.ValidateBaseURL("knowledge.embeddings.base_url", ec.BaseURL); err != nil {
 		return nil, err
 	}
 
@@ -107,39 +106,6 @@ func buildEmbedder(cfg *config.Config) (Embedder, error) {
 		docPrefix:   ec.DocumentPrefix,
 		client:      &http.Client{Timeout: ec.TimeoutParsed},
 	}, nil
-}
-
-// validateEmbedURL requires a well-formed http/https base_url and, for a
-// non-loopback host, https, so an embedding query (which carries the operator's
-// search text) is never sent in cleartext across a network.
-func validateEmbedURL(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("invalid knowledge.embeddings.base_url %q: %w", raw, err)
-	}
-	switch u.Scheme {
-	case "https":
-		return nil
-	case "http":
-		if !isLoopbackHost(u.Hostname()) {
-			return fmt.Errorf("knowledge.embeddings.base_url %q uses http to a non-loopback host; use https, or a loopback address (127.0.0.1, ::1, localhost) for a local server", raw)
-		}
-		return nil
-	default:
-		return fmt.Errorf("invalid knowledge.embeddings.base_url %q: scheme must be http or https", raw)
-	}
-}
-
-// isLoopbackHost reports whether host is a loopback address or the localhost name.
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-
-	return false
 }
 
 // openAIEmbedder talks to a local OpenAI-compatible /v1/embeddings endpoint. The

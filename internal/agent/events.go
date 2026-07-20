@@ -5,7 +5,7 @@
 package agent
 
 import (
-	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 
 	"github.com/choria-io/fisk-ai/internal/remotetools"
@@ -38,7 +38,7 @@ type Events interface {
 	ToolResult(ToolResultTrace)
 	// Message reports an assistant turn: intermediate narration or, when terminal,
 	// the final answer.
-	Message(msg *anthropic.Message, terminal bool)
+	Message(resp llm.Response, terminal bool)
 	// SessionRotated reports that a context reset started a fresh checkpoint session,
 	// leaving the previous one saved and resumable under prevID, so the caller can show
 	// the operator how to return to it.
@@ -87,6 +87,14 @@ const (
 	// carries the cause, e.g. the store failed to create the new journal). The reset is
 	// not applied; the turn runs on in the current session, which stays resumable.
 	WarnSessionRotate
+	// WarnToolSearchUnsupported: Count tools crossed the tool-search threshold but the
+	// active provider does not support server-side tool search, so every tool is sent
+	// to the model directly and uses more context on each request.
+	WarnToolSearchUnsupported
+	// WarnToolSearchDisabled: Count tools crossed the tool-search threshold but
+	// no_tool_search is set, so every tool is sent to the model directly and uses more
+	// context on each request.
+	WarnToolSearchDisabled
 )
 
 // Warning is a typed operator advisory. Kind selects which fields are meaningful;

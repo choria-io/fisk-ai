@@ -147,11 +147,11 @@ var _ = Describe("ConfirmGate", func() {
 	Describe("ConfirmDeniedResult", func() {
 		It("Should be a non-error tool_result carrying the reason", func() {
 			block := ConfirmDeniedResult("tool-1", "the operator declined")
-			Expect(block.OfToolResult).NotTo(BeNil())
-			Expect(block.OfToolResult.IsError.Value).To(BeFalse())
+			Expect(block.ToolUseID).To(Equal("tool-1"))
+			Expect(block.IsError).To(BeFalse())
 
 			var outcome confirmDeniedOutcome
-			Expect(json.Unmarshal([]byte(block.OfToolResult.Content[0].OfText.Text), &outcome)).To(Succeed())
+			Expect(json.Unmarshal([]byte(block.Content), &outcome)).To(Succeed())
 			Expect(outcome.Allowed).To(BeFalse())
 			Expect(outcome.Reason).To(Equal("the operator declined"))
 		})

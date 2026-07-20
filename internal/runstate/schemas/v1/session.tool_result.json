@@ -25,7 +25,7 @@
         },
         "result": {
           "type": "object",
-          "description": "The tool result content block stored verbatim as the provider represents it (anthropic ContentBlockParamUnion). Opaque here."
+          "description": "The tool result in the provider-neutral llm.ToolResultBlock model (tool_use_id, content, is_error). Opaque here."
         },
         "remote": {
           "type": "boolean",
