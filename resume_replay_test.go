@@ -6,9 +6,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 
-	"github.com/anthropics/anthropic-sdk-go"
-
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/tui"
 
@@ -16,24 +16,41 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+// userMsg builds a user turn carrying a single text block.
+func userMsg(text string) llm.Message {
+	return llm.Message{Role: llm.RoleUser, Content: []llm.ContentBlock{{Text: &llm.TextBlock{Text: text}}}}
+}
+
+// assistantMsg builds an assistant turn from the given content blocks.
+func assistantMsg(blocks ...llm.ContentBlock) llm.Message {
+	return llm.Message{Role: llm.RoleAssistant, Content: blocks}
+}
+
+// textBlk, useBlk and resultBlk build the neutral content blocks a turn carries.
+func textBlk(text string) llm.ContentBlock {
+	return llm.ContentBlock{Text: &llm.TextBlock{Text: text}}
+}
+
+func useBlk(id, name, input string) llm.ContentBlock {
+	return llm.ContentBlock{ToolUse: &llm.ToolUseBlock{ID: id, Name: name, Input: json.RawMessage(input)}}
+}
+
+func resultBlk(id, content string) llm.ContentBlock {
+	return llm.ContentBlock{ToolResult: &llm.ToolResultBlock{ToolUseID: id, Content: content}}
+}
+
 var _ = Describe("printResumeTranscript", func() {
 	It("replays the prompt, narration and tool calls, including the pending turn", func() {
 		rs := &runstate.RunState{
 			RunID:    "sess1",
 			Counters: runstate.Counters{LlmCalls: 2},
-			Messages: []anthropic.MessageParam{
-				anthropic.NewUserMessage(anthropic.NewTextBlock("deploy the thing")),
-				{Role: anthropic.MessageParamRoleAssistant, Content: []anthropic.ContentBlockParamUnion{
-					anthropic.NewTextBlock("checking the current state"),
-					anthropic.NewToolUseBlock("t1", map[string]any{}, "status"),
-				}},
-				anthropic.NewUserMessage(anthropic.NewToolResultBlock("t1", "ok", false)),
+			Messages: []llm.Message{
+				userMsg("deploy the thing"),
+				assistantMsg(textBlk("checking the current state"), useBlk("t1", "status", "{}")),
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{resultBlk("t1", "ok")}},
 			},
 			Pending: &runstate.PendingTurn{
-				Assistant: anthropic.MessageParam{Role: anthropic.MessageParamRoleAssistant, Content: []anthropic.ContentBlockParamUnion{
-					anthropic.NewTextBlock("now applying"),
-					anthropic.NewToolUseBlock("t2", map[string]any{}, "apply"),
-				}},
+				Assistant: assistantMsg(textBlk("now applying"), useBlk("t2", "apply", "{}")),
 			},
 		}
 
@@ -57,18 +74,14 @@ var _ = Describe("dumpTranscript", func() {
 	It("prints prompt, tool inputs and tool results including the pending turn", func() {
 		rs := &runstate.RunState{
 			RunID: "sess1",
-			Messages: []anthropic.MessageParam{
-				anthropic.NewUserMessage(anthropic.NewTextBlock("do work")),
-				{Role: anthropic.MessageParamRoleAssistant, Content: []anthropic.ContentBlockParamUnion{
-					anthropic.NewToolUseBlock("t1", map[string]any{"path": "/etc"}, "list"),
-				}},
-				anthropic.NewUserMessage(anthropic.NewToolResultBlock("t1", "file-a\nfile-b", false)),
+			Messages: []llm.Message{
+				userMsg("do work"),
+				assistantMsg(useBlk("t1", "list", `{"path":"/etc"}`)),
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{resultBlk("t1", "file-a\nfile-b")}},
 			},
 			Pending: &runstate.PendingTurn{
-				Assistant: anthropic.MessageParam{Role: anthropic.MessageParamRoleAssistant, Content: []anthropic.ContentBlockParamUnion{
-					anthropic.NewToolUseBlock("t2", map[string]any{}, "apply"),
-				}},
-				Results: []anthropic.ContentBlockParamUnion{anthropic.NewToolResultBlock("t2", "applied", false)},
+				Assistant: assistantMsg(useBlk("t2", "apply", "{}")),
+				Results:   []llm.ToolResultBlock{{ToolUseID: "t2", Content: "applied"}},
 			},
 		}
 
@@ -99,12 +112,10 @@ var _ = Describe("dumpTranscript", func() {
 	It("strips terminal escapes from tool result output so a raw escape cannot bleed on the terminal", func() {
 		rs := &runstate.RunState{
 			RunID: "sess2",
-			Messages: []anthropic.MessageParam{
-				anthropic.NewUserMessage(anthropic.NewTextBlock("do work")),
-				{Role: anthropic.MessageParamRoleAssistant, Content: []anthropic.ContentBlockParamUnion{
-					anthropic.NewToolUseBlock("t1", map[string]any{}, "run"),
-				}},
-				anthropic.NewUserMessage(anthropic.NewToolResultBlock("t1", "before \x1b[31mred\x1b[0m after", false)),
+			Messages: []llm.Message{
+				userMsg("do work"),
+				assistantMsg(useBlk("t1", "run", "{}")),
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{resultBlk("t1", "before \x1b[31mred\x1b[0m after")}},
 			},
 		}
 
@@ -120,16 +131,10 @@ var _ = Describe("dumpTranscript", func() {
 var _ = Describe("transcriptLines", func() {
 	rs := func() *runstate.RunState {
 		return &runstate.RunState{
-			Messages: []anthropic.MessageParam{
-				anthropic.NewUserMessage(anthropic.NewTextBlock("go")),
-				{Role: anthropic.MessageParamRoleAssistant, Content: []anthropic.ContentBlockParamUnion{
-					anthropic.NewToolUseBlock("a", map[string]any{}, "first"),
-					anthropic.NewToolUseBlock("b", map[string]any{}, "second"),
-				}},
-				anthropic.NewUserMessage(
-					anthropic.NewToolResultBlock("a", "res-a", false),
-					anthropic.NewToolResultBlock("b", "res-b", false),
-				),
+			Messages: []llm.Message{
+				userMsg("go"),
+				assistantMsg(useBlk("a", "first", "{}"), useBlk("b", "second", "{}")),
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{resultBlk("a", "res-a"), resultBlk("b", "res-b")}},
 			},
 		}
 	}
@@ -157,15 +162,10 @@ var _ = Describe("transcriptLines", func() {
 		// The post-error fold shape: a follow-up merged into the trailing tool-results
 		// user turn, so one user message carries both the result and the follow-up text.
 		rs := &runstate.RunState{
-			Messages: []anthropic.MessageParam{
-				anthropic.NewUserMessage(anthropic.NewTextBlock("go")),
-				{Role: anthropic.MessageParamRoleAssistant, Content: []anthropic.ContentBlockParamUnion{
-					anthropic.NewToolUseBlock("a", map[string]any{}, "first"),
-				}},
-				anthropic.NewUserMessage(
-					anthropic.NewToolResultBlock("a", "res-a", false),
-					anthropic.NewTextBlock("please continue"),
-				),
+			Messages: []llm.Message{
+				userMsg("go"),
+				assistantMsg(useBlk("a", "first", "{}")),
+				{Role: llm.RoleUser, Content: []llm.ContentBlock{resultBlk("a", "res-a"), textBlk("please continue")}},
 			},
 		}
 
@@ -182,13 +182,9 @@ var _ = Describe("transcriptLines", func() {
 
 var _ = Describe("toolCallDump", func() {
 	It("elides long string values but keeps keys, numbers and structure", func() {
-		use := &anthropic.ToolUseBlockParam{
-			Name: "stream_add",
-			Input: map[string]any{
-				"subject":  "orders.events.created",
-				"name":     "ORDERS",
-				"replicas": 3,
-			},
+		use := &llm.ToolUseBlock{
+			Name:  "stream_add",
+			Input: json.RawMessage(`{"subject":"orders.events.created","name":"ORDERS","replicas":3}`),
 		}
 
 		full, short := toolCallDump(use)
@@ -206,7 +202,7 @@ var _ = Describe("toolCallDump", func() {
 	})
 
 	It("leaves a short argument set unchanged in both forms", func() {
-		use := &anthropic.ToolUseBlockParam{Name: "list", Input: map[string]any{"path": "/etc"}}
+		use := &llm.ToolUseBlock{Name: "list", Input: json.RawMessage(`{"path":"/etc"}`)}
 
 		full, short := toolCallDump(use)
 		Expect(full).To(Equal(`list {"path":"/etc"}`))

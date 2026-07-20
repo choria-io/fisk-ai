@@ -26,6 +26,10 @@
       "additionalProperties": false,
       "description": "Configuration the run was started with; validated on resume. The system prompt is stored as a hash, never verbatim.",
       "properties": {
+        "provider": {
+          "type": "string",
+          "description": "Neutral provider id the run was started with. A resume against a different provider is refused unconditionally (--force does not apply)."
+        },
         "model": {
           "type": "string"
         },

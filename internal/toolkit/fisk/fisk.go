@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/choria-io/fisk"
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/choria-io/fisk-ai/internal/util"
 
@@ -56,7 +57,7 @@ const commandWaitDelay = 10 * time.Second
 
 // FiskCommandTool is our intermediate representation of a fisk command exposed as a FiskCommandTool.
 // It is built from an application model, filtered with FilterTools, and finally
-// turned into an Anthropic tool definition with AnthropicTool. The captured
+// turned into a neutral tool definition with Definition. The captured
 // command Model is the source of truth for the FiskCommandTool's schema and tags (so
 // tag-based filtering is possible, which a bare tool definition cannot express)
 // and, later, for mapping a FiskCommandTool call's arguments back to the command's
@@ -78,6 +79,12 @@ type FiskCommandTool struct {
 	// (InputSchema) and, when the model supplies them, rendered onto the command line
 	// after the command path (argv). It is nil when no globals are exposed.
 	GlobalFlags []*fisk.FlagModel
+	// SensitiveEnvVars are operator-named credential environment variables (see
+	// config.CredentialEnvNames) stripped from the command's environment in addition
+	// to the provider-declared set (llm.CredentialEnvNames). Like AppPath it is set by
+	// ToolsForApp, so a tool that can execute (AppPath populated) always carries the
+	// scrub list.
+	SensitiveEnvVars []string
 }
 
 // frameworkGlobalFlags are the application-level flags fisk adds automatically:
@@ -563,7 +570,7 @@ func (t *FiskCommandTool) Execute(ctx context.Context, args json.RawMessage) (*t
 	cmd := exec.CommandContext(ctx, t.AppPath, argv...)
 	cmd.Stdin = nil
 	cmd.WaitDelay = commandWaitDelay
-	cmd.Env = commandEnv()
+	cmd.Env = commandEnv(t.SensitiveEnvVars)
 
 	// The command is non-interactive: stdin is closed and stdout and stderr are
 	// captured together in the order they were produced.
@@ -592,34 +599,37 @@ func (t *FiskCommandTool) Execute(ctx context.Context, args json.RawMessage) (*t
 	return result, nil
 }
 
-// sensitiveEnvVars are removed from a tool command's environment so a tool, whose
-// command line is chosen by the model, can never read the agent's own credentials.
-// These are the secret-bearing variables the anthropic-sdk-go default credential
-// chain (anthropic.NewClient -> DefaultClientOptions) reads to authenticate the
-// agent's API requests. Selector variables that merely point at on-disk
-// credentials (ANTHROPIC_PROFILE, ANTHROPIC_CONFIG_DIR, XDG_CONFIG_HOME, ...) are
-// deliberately not listed: they hold no secret, and the files they locate are
-// guarded by filesystem permissions, not by stripping an env var a tool could
-// rediscover anyway.
-var sensitiveEnvVars = map[string]bool{
-	"ANTHROPIC_API_KEY":             true, // API key
-	"ANTHROPIC_AUTH_TOKEN":          true, // OAuth / bearer token
-	"ANTHROPIC_IDENTITY_TOKEN":      true, // workload-identity-federation token (literal value)
-	"ANTHROPIC_WEBHOOK_SIGNING_KEY": true, // webhook signing secret
-	"ANTHROPIC_CUSTOM_HEADERS":      true, // may carry Authorization / x-api-key headers
-}
-
 // commandEnv builds the environment for a tool command: the current environment
-// with sensitive variables removed and LLMFORMAT set. LLMFORMAT signals fisk
+// with credential variables removed and LLMFORMAT set. LLMFORMAT signals fisk
 // applications that their output is read by an LLM, so they can render a form
 // suited to that rather than a terminal.
-func commandEnv() []string {
+//
+// The stripped set is the union of two name sources, so a tool whose command line
+// the model chooses can never read a named secret from its environment:
+//   - llm.CredentialEnvNames(): the secret-bearing variables every llm provider
+//     linked into this build declared at registration (see internal/llm). This
+//     covers all compiled providers, not just the active one, and replaces what was
+//     once a static anthropic list maintained here.
+//   - extra: operator-configured credential variables (a tool's SensitiveEnvVars,
+//     from config.CredentialEnvNames).
+//
+// The guarantee is name-based: it removes the variables identified as secrets, so a
+// tool cannot read them from its environment. It cannot catch the same secret value
+// an operator also exported under a second, unnamed variable. Empty names are
+// ignored.
+func commandEnv(extra []string) []string {
 	current := os.Environ()
 	out := make([]string, 0, len(current)+1)
 
+	provider := llm.CredentialEnvNames()
+
 	for _, kv := range current {
 		name, _, found := strings.Cut(kv, "=")
-		if found && sensitiveEnvVars[name] {
+		if !found {
+			out = append(out, kv)
+			continue
+		}
+		if name != "" && (slices.Contains(provider, name) || slices.Contains(extra, name)) {
 			continue
 		}
 		out = append(out, kv)
@@ -878,8 +888,12 @@ func matchesFilter(t *FiskCommandTool, filter *config.ToolFilter, patterns []*re
 // travels with the tools, so a tool that does not know how to run cannot be
 // produced. Use ApplicationTools directly only when an executable path is not
 // needed (for example to inspect or filter the command tree).
-func ToolsForApp(appPath string, globalFlags ...string) ([]*FiskCommandTool, error) {
-	model, err := FetchFiskAppModel(appPath)
+//
+// credentialEnvNames (see config.CredentialEnvNames) is stored on every returned
+// tool as SensitiveEnvVars and used to scrub the introspection subprocess, so both
+// executions of the operator's binary run without the agent's named credentials.
+func ToolsForApp(appPath string, credentialEnvNames []string, globalFlags ...string) ([]*FiskCommandTool, error) {
+	model, err := FetchFiskAppModel(appPath, credentialEnvNames)
 	if err != nil {
 		return nil, fmt.Errorf("introspecting %q: %w", appPath, err)
 	}
@@ -891,13 +905,19 @@ func ToolsForApp(appPath string, globalFlags ...string) ([]*FiskCommandTool, err
 
 	for _, t := range tools {
 		t.AppPath = appPath
+		t.SensitiveEnvVars = credentialEnvNames
 	}
 
 	return tools, nil
 }
 
-func FetchFiskAppModel(appPath string) (*fisk.ApplicationModel, error) {
+// FetchFiskAppModel runs the application's --fisk-introspect hook and decodes its
+// command model. credentialEnvNames are stripped from the subprocess environment
+// (alongside the static sensitive set) so the operator's binary never sees the
+// agent's named credentials, even at introspection time.
+func FetchFiskAppModel(appPath string, credentialEnvNames []string) (*fisk.ApplicationModel, error) {
 	cmd := exec.Command(appPath, "--fisk-introspect")
+	cmd.Env = commandEnv(credentialEnvNames)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, err
@@ -936,7 +956,7 @@ func AppGlobalFlags(cfg *config.Config) ([]GlobalFlagInfo, error) {
 		return nil, nil
 	}
 
-	model, err := FetchFiskAppModel(cfg.ApplicationPath)
+	model, err := FetchFiskAppModel(cfg.ApplicationPath, cfg.CredentialEnvNames())
 	if err != nil {
 		return nil, fmt.Errorf("introspecting %q: %w", cfg.ApplicationPath, err)
 	}

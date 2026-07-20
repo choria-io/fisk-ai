@@ -18,7 +18,7 @@ func LoadTools(cfg *config.Config) ([]*FiskCommandTool, error) {
 		return nil, nil
 	}
 
-	tools, err := ToolsForApp(cfg.ApplicationPath, cfg.GlobalFlagNames()...)
+	tools, err := ToolsForApp(cfg.ApplicationPath, cfg.CredentialEnvNames(), cfg.GlobalFlagNames()...)
 	if err != nil {
 		return nil, err
 	}

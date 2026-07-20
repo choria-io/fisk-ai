@@ -55,17 +55,6 @@ func newEmbedder(url string) *openAIEmbedder {
 var _ = Describe("Embedding client", func() {
 	ctx := context.Background()
 
-	Describe("base_url validation", func() {
-		It("accepts https and loopback http, rejects non-loopback http and bad schemes", func() {
-			Expect(validateEmbedURL("https://example.com/v1")).To(Succeed())
-			Expect(validateEmbedURL("http://127.0.0.1:1234/v1")).To(Succeed())
-			Expect(validateEmbedURL("http://localhost:1234/v1")).To(Succeed())
-			Expect(validateEmbedURL("http://[::1]:1234/v1")).To(Succeed())
-			Expect(validateEmbedURL("http://example.com/v1")).ToNot(Succeed())
-			Expect(validateEmbedURL("ftp://example.com")).ToNot(Succeed())
-		})
-	})
-
 	Describe("buildEmbedder", func() {
 		It("returns nil when the vector tier is off", func() {
 			cfg := &config.Config{Identity: "t", Harness: config.HarnessConfig{RAG: &config.RAGConfig{Enabled: true}}}

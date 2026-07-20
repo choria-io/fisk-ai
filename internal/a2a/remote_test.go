@@ -9,10 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 )
 
@@ -65,19 +65,18 @@ var _ = Describe("RemoteTool", func() {
 		})
 	})
 
-	Describe("ToolParam", func() {
+	Describe("Definition", func() {
 		It("Should render a custom tool with the local name and advertised schema", func() {
 			rt, _ := NewRemoteTool("nats_stream_info", "nats", descriptor, &fakeInvoker{})
-			param := rt.ToolParam(true)
-			Expect(param.OfTool).NotTo(BeNil())
-			Expect(param.OfTool.Name).To(Equal("nats_stream_info"))
-			Expect(param.OfTool.DeferLoading.Value).To(BeTrue())
-			Expect(param.OfTool.InputSchema.Required).To(ConsistOf("stream"))
+			def := rt.Definition(true)
+			Expect(def.Name).To(Equal("nats_stream_info"))
+			Expect(def.DeferLoading).To(BeTrue())
+			Expect(toolkit.SchemaRequired(def.InputSchema["required"])).To(ConsistOf("stream"))
 		})
 	})
 
 	Describe("ExecuteRemoteUse", func() {
-		use := anthropic.ToolUseBlock{ID: "call-1", Name: "nats_stream_info", Input: json.RawMessage(`{"stream":"ORDERS"}`)}
+		use := llm.ToolUseBlock{ID: "call-1", Name: "nats_stream_info", Input: json.RawMessage(`{"stream":"ORDERS"}`)}
 
 		It("Should map a successful reply to a CommandResult JSON result", func() {
 			inv := &fakeInvoker{reply: &ToolReply{ToolResult: ToolResult{
@@ -87,11 +86,10 @@ var _ = Describe("RemoteTool", func() {
 			rt, _ := NewRemoteTool("nats_stream_info", "nats", descriptor, inv)
 
 			block := rt.ExecuteUse(context.Background(), use, toolkit.ExecDeps{})
-			Expect(block.OfToolResult).NotTo(BeNil())
-			Expect(block.OfToolResult.IsError.Value).To(BeFalse())
+			Expect(block.IsError).To(BeFalse())
 
 			var result toolkit.CommandResult
-			Expect(json.Unmarshal([]byte(blockText(block)), &result)).To(Succeed())
+			Expect(json.Unmarshal([]byte(block.Content), &result)).To(Succeed())
 			Expect(result.Command).To(Equal("stream info ORDERS"))
 			Expect(result.Output).To(Equal("all good"))
 
@@ -109,10 +107,10 @@ var _ = Describe("RemoteTool", func() {
 			rt, _ := NewRemoteTool("nats_stream_info", "nats", descriptor, inv)
 
 			block := rt.ExecuteUse(context.Background(), use, toolkit.ExecDeps{})
-			Expect(block.OfToolResult.IsError.Value).To(BeFalse())
+			Expect(block.IsError).To(BeFalse())
 
 			var result toolkit.CommandResult
-			Expect(json.Unmarshal([]byte(blockText(block)), &result)).To(Succeed())
+			Expect(json.Unmarshal([]byte(block.Content), &result)).To(Succeed())
 			Expect(result.ExitCode).To(Equal(3))
 		})
 
@@ -121,8 +119,8 @@ var _ = Describe("RemoteTool", func() {
 			rt, _ := NewRemoteTool("nats_stream_info", "nats", descriptor, inv)
 
 			block := rt.ExecuteUse(context.Background(), use, toolkit.ExecDeps{})
-			Expect(block.OfToolResult.IsError.Value).To(BeTrue())
-			Expect(blockText(block)).To(Equal("tool not available"))
+			Expect(block.IsError).To(BeTrue())
+			Expect(block.Content).To(Equal("tool not available"))
 		})
 
 		It("Should map a transport error to an error result", func() {
@@ -130,17 +128,8 @@ var _ = Describe("RemoteTool", func() {
 			rt, _ := NewRemoteTool("nats_stream_info", "nats", descriptor, inv)
 
 			block := rt.ExecuteUse(context.Background(), use, toolkit.ExecDeps{})
-			Expect(block.OfToolResult.IsError.Value).To(BeTrue())
-			Expect(blockText(block)).To(ContainSubstring("no responders"))
+			Expect(block.IsError).To(BeTrue())
+			Expect(block.Content).To(ContainSubstring("no responders"))
 		})
 	})
 })
-
-// blockText extracts the text of a tool_result content block for assertions.
-func blockText(block anthropic.ContentBlockParamUnion) string {
-	GinkgoHelper()
-	Expect(block.OfToolResult).NotTo(BeNil())
-	Expect(block.OfToolResult.Content).NotTo(BeEmpty())
-
-	return block.OfToolResult.Content[0].OfText.Text
-}

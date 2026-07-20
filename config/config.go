@@ -321,12 +321,26 @@ const (
 	// ModelClaudeHaiku45 is the Claude Haiku 4.5 model, the fastest and cheapest
 	// tier; best for high-throughput, latency-sensitive, or simpler tasks.
 	ModelClaudeHaiku45 = "claude-haiku-4-5-20251001"
+
+	// defaultLLMProvider is the model backend used when llm.provider is unset, so a
+	// zero-config agent keeps working. It must match the name the provider registers
+	// itself under (internal/llm/anthropic); a mismatch surfaces at run start as an
+	// unknown-provider error rather than silently.
+	defaultLLMProvider = "anthropic"
 )
 
 // LLMConfig holds the model to use and general LLM setup.
 type LLMConfig struct {
 	// Model is the LLM model to use, e.g. ModelClaudeSonnet5 ("claude-sonnet-5").
 	Model string `json:"model" yaml:"model"`
+	// Provider selects the model backend, for example "anthropic". It defaults to
+	// "anthropic" when unset, so a zero-config agent keeps working and most operators
+	// never set it. Set it only to target a different backend that has been linked
+	// into this build; naming a provider that is not linked in fails at run start with
+	// the list of providers that are available. The value is neutral and never names
+	// an SDK, and it is stamped into the run fingerprint so a resume against a
+	// different provider is refused.
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 	// Budget bounds LLM usage; optional but recommended for long running agents.
 	Budget LLMBudget `json:"budget" yaml:"budget"`
 	// Thinking configures whether the model exposes its reasoning. Off by default:
@@ -337,6 +351,16 @@ type LLMConfig struct {
 	// endpoint (ANTHROPIC_BASE_URL) whose proxy rejects or ignores cache_control. Disabling
 	// only raises cost, it never changes output.
 	NoPromptCache bool `json:"no_prompt_cache,omitempty" yaml:"no_prompt_cache,omitempty"`
+	// NoToolSearch disables server-side tool search for this agent, so every tool is
+	// sent to the model directly rather than deferred behind a search tool once ten or
+	// more are available. It is the manual complement to a provider's own capability:
+	// the provider reports whether tool search is possible at all, and this switch turns
+	// it off for an endpoint where it is possible but unwanted, such as an
+	// ANTHROPIC_BASE_URL proxy that does not implement the tool search tool. Left off
+	// (the zero value), tool search is used whenever the active provider supports it and
+	// the tool count crosses the threshold, mirroring no_prompt_cache. Disabling it only
+	// sends more tools up front; it never removes a tool or changes what the model can call.
+	NoToolSearch bool `json:"no_tool_search,omitempty" yaml:"no_tool_search,omitempty"`
 }
 
 // ThinkingConfig configures whether the model exposes its reasoning. It is a
@@ -364,6 +388,13 @@ type LLMBudget struct {
 	// running total is checked after each call, so a single call can overshoot it
 	// by up to that call's input plus its max output tokens before the run stops.
 	MaxTokens int64 `json:"max_tokens" yaml:"max_tokens"`
+	// MaxOutputTokens caps the tokens a single response may generate, distinct from
+	// MaxTokens which bounds the whole run. Left 0 it uses a built-in default that is
+	// raised when thinking is on so the reasoning and the answer both fit. Set it only
+	// to fit an endpoint whose per-response limit is lower than that default, where an
+	// oversized request would otherwise be rejected; an explicit value wins over the
+	// default, including the thinking increase.
+	MaxOutputTokens int64 `json:"max_output_tokens" yaml:"max_output_tokens"`
 	// MaxIterations is the maximum number of LLM iterations to perform.
 	MaxIterations int64 `json:"max_iterations" yaml:"max_iterations"`
 	// CallTimeoutString is the per-call timeout as a duration string, e.g. 60s.
@@ -725,6 +756,31 @@ func (c *Config) RAGVectorEnabled() bool {
 	return c.RAGEnabled() && c.Harness.RAG.Embeddings != nil
 }
 
+// CredentialEnvNames returns the names of the environment variables that config
+// identifies as holding a credential, so a caller can strip them from the
+// environment of a subprocess whose command line the model chooses (see
+// internal/toolkit/fisk). It is the single seam a future provider extends: any
+// operator-named secret variable belongs here, never a static denylist. Names are
+// trimmed, empties dropped, and duplicates removed. Today the only such name is the
+// optional RAG embeddings bearer-token variable.
+func (c *Config) CredentialEnvNames() []string {
+	var names []string
+	if c.RAGVectorEnabled() {
+		names = append(names, c.Harness.RAG.Embeddings.APIKeyEnv)
+	}
+
+	var out []string
+	for _, n := range names {
+		n = strings.TrimSpace(n)
+		if n == "" || slices.Contains(out, n) {
+			continue
+		}
+		out = append(out, n)
+	}
+
+	return out
+}
+
 // ConfirmTags returns the extra confirmation gate tags configured under the
 // harness block, additive to the always-on ai:confirm tag. It is nil when none
 // are set; prepare normalizes the stored slice (trim, de-duplicate, drop empties).
@@ -756,6 +812,26 @@ func (c *Config) PromptCacheEnabled() bool {
 // reasoning. Off unless explicitly enabled under llm.thinking.
 func (c *Config) ThinkingEnabled() bool {
 	return c.LLM.Thinking.Enabled
+}
+
+// ToolSearchEnabled reports whether server-side tool search may be used for this
+// agent. It is on unless the agent config sets no_tool_search, the escape hatch for
+// an endpoint that does not implement the tool search tool. It is only the operator
+// half of the gate: tool search is used when the active provider also supports it and
+// the tool count crosses the threshold.
+func (c *Config) ToolSearchEnabled() bool {
+	return !c.LLM.NoToolSearch
+}
+
+// LLMProvider returns the configured model backend, defaulting to "anthropic" when
+// llm.provider is unset so a zero-config agent keeps working. An unlinked value is
+// not rejected here; it fails at run start when the provider is resolved from the
+// registry, with the list of providers linked into this build.
+func (c *Config) LLMProvider() string {
+	if c.LLM.Provider != "" {
+		return c.LLM.Provider
+	}
+	return defaultLLMProvider
 }
 
 // MCPPort returns the MCP server port configured under expose.agent.mcp, or 0 if
@@ -1033,6 +1109,9 @@ func normalizeTags(tags []string) []string {
 func (b *LLMBudget) prepare() error {
 	if b.MaxTokens < 0 {
 		return fmt.Errorf("invalid llm max_tokens %d: must not be negative", b.MaxTokens)
+	}
+	if b.MaxOutputTokens < 0 {
+		return fmt.Errorf("invalid llm max_output_tokens %d: must not be negative", b.MaxOutputTokens)
 	}
 	if b.MaxIterations < 0 {
 		return fmt.Errorf("invalid llm max_iterations %d: must not be negative", b.MaxIterations)

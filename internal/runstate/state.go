@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/internal/llm"
 )
 
 var (
@@ -40,11 +40,11 @@ type Counters struct {
 // the turn that have no result yet, reusing Results for those already done, then
 // commits the turn and continues.
 type PendingTurn struct {
-	Assistant  anthropic.MessageParam
+	Assistant  llm.Message
 	Iteration  int64
 	StopReason string
-	// Results holds the tool_result blocks gathered so far, in journal order.
-	Results []anthropic.ContentBlockParamUnion
+	// Results holds the tool results gathered so far, in journal order.
+	Results []llm.ToolResultBlock
 	// Answered marks which tool_use ids already have a result.
 	Answered map[string]bool
 }
@@ -65,7 +65,7 @@ type RunState struct {
 	// a boundary the API would accept (an initial user prompt, or an assistant
 	// turn with all tool_use answered by a following user results turn). An
 	// in-flight turn lives in Pending, not here.
-	Messages []anthropic.MessageParam
+	Messages []llm.Message
 	Counters Counters
 
 	// NextIteration is the loop index to resume at.
@@ -103,7 +103,7 @@ func Fold(records []Record) (*RunState, error) {
 	// A newer snapshot may carry record shapes this build does not understand, so it
 	// is rejected; an older one is always readable since every version only adds
 	// records and optional fields, never changes an existing shape.
-	if meta.Version > Version {
+	if meta.Version != Version {
 		return nil, fmt.Errorf("%w: snapshot version %d, supported %d", ErrVersion, meta.Version, Version)
 	}
 
@@ -113,13 +113,16 @@ func Fold(records []Record) (*RunState, error) {
 		Fingerprint: meta.Fingerprint,
 		Prompt:      meta.Prompt,
 		Interactive: meta.Interactive,
-		Messages:    []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(meta.Prompt))},
+		Messages:    []llm.Message{userTextMessage(meta.Prompt)},
 	}
 
-	// cur* accumulate the assistant turn currently being answered.
+	// cur* accumulate the assistant turn currently being answered. The journal
+	// already stores the neutral model, so the folded RunState carries it verbatim
+	// with no conversion.
 	var (
 		cur        *AssistantRecord
-		curResults []anthropic.ContentBlockParamUnion
+		curMsg     llm.Message
+		curResults []llm.ToolResultBlock
 		curAnswer  map[string]bool
 	)
 
@@ -138,9 +141,9 @@ func Fold(records []Record) (*RunState, error) {
 	// assistant turn begins, since the loop only makes another LLM call once the
 	// previous turn's tools are all answered.
 	commit := func() {
-		rs.Messages = append(rs.Messages, cur.Message)
+		rs.Messages = append(rs.Messages, curMsg)
 		if len(curResults) > 0 {
-			rs.Messages = append(rs.Messages, anthropic.NewUserMessage(curResults...))
+			rs.Messages = append(rs.Messages, userResultsMessage(curResults))
 		}
 	}
 
@@ -163,6 +166,7 @@ func Fold(records []Record) (*RunState, error) {
 				commit()
 			}
 			cur = r.Assistant
+			curMsg = r.Assistant.Message
 			curResults = nil
 			curAnswer = map[string]bool{}
 			lastIter = r.Assistant.Iteration
@@ -222,13 +226,13 @@ func Fold(records []Record) (*RunState, error) {
 	// so there is nothing pending and the resume position comes from the tracked
 	// last-assistant values below rather than from cur.
 	if cur != nil {
-		unanswered := unansweredToolUses(cur.Message, curAnswer)
+		unanswered := unansweredToolUses(curMsg, curAnswer)
 		if len(unanswered) == 0 {
 			commit()
 			rs.Pending = nil
 		} else {
 			rs.Pending = &PendingTurn{
-				Assistant:  cur.Message,
+				Assistant:  curMsg,
 				Iteration:  cur.Iteration,
 				StopReason: cur.StopReason,
 				Results:    curResults,
@@ -252,9 +256,9 @@ func Fold(records []Record) (*RunState, error) {
 // content into a trailing user message when the last message is already a user turn.
 // This keeps the roles alternating (the API rejects two user messages in a row) and
 // reconstructs both the runtime appendUserPrompt fold and consecutive User records.
-func appendOrMergeUser(rs *RunState, msg anthropic.MessageParam) {
+func appendOrMergeUser(rs *RunState, msg llm.Message) {
 	n := len(rs.Messages)
-	if n > 0 && rs.Messages[n-1].Role == anthropic.MessageParamRoleUser {
+	if n > 0 && rs.Messages[n-1].Role == llm.RoleUser {
 		rs.Messages[n-1].Content = append(rs.Messages[n-1].Content, msg.Content...)
 		return
 	}
@@ -262,19 +266,35 @@ func appendOrMergeUser(rs *RunState, msg anthropic.MessageParam) {
 	rs.Messages = append(rs.Messages, msg)
 }
 
-// unansweredToolUses returns the ids of client tool_use blocks in msg that have
-// no result in answered. Server-side tool_use blocks are resolved by the API,
-// not by us, so they are not counted.
-func unansweredToolUses(msg anthropic.MessageParam, answered map[string]bool) []string {
+// unansweredToolUses returns the ids of tool_use blocks in msg that have no result
+// in answered.
+func unansweredToolUses(msg llm.Message, answered map[string]bool) []string {
 	var out []string
 	for _, block := range msg.Content {
-		if block.OfToolUse == nil {
+		if block.ToolUse == nil {
 			continue
 		}
-		id := block.OfToolUse.ID
+		id := block.ToolUse.ID
 		if !answered[id] {
 			out = append(out, id)
 		}
 	}
 	return out
+}
+
+// userTextMessage builds a user turn carrying a single text block, the shape of an
+// operator prompt.
+func userTextMessage(text string) llm.Message {
+	return llm.Message{Role: llm.RoleUser, Content: []llm.ContentBlock{{Text: &llm.TextBlock{Text: text}}}}
+}
+
+// userResultsMessage builds the synthetic user turn that answers an assistant turn's
+// tool calls, one tool_result block per result in journal order.
+func userResultsMessage(results []llm.ToolResultBlock) llm.Message {
+	content := make([]llm.ContentBlock, len(results))
+	for i := range results {
+		r := results[i]
+		content[i] = llm.ContentBlock{ToolResult: &r}
+	}
+	return llm.Message{Role: llm.RoleUser, Content: content}
 }

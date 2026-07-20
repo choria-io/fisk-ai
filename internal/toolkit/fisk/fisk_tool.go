@@ -10,8 +10,7 @@ import (
 	"fmt"
 	"slices"
 
-	"github.com/anthropics/anthropic-sdk-go"
-
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 )
 
@@ -23,29 +22,34 @@ var (
 	_ toolkit.ArgumentValidator = (*FiskCommandTool)(nil)
 )
 
-// ToolParam renders the command tool as an Anthropic tool definition. A tool
-// tagged ai:no_defer is always sent directly, even within a deferred set, so its
-// deferral is suppressed here rather than in the caller.
-func (t *FiskCommandTool) ToolParam(deferLoading bool) anthropic.ToolUnionParam {
-	return AnthropicTool(t, deferLoading && !slices.Contains(t.Tags(), noDeferTag))
+// Definition renders the command tool as a neutral tool definition. A tool tagged
+// ai:no_defer is always sent directly, even within a deferred set, so its deferral
+// is suppressed here rather than in the caller.
+func (t *FiskCommandTool) Definition(deferLoading bool) llm.ToolDef {
+	return llm.ToolDef{
+		Name:         t.Name(),
+		Description:  t.ModelDescription(),
+		InputSchema:  t.InputSchema(),
+		DeferLoading: deferLoading && !slices.Contains(t.Tags(), noDeferTag),
+	}
 }
 
 // ExecuteUse runs the command behind the tool for a model tool_use block and
-// returns the matching tool_result content block. A command that could not be run
-// (a missing binary, a canceled context, unusable arguments) becomes an error
-// result; a command that ran, including one that exited non-zero, becomes a normal
-// result whose JSON body carries the exit code and output for the model. It takes
-// no ExecDeps: a command tool never prompts.
-func (t *FiskCommandTool) ExecuteUse(ctx context.Context, use anthropic.ToolUseBlock, _ toolkit.ExecDeps) anthropic.ContentBlockParamUnion {
+// returns the matching tool result. A command that could not be run (a missing
+// binary, a canceled context, unusable arguments) becomes an error result; a
+// command that ran, including one that exited non-zero, becomes a normal result
+// whose JSON body carries the exit code and output for the model. It takes no
+// ExecDeps: a command tool never prompts.
+func (t *FiskCommandTool) ExecuteUse(ctx context.Context, use llm.ToolUseBlock, _ toolkit.ExecDeps) llm.ToolResultBlock {
 	result, err := t.Execute(ctx, use.Input)
 	if err != nil {
-		return anthropic.NewToolResultBlock(use.ID, err.Error(), true)
+		return llm.ToolResultBlock{ToolUseID: use.ID, Content: err.Error(), IsError: true}
 	}
 
 	data, err := json.Marshal(result)
 	if err != nil {
-		return anthropic.NewToolResultBlock(use.ID, fmt.Sprintf("marshaling tool result: %v", err), true)
+		return llm.ToolResultBlock{ToolUseID: use.ID, Content: fmt.Sprintf("marshaling tool result: %v", err), IsError: true}
 	}
 
-	return anthropic.NewToolResultBlock(use.ID, string(data), false)
+	return llm.ToolResultBlock{ToolUseID: use.ID, Content: string(data)}
 }

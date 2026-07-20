@@ -15,20 +15,17 @@
 package runstate
 
 import (
-	"encoding/json"
 	"time"
 
-	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/choria-io/fisk-ai/internal/llm"
 )
 
-// Version is the current on-disk record schema version, stamped into the Meta
-// record. Fold rejects a snapshot written by a newer version rather than
-// best-effort parsing it, but reads any older version it still understands.
-//
-// v2 added the User record (a free-standing interactive user turn) and the
-// Interactive meta flag. A v2 reader folds a v1 journal unchanged (neither is
-// present); a v1 reader rejects a v2 journal with ErrVersion.
-const Version = 2
+// Version is the on-disk record format version, stamped into the Meta record.
+// Fold accepts only this exact version: the record format is provider-neutral
+// (llm.Message), and the earlier Anthropic-wire format does not round-trip
+// through the neutral records, so any other version is rejected rather than
+// silently mis-folded.
+const Version = 3
 
 // Protocol is the schema id of a Record, carried in the record body so a single
 // stored record is self describing: given just one record you can find its
@@ -39,8 +36,8 @@ type Protocol string
 
 // protocolNamespace is the a2a product namespace (a2a.ProtocolNamespace) under a
 // ".session" segment. It is spelled out here rather than imported so the storage
-// layer does not depend on the a2a package, which now carries the anthropic SDK
-// via its remote-tool code; it must track a2a.ProtocolNamespace if that changes.
+// layer does not depend on the a2a package; it must track a2a.ProtocolNamespace
+// if that changes.
 const protocolNamespace = "io.choria.fisk-ai.v1.session"
 
 const (
@@ -90,104 +87,21 @@ type MetaRecord struct {
 	Interactive bool `json:"interactive,omitempty"`
 }
 
-// AssistantRecord is one assistant turn, exactly as it was appended to the
-// conversation (resp.ToParam()), so thinking blocks with signatures and
-// server-side tool blocks are preserved verbatim for resume.
+// AssistantRecord is one assistant turn in the neutral model, so thinking blocks
+// with signatures and provider server-side blocks are preserved verbatim for
+// resume regardless of which provider produced them.
 type AssistantRecord struct {
-	Iteration  int64                  `json:"iteration"`
-	Message    anthropic.MessageParam `json:"message"`
-	StopReason string                 `json:"stop_reason,omitempty"`
-	InTokens   int64                  `json:"in_tokens"`
-	OutTokens  int64                  `json:"out_tokens"`
+	Iteration  int64       `json:"iteration"`
+	Message    llm.Message `json:"message"`
+	StopReason string      `json:"stop_reason,omitempty"`
+	InTokens   int64       `json:"in_tokens"`
+	OutTokens  int64       `json:"out_tokens"`
 	// CacheReadTokens and CacheCreateTokens are the response's prompt-cache input
 	// tiers, split out from InTokens (the uncached remainder). Additive and omitempty
 	// so no schema version bump is needed: a pre-caching journal omits them and folds
 	// as zero, which is correct (caching was off, so there were none).
 	CacheReadTokens   int64 `json:"cache_read_tokens,omitempty"`
 	CacheCreateTokens int64 `json:"cache_create_tokens,omitempty"`
-}
-
-// UnmarshalJSON decodes an assistant record and then repairs any server-side tool
-// search result the SDK cannot round-trip. The record is otherwise decoded with the
-// standard rules; only Message is post-processed.
-//
-// A tool_search_tool_result block that reports a successful search carries its matched
-// tool_references in a nested union (ToolSearchToolResultBlockParamContentUnion).
-// anthropic-sdk-go v1.56.0 marshals that union correctly but never registers it with
-// its JSON decoder the way it registers the sibling ToolResultBlockParamContentUnion,
-// so decoding drops the tool_references (which the API marks required) and mis-selects
-// the error variant of the union. Resending such a turn on resume is then rejected with
-// a 400 (messages.N.content.M.tool_search_tool_result.content...). The journal wrote the
-// block out correctly, so we re-read the tool_references from the raw JSON and rebuild
-// the union. Remove this once the SDK registers the union (anthropics/anthropic-sdk-go
-// PR 338 proposes a related fix but was still unmerged as of July 2026).
-func (r *AssistantRecord) UnmarshalJSON(data []byte) error {
-	// shadow strips the method set so the nested json.Unmarshal does the ordinary
-	// struct decode rather than recursing back into this method.
-	type shadow AssistantRecord
-	var s shadow
-	err := json.Unmarshal(data, &s)
-	if err != nil {
-		return err
-	}
-	*r = AssistantRecord(s)
-
-	return repairToolSearchResults(&r.Message, data)
-}
-
-// repairToolSearchResults restores the tool_references dropped from every successful
-// tool_search_tool_result block in msg. raw is the assistant record JSON the message was
-// decoded from; its message.content array holds each block's original, correct JSON.
-// Blocks are matched to their raw counterpart by position, which the decoder preserves
-// (it corrupts the block in place, it does not drop or reorder blocks). An error-variant
-// block already round-trips, so only the success variant (tool_search_tool_search_result)
-// is rebuilt.
-func repairToolSearchResults(msg *anthropic.MessageParam, raw []byte) error {
-	var envelope struct {
-		Message struct {
-			Content []json.RawMessage `json:"content"`
-		} `json:"message"`
-	}
-	err := json.Unmarshal(raw, &envelope)
-	if err != nil {
-		return err
-	}
-
-	for i := range msg.Content {
-		block := msg.Content[i].OfToolSearchToolResult
-		if block == nil {
-			continue
-		}
-		if i >= len(envelope.Message.Content) {
-			break
-		}
-
-		var rawBlock struct {
-			Content struct {
-				Type           string                              `json:"type"`
-				ToolReferences []anthropic.ToolReferenceBlockParam `json:"tool_references"`
-			} `json:"content"`
-		}
-		err = json.Unmarshal(envelope.Message.Content[i], &rawBlock)
-		if err != nil {
-			return err
-		}
-		if rawBlock.Content.Type != "tool_search_tool_search_result" {
-			continue
-		}
-
-		// Rebuild the whole content union: the decoder left the error variant set and
-		// the success variant nil, so patching a field in place is not enough. Type is
-		// left as its zero value, which marshals to "tool_search_tool_search_result"
-		// via the SDK's default tag, matching how resp.ToParam() builds the block.
-		block.Content = anthropic.ToolSearchToolResultBlockParamContentUnion{
-			OfRequestToolSearchToolSearchResultBlock: &anthropic.ToolSearchToolSearchResultBlockParam{
-				ToolReferences: rawBlock.Content.ToolReferences,
-			},
-		}
-	}
-
-	return nil
 }
 
 // UserRecord is a free-standing interactive user turn (a chat follow-up). Message
@@ -197,15 +111,15 @@ func repairToolSearchResults(msg *anthropic.MessageParam, raw []byte) error {
 // and Fold reconstructs the fold by merging consecutive user messages. Recording the
 // merged message instead would double the tool_result blocks Fold already appended.
 type UserRecord struct {
-	Message anthropic.MessageParam `json:"message"`
+	Message llm.Message `json:"message"`
 }
 
 // ToolResultRecord is the result of a single tool call, keyed by the tool_use id
 // it answers. Remote marks a call dispatched to another agent over A2A.
 type ToolResultRecord struct {
-	ToolUseID string                           `json:"tool_use_id"`
-	Result    anthropic.ContentBlockParamUnion `json:"result"`
-	Remote    bool                             `json:"remote,omitempty"`
+	ToolUseID string              `json:"tool_use_id"`
+	Result    llm.ToolResultBlock `json:"result"`
+	Remote    bool                `json:"remote,omitempty"`
 }
 
 // TerminalReason explains why a run stopped.

@@ -10,12 +10,12 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/segmentio/ksuid"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 )
 
@@ -24,20 +24,20 @@ func newID() string {
 }
 
 func assistantWithTools(iter int64, ids ...string) *runstate.AssistantRecord {
-	content := []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock("working")}
+	content := []llm.ContentBlock{{Text: &llm.TextBlock{Text: "working"}}}
 	for _, id := range ids {
-		content = append(content, anthropic.NewToolUseBlock(id, map[string]any{"x": 1}, "shell"))
+		content = append(content, llm.ContentBlock{ToolUse: &llm.ToolUseBlock{ID: id, Name: "shell", Input: json.RawMessage(`{"x":1}`)}})
 	}
 	return &runstate.AssistantRecord{
 		Iteration: iter,
-		Message:   anthropic.MessageParam{Role: anthropic.MessageParamRoleAssistant, Content: content},
+		Message:   llm.Message{Role: llm.RoleAssistant, Content: content},
 		InTokens:  10,
 		OutTokens: 5,
 	}
 }
 
 func toolResult(id string) *runstate.ToolResultRecord {
-	return &runstate.ToolResultRecord{ToolUseID: id, Result: anthropic.NewToolResultBlock(id, "ok", false)}
+	return &runstate.ToolResultRecord{ToolUseID: id, Result: llm.ToolResultBlock{ToolUseID: id, Content: "ok"}}
 }
 
 var _ = Describe("FileStore", func() {
