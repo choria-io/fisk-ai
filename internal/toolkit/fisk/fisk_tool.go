@@ -38,10 +38,11 @@ func (t *FiskCommandTool) Definition(deferLoading bool) llm.ToolDef {
 // returns the matching tool result. A command that could not be run (a missing
 // binary, a canceled context, unusable arguments) becomes an error result; a
 // command that ran, including one that exited non-zero, becomes a normal result
-// whose JSON body carries the exit code and output for the model. It takes no
-// ExecDeps: a command tool never prompts.
-func (t *FiskCommandTool) ExecuteUse(ctx context.Context, use llm.ToolUseBlock, _ toolkit.ExecDeps) llm.ToolResultBlock {
-	result, err := t.Execute(ctx, use.Input)
+// whose JSON body carries the exit code and output for the model. It uses only the
+// WorkDir from ExecDeps (a command tool never prompts), running the command in the
+// caller's per-run directory so concurrent runs do not collide.
+func (t *FiskCommandTool) ExecuteUse(ctx context.Context, use llm.ToolUseBlock, deps toolkit.ExecDeps) llm.ToolResultBlock {
+	result, err := t.Execute(ctx, use.Input, deps.WorkDir)
 	if err != nil {
 		return llm.ToolResultBlock{ToolUseID: use.ID, Content: err.Error(), IsError: true}
 	}

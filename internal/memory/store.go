@@ -85,14 +85,15 @@ type Store interface {
 	Delete(ctx context.Context, key string) (existed bool, err error)
 }
 
-// New builds the memory store described by cfg. It looks the configured backend
-// up in the registry and hands the backend its factory the agent identity and
-// the raw per-backend options block. It returns an error for an unknown backend
-// or malformed backend options, so an operator's mistake surfaces at run start
-// rather than on the first tool call. An unknown backend most often means the
-// backend package was not imported into this build; the error lists the backends
-// that are linked in.
-func New(cfg *config.Config) (Store, error) {
+// New builds the memory store described by cfg. It looks the configured backend up
+// in the registry and hands its factory the per-run environment, the agent identity,
+// and the raw per-backend options block. storeDir is the base a directory backend
+// resolves a relative or default store path under (empty resolves as before). It
+// returns an error for an unknown backend or malformed backend options, so an
+// operator's mistake surfaces at run start rather than on the first tool call. An
+// unknown backend most often means the backend package was not imported into this
+// build; the error lists the backends that are linked in.
+func New(cfg *config.Config, storeDir string) (Store, error) {
 	backend := cfg.MemoryBackend()
 
 	factory, ok := lookup(backend)
@@ -100,5 +101,5 @@ func New(cfg *config.Config) (Store, error) {
 		return nil, fmt.Errorf("unknown memory backend %q: known backends are %v", backend, Backends())
 	}
 
-	return factory(cfg.Identity, cfg.MemoryRawOptions())
+	return factory(RuntimeEnv{StoreDir: storeDir}, cfg.Identity, cfg.MemoryRawOptions())
 }

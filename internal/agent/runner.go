@@ -66,6 +66,11 @@ type runner struct {
 	// run goroutine, never from the concurrent MCP path.
 	prompter toolkit.Prompter
 
+	// toolWorkDir is the directory local command tools run in, handed to each tool
+	// execution so concurrent runs sharing one process do not collide on relative-path
+	// writes. Empty inherits the process working directory.
+	toolWorkDir string
+
 	// messages is the conversation, grown as the loop runs. It is the core of the
 	// resumable state.
 	messages []llm.Message
@@ -339,7 +344,7 @@ func (r *runner) rotateSession(prompt string) error {
 	if terr != nil {
 		r.events.Warn(Warning{Kind: WarnJournalTerminal, Err: terr})
 	}
-	closeJournal(r.journal)
+	closeJournal(r.journal, r.events)
 
 	r.journal = newJournal
 	r.sessionID = newID
@@ -611,7 +616,7 @@ func (r *runner) traceCall(use llm.ToolUseBlock) (ToolKind, toolkit.ExecDeps, bo
 
 	case *fisk.FiskCommandTool:
 		r.events.ToolCall(ToolTrace{Name: use.Name, Display: t.TraceLine(use.Input), DisplayShort: t.TraceLineShort(use.Input), Kind: ToolLocal})
-		return ToolLocal, toolkit.ExecDeps{}, false
+		return ToolLocal, toolkit.ExecDeps{WorkDir: r.toolWorkDir}, false
 
 	default:
 		// A model-facing tool of an unforeseen kind still runs uniformly; it is traced

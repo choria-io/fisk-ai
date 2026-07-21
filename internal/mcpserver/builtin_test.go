@@ -36,13 +36,13 @@ func lexicalKnowledgeBuiltins(ctx context.Context) []*builtin.BuiltinTool {
 		Harness:  config.HarnessConfig{RAG: &config.RAGConfig{Enabled: true, Directory: storeDir}},
 	}
 
-	w, err := rag.OpenWriter(cfg)
+	w, err := rag.OpenWriter(cfg, "")
 	Expect(err).NotTo(HaveOccurred())
 	_, err = w.Index(ctx, []string{docsDir}, rag.IndexOptions{Reconcile: true})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(w.Close()).To(Succeed())
 
-	store, err := rag.Open(cfg)
+	store, err := rag.Open(cfg, "")
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(func() { store.Close() })
 

@@ -172,7 +172,7 @@ var _ = Describe("newStore", func() {
 		def, err := runstate.DefaultDir()
 		Expect(err).NotTo(HaveOccurred())
 
-		s, err := newStore(nil)
+		s, err := newStore(runstate.RuntimeEnv{}, nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(s.(*FileStore).dir).To(Equal(def))
 		Expect(filepath.IsAbs(s.(*FileStore).dir)).To(BeTrue())
@@ -180,13 +180,28 @@ var _ = Describe("newStore", func() {
 
 	It("uses the directory option when set", func() {
 		dir := GinkgoT().TempDir()
-		s, err := newStore(json.RawMessage(`{"directory":"` + dir + `"}`))
+		s, err := newStore(runstate.RuntimeEnv{}, json.RawMessage(`{"directory":"`+dir+`"}`))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(s.(*FileStore).dir).To(Equal(dir))
+	})
+
+	It("roots journals under a store base when one is set", func() {
+		base := GinkgoT().TempDir()
+		s, err := newStore(runstate.RuntimeEnv{StoreDir: base}, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(s.(*FileStore).dir).To(Equal(filepath.Join(base, "runs")))
+	})
+
+	It("honors an absolute configured directory regardless of the store base", func() {
+		base := GinkgoT().TempDir()
+		dir := GinkgoT().TempDir()
+		s, err := newStore(runstate.RuntimeEnv{StoreDir: base}, json.RawMessage(`{"directory":"`+dir+`"}`))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(s.(*FileStore).dir).To(Equal(dir))
 	})
 
 	It("rejects an unknown option key", func() {
-		_, err := newStore(json.RawMessage(`{"bogus":1}`))
+		_, err := newStore(runstate.RuntimeEnv{}, json.RawMessage(`{"bogus":1}`))
 		Expect(err).To(MatchError(ContainSubstring("invalid file session options")))
 	})
 

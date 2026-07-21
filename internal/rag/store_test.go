@@ -28,6 +28,31 @@ func lexicalConfig(dir string) *config.Config {
 	}
 }
 
+var _ = Describe("resolveDir", func() {
+	ragCfg := func(dir string) *config.Config {
+		return &config.Config{
+			Identity: "agent",
+			Harness:  config.HarnessConfig{RAG: &config.RAGConfig{Enabled: true, Directory: dir}},
+		}
+	}
+
+	It("rebases the default knowledge directory under the store base", func() {
+		Expect(resolveDir(ragCfg(""), "/srv/base")).To(Equal(filepath.Join("/srv/base", "knowledge", "agent")))
+	})
+
+	It("rebases a relative configured directory under the store base", func() {
+		Expect(resolveDir(ragCfg("kb"), "/srv/base")).To(Equal(filepath.Join("/srv/base", "kb")))
+	})
+
+	It("honors an absolute configured directory regardless of the base", func() {
+		Expect(resolveDir(ragCfg("/abs/kb"), "/srv/base")).To(Equal("/abs/kb"))
+	})
+
+	It("resolves relative to the working directory when no base is set", func() {
+		Expect(resolveDir(ragCfg(""), "")).To(Equal(filepath.Join("knowledge", "agent")))
+	})
+})
+
 // writeDoc writes a document under root, creating parent directories.
 func writeDoc(root, rel, content string) string {
 	path := filepath.Join(root, rel)
@@ -58,7 +83,7 @@ var _ = Describe("Store (lexical tier)", func() {
 	})
 
 	index := func() *IndexStats {
-		w, err := OpenWriter(cfg)
+		w, err := OpenWriter(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		defer w.Close()
 		stats, err := w.Index(ctx, []string{docsD}, IndexOptions{Reconcile: true})
@@ -71,7 +96,7 @@ var _ = Describe("Store (lexical tier)", func() {
 		Expect(stats.Added).To(Equal(2))
 		Expect(stats.Chunks).To(BeNumerically(">=", 2))
 
-		r, err := Open(cfg)
+		r, err := Open(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		defer r.Close()
 		Expect(r.Built()).To(BeTrue())
@@ -85,7 +110,7 @@ var _ = Describe("Store (lexical tier)", func() {
 	})
 
 	It("reports index_not_built before any index exists", func() {
-		r, err := Open(cfg)
+		r, err := Open(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		defer r.Close()
 		Expect(r.Built()).To(BeFalse())
@@ -101,7 +126,7 @@ var _ = Describe("Store (lexical tier)", func() {
 		// Remove one file, re-index the whole root: it should be reconciled away.
 		Expect(os.Remove(filepath.Join(docsD, "auth.md"))).To(Succeed())
 
-		w, err := OpenWriter(cfg)
+		w, err := OpenWriter(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		stats, err := w.Index(ctx, []string{docsD}, IndexOptions{Reconcile: true})
 		Expect(err).ToNot(HaveOccurred())
@@ -109,7 +134,7 @@ var _ = Describe("Store (lexical tier)", func() {
 		Expect(stats.Skipped).To(Equal(1)) // backpressure.md unchanged
 		w.Close()
 
-		r, err := Open(cfg)
+		r, err := Open(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		defer r.Close()
 		res, err := r.Search(ctx, "authentication tokens issuer", 5)
@@ -123,7 +148,7 @@ var _ = Describe("Store (lexical tier)", func() {
 		index()
 		Expect(os.Remove(filepath.Join(docsD, "auth.md"))).To(Succeed())
 
-		w, err := OpenWriter(cfg)
+		w, err := OpenWriter(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		stats, err := w.Index(ctx, []string{docsD}, IndexOptions{Reconcile: false})
 		Expect(err).ToNot(HaveOccurred())
@@ -136,11 +161,11 @@ var _ = Describe("Store (lexical tier)", func() {
 	})
 
 	It("refuses a second concurrent writer with the advisory lock", func() {
-		w1, err := OpenWriter(cfg)
+		w1, err := OpenWriter(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		defer w1.Close()
 
-		_, err = OpenWriter(cfg)
+		_, err = OpenWriter(cfg, "")
 		Expect(err).To(MatchError(ErrLocked))
 	})
 
@@ -158,11 +183,11 @@ var _ = Describe("Store (lexical tier)", func() {
 	It("serves a read-only reader concurrently with a live writer", func() {
 		index() // establishes the file + WAL
 
-		reader, err := Open(cfg)
+		reader, err := Open(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		defer reader.Close()
 
-		writer, err := OpenWriter(cfg)
+		writer, err := OpenWriter(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		defer writer.Close()
 
@@ -208,7 +233,7 @@ var _ = Describe("Store rm and reset", func() {
 		writeDoc(docsD, "backpressure.md", "# Design\n\n## Backpressure\n\nThe queue applies backpressure when the buffer is full so producers slow down.\n")
 		writeDoc(docsD, "auth.md", "# Authentication\n\nTokens are validated against the issuer before any request proceeds.\n")
 
-		w, err := OpenWriter(cfg)
+		w, err := OpenWriter(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		defer w.Close()
 		_, err = w.Index(ctx, []string{docsD}, IndexOptions{Reconcile: true})
@@ -217,17 +242,17 @@ var _ = Describe("Store rm and reset", func() {
 
 	It("reports StoreExists only once an index file is present", func() {
 		empty := lexicalConfig(filepath.Join(tmp, "empty"))
-		exists, err := StoreExists(empty)
+		exists, err := StoreExists(empty, "")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(exists).To(BeFalse())
 
-		exists, err = StoreExists(cfg)
+		exists, err = StoreExists(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(exists).To(BeTrue())
 	})
 
 	It("removes a known document and reports it, leaving others intact", func() {
-		w, err := OpenWriter(cfg)
+		w, err := OpenWriter(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		defer w.Close()
 
@@ -247,7 +272,7 @@ var _ = Describe("Store rm and reset", func() {
 	})
 
 	It("reports a miss for an unknown document without erroring", func() {
-		w, err := OpenWriter(cfg)
+		w, err := OpenWriter(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		defer w.Close()
 
@@ -261,7 +286,7 @@ var _ = Describe("Store rm and reset", func() {
 	})
 
 	It("wipes all data on Reset, leaving a clean empty index", func() {
-		w, err := OpenWriter(cfg)
+		w, err := OpenWriter(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(w.Reset(ctx)).To(Succeed())
@@ -273,7 +298,7 @@ var _ = Describe("Store rm and reset", func() {
 		w.Close()
 
 		// The file remains and a fresh search reports an empty (not unbuilt) index.
-		r, err := Open(cfg)
+		r, err := Open(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		defer r.Close()
 		res, err := r.Search(ctx, "backpressure buffer", 5)
@@ -286,7 +311,7 @@ var _ = Describe("Store rm and reset", func() {
 
 		// Grow the index well past its initial size so a failure to compact is
 		// unmistakable, then checkpoint so the pages land in the main file.
-		w, err := OpenWriter(cfg)
+		w, err := OpenWriter(cfg, "")
 		Expect(err).ToNot(HaveOccurred())
 		for i := range 200 {
 			writeDoc(docsD, fmt.Sprintf("bulk/doc%d.md", i), "# Doc\n\n"+strings.Repeat("padding content for the index ", 200)+"\n")
@@ -312,7 +337,7 @@ var _ = Describe("Store rm and reset", func() {
 
 // statsFor opens a read-only store and returns its stats.
 func statsFor(cfg *config.Config) (*Stats, error) {
-	r, err := Open(cfg)
+	r, err := Open(cfg, "")
 	if err != nil {
 		return nil, err
 	}

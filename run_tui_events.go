@@ -39,6 +39,11 @@ type tcellEvents struct {
 	// their resume commands survive the alt-screen teardown and stay findable in native
 	// scrollback rather than being lost with the transcript.
 	rotatedSessions []string
+
+	// panicValue and panicStack capture a crash for re-printing after teardown; they are
+	// not shown in the live view (Panicked fires during teardown, racing the alt-screen).
+	panicValue any
+	panicStack []byte
 }
 
 func (e *tcellEvents) Warn(w agent.Warning) {
@@ -49,6 +54,14 @@ func (e *tcellEvents) Warn(w agent.Warning) {
 
 	e.warnings = append(e.warnings, msg)
 	e.live.Append(tui.Line{Kind: tui.LineWarning, Text: msg})
+}
+
+// Panicked captures the crash for re-printing to the restored terminal after teardown.
+// It deliberately does not write into the live view: it fires during unwind, racing the
+// alt-screen teardown, and a multi-line stack does not belong in a one-line warning.
+func (e *tcellEvents) Panicked(value any, stack []byte) {
+	e.panicValue = value
+	e.panicStack = stack
 }
 
 func (e *tcellEvents) Starting(info agent.RunInfo) {

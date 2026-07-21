@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -31,6 +32,7 @@ var (
 	knowledgeCitation string
 	knowledgeSources  []string
 	knowledgeForce    bool
+	knowledgeStoreDir string
 )
 
 // registerRAGCommand registers the user-facing knowledge command and its
@@ -41,6 +43,11 @@ var (
 func registerRAGCommand(cmd *fisk.Application) {
 	k := cmd.Command("knowledge", "Builds and inspects the local knowledge base for the knowledge_search tool").Alias("rag").Alias("k")
 	k.Flag("config", "Path to the agent configuration file").Default("agent.yaml").ExistingFileVar(&configFile)
+	// The store base must match the one the agent runs with (agent.Options.StoreDir),
+	// or the CLI writes the index to a different directory than the agent reads it from.
+	// It is distinct from --state-dir, which locates session state, not the knowledge
+	// index. An absolute knowledge directory in the config needs neither.
+	k.Flag("store-dir", "Base directory the knowledge index resolves under; must match the agent's store_dir (absolute)").Envar("FISK_AI_STORE_DIR").StringVar(&knowledgeStoreDir)
 
 	idx := k.Command("index", "Builds or updates the index (incremental by content hash)").Action(knowledgeIndexAction)
 	idx.Arg("paths", "Paths to index; defaults to knowledge.paths from the config").StringsVar(&knowledgePaths)
@@ -75,6 +82,10 @@ func registerRAGCommand(cmd *fisk.Application) {
 // inspects a configuration without running the agent, so it needs neither a prompt
 // nor a model) and confirms RAG is enabled.
 func knowledgeConfig() (*config.Config, error) {
+	if knowledgeStoreDir != "" && !filepath.IsAbs(knowledgeStoreDir) {
+		return nil, fmt.Errorf("--store-dir must be an absolute path, got %q", knowledgeStoreDir)
+	}
+
 	cfg, err := config.ParseConfigFileForMode(configFile, config.ModeMCP)
 	if err != nil {
 		return nil, err
@@ -121,7 +132,7 @@ func knowledgeIndexAction(_ *fisk.ParseContext) error {
 		return fmt.Errorf("no paths given and knowledge.paths is empty - pass a path or set knowledge.paths")
 	}
 
-	store, err := rag.OpenWriter(cfg)
+	store, err := rag.OpenWriter(cfg, knowledgeStoreDir)
 	if err != nil {
 		return err
 	}
@@ -212,7 +223,7 @@ func knowledgeSearchAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	store, err := rag.Open(cfg)
+	store, err := rag.Open(cfg, knowledgeStoreDir)
 	if err != nil {
 		return err
 	}
@@ -274,7 +285,7 @@ func knowledgeShowAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	store, err := rag.Open(cfg)
+	store, err := rag.Open(cfg, knowledgeStoreDir)
 	if err != nil {
 		return err
 	}
@@ -305,7 +316,7 @@ func knowledgeRmAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	exists, err := rag.StoreExists(cfg)
+	exists, err := rag.StoreExists(cfg, knowledgeStoreDir)
 	if err != nil {
 		return err
 	}
@@ -314,7 +325,7 @@ func knowledgeRmAction(_ *fisk.ParseContext) error {
 		return nil
 	}
 
-	store, err := rag.OpenWriter(cfg)
+	store, err := rag.OpenWriter(cfg, knowledgeStoreDir)
 	if err != nil {
 		return err
 	}
@@ -352,7 +363,7 @@ func knowledgeResetAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	exists, err := rag.StoreExists(cfg)
+	exists, err := rag.StoreExists(cfg, knowledgeStoreDir)
 	if err != nil {
 		return err
 	}
@@ -361,7 +372,7 @@ func knowledgeResetAction(_ *fisk.ParseContext) error {
 		return nil
 	}
 
-	store, err := rag.OpenWriter(cfg)
+	store, err := rag.OpenWriter(cfg, knowledgeStoreDir)
 	if err != nil {
 		return err
 	}
@@ -395,7 +406,7 @@ func knowledgeSourcesAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	store, err := rag.Open(cfg)
+	store, err := rag.Open(cfg, knowledgeStoreDir)
 	if err != nil {
 		return err
 	}
@@ -438,7 +449,7 @@ func knowledgeDoctorAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	store, err := rag.Open(cfg)
+	store, err := rag.Open(cfg, knowledgeStoreDir)
 	if err != nil {
 		return err
 	}
@@ -482,7 +493,7 @@ func knowledgeStatsAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	store, err := rag.Open(cfg)
+	store, err := rag.Open(cfg, knowledgeStoreDir)
 	if err != nil {
 		return err
 	}

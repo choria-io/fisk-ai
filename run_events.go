@@ -36,6 +36,14 @@ func (c *cliEvents) Warn(w agent.Warning) {
 	}
 }
 
+// Panicked prints the recovered panic value and the verbatim stack to stderr, so a
+// developer keeps a copy-pasteable stack for a bug report. The generic, actionable
+// "please report" line is the returned PanicError, printed by the CLI after this, so it
+// is the last thing on screen rather than buried above the stack.
+func (c *cliEvents) Panicked(value any, stack []byte) {
+	fmt.Fprintf(os.Stderr, "\npanic: %v\n\n%s\n", value, stack)
+}
+
 // warningMessage is the operator-facing text for a Warning, without the "warning: "
 // prefix, so both the line UI and the full-screen UI render the same wording (the
 // line UI prints it after "warning: "; the full-screen UI shows it as a warning
@@ -68,6 +76,14 @@ func warningMessage(w agent.Warning) string {
 		return fmt.Sprintf("%d tools are available but the model backend does not support server-side tool search, so all are sent to the model directly and use more context each request; use a provider that supports tool search to defer them", w.Count)
 	case agent.WarnToolSearchDisabled:
 		return fmt.Sprintf("%d tools are available but tool search is disabled (no_tool_search), so all are sent to the model directly and use more context each request; unset no_tool_search to defer them behind the search tool", w.Count)
+	case agent.WarnKnowledgeIndexAbsent:
+		return fmt.Sprintf("knowledge is enabled but no index exists at %q; if you built it with 'knowledge index', re-run it with a matching --store-dir (or an absolute knowledge directory), or knowledge_search will return nothing", w.Name)
+	case agent.WarnTraceClose:
+		return fmt.Sprintf("closing trace file: %v", w.Err)
+	case agent.WarnJournalClose:
+		return fmt.Sprintf("closing session journal: %v", w.Err)
+	case agent.WarnTraceWrite:
+		return fmt.Sprintf("trace write failed, trace will be incomplete: %v", w.Err)
 	default:
 		return ""
 	}

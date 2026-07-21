@@ -53,6 +53,18 @@ type GateRequest struct {
 // never be wired into the concurrent MCP path, which reaches its client through
 // elicitation instead.
 type Prompter interface {
+	// CanPrompt reports whether an operator is reachable through this prompter, so
+	// every site that decides whether a run may ask a human (the confirm-gate
+	// default-deny, the human-in-the-loop tools, and their start-of-run advisories)
+	// consults one source of truth rather than each testing the terminal itself. It
+	// decouples "an operator can be asked" from "stdin is a terminal": the line
+	// prompter reports it from the terminal, a non-interactive prompter reports false,
+	// and a prompter backed by a non-terminal channel (a chat integration, a web
+	// callback) reports true, so such a channel can drive human-in-the-loop on a run
+	// with no TTY. It governs only the start-of-run decision; a live send failure is
+	// still reported per call and treated as a denial.
+	CanPrompt() bool
+
 	// ApproveCommand renders the approval request for a confirm-gated command (the
 	// header naming the command and its gating tag, and the sanitized command line)
 	// and returns the operator's three-way choice. An interrupt, EOF, closed input,
@@ -90,6 +102,10 @@ type denyPrompter struct{}
 // DefaultDenyPrompter returns a Prompter whose every method fails closed. Use it
 // wherever a BuiltinTool must be invoked with no operator reachable.
 func DefaultDenyPrompter() Prompter { return denyPrompter{} }
+
+// CanPrompt reports false: this prompter exists precisely because no operator is
+// reachable, so every human-facing decision must fail closed.
+func (denyPrompter) CanPrompt() bool { return false }
 
 func (denyPrompter) ApproveCommand(context.Context, GateRequest) (ConfirmChoice, error) {
 	return ConfirmNo, errNoOperator

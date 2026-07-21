@@ -34,14 +34,26 @@ type options struct {
 // newStore is the runstate.Factory for the file backend: it decodes the options
 // block, resolves the directory, and opens the store. A construction failure (bad
 // options, an unwritable directory) surfaces here at run start.
-func newStore(raw json.RawMessage) (runstate.Store, error) {
+//
+// Resolution: a configured directory wins (relative ones rebased under env.StoreDir);
+// otherwise, with a run-store base set, journals root under env.StoreDir/runs so a
+// run's state sits alongside its memory and knowledge, and without one they default
+// to the absolute XDG path. Either way runs never land in the working directory.
+func newStore(env runstate.RuntimeEnv, raw json.RawMessage) (runstate.Store, error) {
 	opts, err := decodeOptions(raw)
 	if err != nil {
 		return nil, err
 	}
 
 	dir := opts.Directory
-	if dir == "" {
+	switch {
+	case dir != "":
+		if env.StoreDir != "" && !filepath.IsAbs(dir) {
+			dir = filepath.Join(env.StoreDir, dir)
+		}
+	case env.StoreDir != "":
+		dir = filepath.Join(env.StoreDir, "runs")
+	default:
 		dir, err = runstate.DefaultDir()
 		if err != nil {
 			return nil, err

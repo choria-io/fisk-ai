@@ -121,12 +121,19 @@ type Store struct {
 }
 
 // resolveDir returns the store directory for cfg: the configured directory when
-// set (relative to the working directory when not absolute), else
-// knowledge/<identity>, mirroring the memory feature's layout.
-func resolveDir(cfg *config.Config) string {
+// set, else knowledge/<identity>, mirroring the memory feature's layout. A relative
+// result is rebased under storeDir when the caller set one, so runs sharing a process
+// place their index deterministically; an absolute configured directory is honored
+// verbatim and ignores storeDir, and an empty storeDir keeps the process-working-
+// directory behavior. The agent and the knowledge CLI must pass the same storeDir or
+// they resolve to different directories (see rag.Open's soft not-built state).
+func resolveDir(cfg *config.Config, storeDir string) string {
 	dir := cfg.Harness.RAG.Directory
 	if dir == "" {
-		return filepath.Join("knowledge", cfg.Identity)
+		dir = filepath.Join("knowledge", cfg.Identity)
+	}
+	if storeDir != "" && !filepath.IsAbs(dir) {
+		dir = filepath.Join(storeDir, dir)
 	}
 
 	return dir
@@ -136,8 +143,8 @@ func resolveDir(cfg *config.Config) string {
 // validating its contents. The rm and reset CLI commands use it to avoid creating
 // an empty store when there is nothing to act on, and so they work even against an
 // index whose pinned embedding identity no longer matches the config.
-func StoreExists(cfg *config.Config) (bool, error) {
-	path := filepath.Join(resolveDir(cfg), dbFileName)
+func StoreExists(cfg *config.Config, storeDir string) (bool, error) {
+	path := filepath.Join(resolveDir(cfg, storeDir), dbFileName)
 	_, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
@@ -177,13 +184,13 @@ func resolvedMaxInjectedTokens(cfg *config.RAGConfig) int {
 // ErrIndexNotBuilt, so a first run never fails to start. When the file exists it
 // validates the pinned embedding identity against the configured embedder and
 // refuses a stale or too-new index rather than returning garbage rankings.
-func Open(cfg *config.Config) (*Store, error) {
+func Open(cfg *config.Config, storeDir string) (*Store, error) {
 	emb, err := buildEmbedder(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	dir := resolveDir(cfg)
+	dir := resolveDir(cfg, storeDir)
 	dbPath := filepath.Join(dir, dbFileName)
 
 	s := &Store{
@@ -231,13 +238,13 @@ func Open(cfg *config.Config) (*Store, error) {
 // Open does. The vector table and its dimension are created later, during ingest,
 // once the live model's dimension is known (see index.go), so this never contacts
 // the embeddings server. Close releases the lock.
-func OpenWriter(cfg *config.Config) (*Store, error) {
+func OpenWriter(cfg *config.Config, storeDir string) (*Store, error) {
 	emb, err := buildEmbedder(cfg)
 	if err != nil {
 		return nil, err
 	}
 
-	dir := resolveDir(cfg)
+	dir := resolveDir(cfg, storeDir)
 	if err := os.MkdirAll(dir, dirFileMode); err != nil {
 		return nil, fmt.Errorf("creating knowledge directory %q: %w", dir, err)
 	}

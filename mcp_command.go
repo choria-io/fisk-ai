@@ -66,7 +66,7 @@ func mcpAction(_ *fisk.ParseContext) error {
 		fmt.Fprintln(os.Stderr, "warning: memory has no effect over MCP; the built-in memory tools are only available in an agent run")
 	}
 
-	tools, err := fisktool.ServedTools(cfg)
+	tools, err := fisktool.ServedTools(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -110,5 +110,7 @@ func mcpAction(_ *fisk.ParseContext) error {
 		ConfirmTags:  cfg.ConfirmTags(),
 		ConfirmMode:  mcpserver.ConfirmMode(cfg.ConfirmOverMCPMode()),
 		Builtins:     ragBuiltins,
+		Concurrency:  cfg.MCPMaxConcurrentTools(),
+		CallTimeout:  cfg.MCPToolTimeout(),
 	})
 }

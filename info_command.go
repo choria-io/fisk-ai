@@ -39,6 +39,9 @@ func registerInfoAction(cmd *fisk.Application) {
 // model or prompt here, as ModeAgent does, would reject a valid MCP config it is
 // meant to inspect.
 func infoAction(_ *fisk.ParseContext) error {
+	ctx, cancel := interruptContext()
+	defer cancel()
+
 	cfg, err := config.ParseConfigFileForMode(configFile, config.ModeMCP)
 	if err != nil {
 		return err
@@ -48,7 +51,7 @@ func infoAction(_ *fisk.ParseContext) error {
 		fmt.Fprintln(os.Stderr, "warning: include/exclude have no effect without application_path; they filter the wrapped application's tools")
 	}
 
-	tools, err := fisktool.LoadTools(cfg)
+	tools, err := fisktool.LoadTools(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -143,7 +146,7 @@ func infoAction(_ *fisk.ParseContext) error {
 	// List the application's exposable global flags so an operator can see which
 	// exist and which they have allowlisted under global_flags, closing the loop
 	// between "what can I expose" and the error a bad name would raise at load.
-	globals, err := fisktool.AppGlobalFlags(cfg)
+	globals, err := fisktool.AppGlobalFlags(ctx, cfg)
 	if err != nil {
 		return err
 	}

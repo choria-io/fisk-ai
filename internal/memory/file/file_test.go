@@ -175,7 +175,7 @@ var _ = Describe("New", func() {
 		dir := GinkgoT().TempDir()
 		GinkgoT().Chdir(dir)
 
-		store, err := memory.New(memCfg(""))
+		store, err := memory.New(memCfg(""), "")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(store).ToNot(BeNil())
 
@@ -187,15 +187,39 @@ var _ = Describe("New", func() {
 		dir := GinkgoT().TempDir()
 		target := filepath.Join(dir, "custom")
 
-		_, err := memory.New(memCfg(`{"directory":` + quote(target) + `}`))
+		_, err := memory.New(memCfg(`{"directory":`+quote(target)+`}`), "")
 		Expect(err).ToNot(HaveOccurred())
 
 		_, err = os.Stat(target)
 		Expect(err).ToNot(HaveOccurred())
 	})
 
+	It("Should rebase the default directory under a store base", func() {
+		base := GinkgoT().TempDir()
+
+		store, err := memory.New(memCfg(""), base)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(store).ToNot(BeNil())
+
+		_, err = os.Stat(filepath.Join(base, "memory", "agent"))
+		Expect(err).ToNot(HaveOccurred())
+	})
+
+	It("Should honor an absolute configured directory regardless of the store base", func() {
+		base := GinkgoT().TempDir()
+		target := filepath.Join(GinkgoT().TempDir(), "custom")
+
+		_, err := memory.New(memCfg(`{"directory":`+quote(target)+`}`), base)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = os.Stat(target)
+		Expect(err).ToNot(HaveOccurred())
+		// The base was not prepended to the absolute path.
+		Expect(filepath.Join(base, "memory")).ToNot(BeADirectory())
+	})
+
 	It("Should reject an unknown option key", func() {
-		_, err := memory.New(memCfg(`{"nonesuch":"x"}`))
+		_, err := memory.New(memCfg(`{"nonesuch":"x"}`), "")
 		Expect(err).To(MatchError(ContainSubstring("invalid file memory options")))
 	})
 })

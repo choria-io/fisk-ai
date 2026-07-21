@@ -13,9 +13,12 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -136,6 +139,75 @@ type Options struct {
 	// interactive continuation, the default one-shot behavior. It is called only from
 	// the single run goroutine, like the prompter.
 	NextPrompt func(context.Context) Continuation
+
+	// Provider, when non-nil, is the llm.Provider Run uses for every model call,
+	// bypassing the registry lookup by llm.provider name. It lets a Go caller build a
+	// provider itself (a fleet-wide rate-limiter wrapper, a test fake) and hand it in
+	// rather than reach the process-global registry. When nil, Run resolves the
+	// provider from the registry as the CLI does, and only then are the request
+	// middlewares (HTTP debug dump, request tracer) assembled and attached: an injected
+	// provider was built by the caller, who owns its hooks, so those middlewares are not
+	// applied to it.
+	//
+	// Credential-scrub caveat: commandEnv strips llm.CredentialEnvNames, the union of
+	// every REGISTERED provider's secret env vars, from every tool subprocess. An
+	// injected provider was never registered, so its credentials are not in that union
+	// and are not scrubbed. This is safe for the intended uses (a test fake holds no
+	// credentials; a rate-limiter wrapper wraps a provider that was registered normally,
+	// so its names are already in the union), but a caller injecting a hand-built
+	// provider holding a live API key from an unregistered source would get no scrubbing
+	// of that key from tool subprocesses.
+	Provider llm.Provider
+
+	// ToolWorkDir is the directory local command tools run in. With many runs sharing
+	// one long-lived process, each run passes its own so a tool writing a relative path
+	// does not collide with a sibling run's. It must be an absolute path that already
+	// exists; the caller owns its lifecycle (creation and removal) and must not remove
+	// it until Run has returned. Empty inherits the process working directory, the CLI's
+	// behavior.
+	//
+	// It is collision avoidance, not confinement: it sets the tool subprocess's working
+	// directory and nothing more, so a tool can still write anywhere the process uid can
+	// (an absolute path, $HOME, $TMPDIR, all of which stay shared across runs). It is
+	// never defaulted; a run with it empty behaves exactly as before. It does not affect
+	// application introspection, which always runs in the process working directory.
+	ToolWorkDir string
+
+	// StoreDir is the base directory the persistent stores (memory, knowledge, and the
+	// run journal) resolve their relative or default paths under, so runs sharing one
+	// process place their state deterministically. Unlike ToolWorkDir it is not per-run
+	// scratch: these stores are usually shared across runs of one identity. It must be
+	// an absolute path that already exists; empty resolves as before (memory and
+	// knowledge relative to the process working directory, the journal in the XDG state
+	// directory). A backend that is not directory-backed ignores it, and an absolute
+	// configured store directory is honored verbatim regardless of it.
+	//
+	// The standalone knowledge CLI must be pointed at the same base (its --store-dir
+	// flag) or an absolute knowledge directory both read, or the agent reads its index
+	// from a different directory than the CLI wrote it to.
+	StoreDir string
+
+	// Conns, when non-nil, is the shared connection Provider Run borrows for remote
+	// tools instead of dialing NATS itself. It exists so a caller running many agents
+	// in one process establishes one connection (conns.New(conns.WithNats(nc))) and
+	// hands it to every run, rather than each run opening its own dial, a duplicate
+	// connection named identically, and its own discovery round-trip. A borrowed
+	// Provider is owned by the caller: Run uses it but never Closes it. When nil, Run
+	// dials per run from cfg.NatsContext and Closes that connection at run end, so the
+	// CLI path is unchanged. It is consulted only when the config declares remote_tools.
+	Conns *conns.Provider
+
+	// RAGStore, when non-nil, is the read-only knowledge store Run borrows instead of
+	// opening its own. It lets a caller running many agents in one process open one
+	// store (one sqlite handle and its database/sql connection pool) and share it across
+	// every run, bounding the file descriptors a long-lived server accumulates. It must
+	// be opened read-only (rag.Open, not rag.OpenWriter) and is safe to share: reads go
+	// through the pool concurrently. A borrowed store is owned by the caller: Run uses it
+	// but never Closes it, and does not re-check the index location (the caller resolved
+	// it). When nil, Run opens a store per run from cfg and opts.StoreDir and closes it,
+	// so the CLI path is unchanged. It is consulted only when the config enables
+	// knowledge.
+	RAGStore *rag.Store
 }
 
 // Continuation is the operator's decision at an interactive turn boundary. Continue
@@ -156,6 +228,56 @@ type Result struct {
 	SessionID string
 }
 
+// PanicError is the error Run returns when it recovered a panic on its run goroutine.
+// It reports that the run crashed rather than reaching a terminal outcome, so a caller
+// (a job system) tells a crash from an outcome with errors.As and requeues or escalates
+// it. Its message is deliberately generic and carries no stack: the full stack is
+// delivered only through Events.Panicked, since it leaks absolute paths and frame
+// arguments and must never cross to a remote peer. Value keeps the recovered value for
+// a caller that wants to inspect or re-panic it.
+type PanicError struct {
+	value any
+}
+
+// Error is a fixed operator-facing message that names an internal crash and rules out
+// the outcomes it would otherwise be confused with (a model refusal, a tool failure, a
+// budget cap). It carries no stack.
+func (e *PanicError) Error() string {
+	return "internal error: fisk-ai crashed (a bug, not a model or tool failure); please report it"
+}
+
+// Value returns the recovered panic value, for a caller that wants to inspect or
+// re-panic it.
+func (e *PanicError) Value() any { return e.value }
+
+// validateCallerDir checks a caller-owned directory option (ToolWorkDir today,
+// StoreDir next): empty is allowed and preserves today's behavior, but a value that
+// is set must be an absolute path that already exists as a directory. The caller
+// creates and removes these directories; Run only validates them, so a mistake
+// surfaces at run start with a message naming the option rather than as a confusing
+// subprocess or store error later. name is the option name for the message.
+func validateCallerDir(name, dir string) error {
+	if dir == "" {
+		return nil
+	}
+	if !filepath.IsAbs(dir) {
+		return fmt.Errorf("%s must be an absolute path, got %q", name, dir)
+	}
+
+	info, err := os.Stat(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("%s %q does not exist; the caller must create it before the run", name, dir)
+	}
+	if err != nil {
+		return fmt.Errorf("%s %q: %w", name, dir, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%s %q is not a directory", name, dir)
+	}
+
+	return nil
+}
+
 // Run loads the tools and prompt from opts.Config, sets up checkpointing and
 // resume as requested, and drives the agentic loop to a terminal state. It emits
 // the run's narration, tool traces and advisories through events and returns a
@@ -164,11 +286,67 @@ type Result struct {
 // per run so the concurrent MCP path never receives it. The returned Result is
 // non-nil even on error so the caller can always print the stats. The context
 // governs cancellation; a graceful suspend is requested via opts.SuspendRequested.
-func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prompter) (*Result, error) {
+//
+// A panic on the run goroutine is recovered and returned as a *PanicError, so one
+// nil dereference cannot take down a long-lived server and every sibling run; the
+// stack is delivered to events (Events.Panicked), never on the returned error. See
+// the panic barrier below for the scope limits.
+func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prompter) (res *Result, err error) {
 	cfg := opts.Config
-	res := &Result{}
+	res = &Result{}
 
-	tools, err := fisk.LoadTools(cfg)
+	// activeRunner is nil until the runner is constructed; the panic barrier reads it to
+	// report the session the run ended on, which the normal path sets only after the
+	// runner returns.
+	var activeRunner *runner
+
+	// Panic barrier. Registered first so it runs last (defers are LIFO): the deferred
+	// stores, journal and tracer close before it, so it also catches a panic thrown by
+	// one of those cleanups. It converts a panic into a PanicError the caller tells from
+	// a terminal outcome with errors.As (a job system requeues or escalates a crash but
+	// records an outcome), delivers the stack to the Events sink for local rendering
+	// (never onto the returned error, which may cross to a remote peer and leaks absolute
+	// paths and frame arguments), and leaves res.Reason unset because a crash is not an
+	// outcome. It catches only this goroutine; the agent package spawns none today, but a
+	// future goroutine would escape it, and it cannot catch a fatal runtime error
+	// (concurrent map write), OOM, or runtime.Goexit, so it is not a substitute for the
+	// per-run isolation the rest of this work provides.
+	defer func() {
+		p := recover()
+		if p == nil {
+			return
+		}
+
+		stack := debug.Stack()
+
+		if activeRunner != nil {
+			res.SessionID = activeRunner.sessionID
+			if res.Stats != nil {
+				res.Stats.Session = activeRunner.sessionID
+			}
+		}
+
+		// Panicked renders caller-supplied code during unwind; a panic in it must not
+		// escape and crash the process the barrier exists to protect.
+		func() {
+			defer func() { recover() }()
+			events.Panicked(p, stack)
+		}()
+
+		err = &PanicError{value: p}
+	}()
+
+	// Directory options are validated before anything runs, so a bad path fails with a
+	// clear message rather than a confusing subprocess ENOENT partway through. The
+	// caller owns these directories; Run only checks them.
+	if err := validateCallerDir("tool_work_dir", opts.ToolWorkDir); err != nil {
+		return res, err
+	}
+	if err := validateCallerDir("store_dir", opts.StoreDir); err != nil {
+		return res, err
+	}
+
+	tools, err := fisk.LoadTools(ctx, cfg)
 	if err != nil {
 		return res, err
 	}
@@ -201,7 +379,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 		taken[b.Name()] = true
 	}
 
-	if len(builtins) > 0 && !util.StdinIsTerminal() {
+	if len(builtins) > 0 && !prompter.CanPrompt() {
 		events.Warn(Warning{Kind: WarnHITLNoTerminal})
 	}
 
@@ -213,7 +391,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	var memStore memory.Store
 	var memBuiltins []*builtin.BuiltinTool
 	if cfg.MemoryEnabled() {
-		memStore, err = memory.New(cfg)
+		memStore, err = memory.New(cfg, opts.StoreDir)
 		if err != nil {
 			return res, err
 		}
@@ -236,11 +414,30 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	var ragStore *rag.Store
 	var ragBuiltins []*builtin.BuiltinTool
 	if cfg.RAGEnabled() {
-		ragStore, err = rag.Open(cfg)
-		if err != nil {
-			return res, err
+		// A caller-injected store is borrowed: a fleet shares one read-only store (one
+		// sqlite handle and its database/sql pool) across every run rather than each
+		// opening its own, bounding file descriptors in a long-lived server. It is owned
+		// by the caller, so Run neither closes it nor re-checks the index (the caller
+		// resolved its location). Otherwise Run opens per run, as the CLI does, and closes
+		// it. rag.Open validates the config (a bad embeddings block fails before the loop)
+		// but treats a missing index file as a soft empty state, so a first run never fails
+		// to start. The store is opened read-only; knowledge index is the writer.
+		ragStore = opts.RAGStore
+		if ragStore == nil {
+			ragStore, err = rag.Open(cfg, opts.StoreDir)
+			if err != nil {
+				return res, err
+			}
+			defer ragStore.Close()
+
+			// A missing index is a soft state (first run), but with a store base set the
+			// caller expected an index there; most often the knowledge CLI wrote it elsewhere
+			// under a different base. Surface it, since knowledge_search would otherwise
+			// silently return nothing.
+			if opts.StoreDir != "" && !ragStore.Built() {
+				events.Warn(Warning{Kind: WarnKnowledgeIndexAbsent, Name: ragStore.Path()})
+			}
 		}
-		defer ragStore.Close()
 
 		ragBuiltins = builtin.RAGTools(cfg, ragStore)
 		for _, b := range ragBuiltins {
@@ -259,11 +456,19 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	var remoteTools []*a2a.RemoteTool
 	remoteByName := map[string]*a2a.RemoteTool{}
 	if len(cfg.RemoteTools) > 0 {
-		provider, err := conns.Connect(cfg.NatsContext, cfg.Identity)
-		if err != nil {
-			return res, fmt.Errorf("connecting to NATS for remote tools: %w", err)
+		// A caller-injected Provider is borrowed: the caller established the connection
+		// and shares it across every concurrent run, so Run uses it but must never Close
+		// it. Only a connection Run dialed itself is owned and released here. Dialing per
+		// run is the CLI path and stays unchanged.
+		provider := opts.Conns
+		if provider == nil {
+			p, err := conns.Connect(cfg.NatsContext, cfg.Identity)
+			if err != nil {
+				return res, fmt.Errorf("connecting to NATS for remote tools: %w", err)
+			}
+			defer p.Close()
+			provider = p
 		}
-		defer provider.Close()
 
 		transport, err := a2a.NewTransport(cfg.A2ATransport(), provider, a2a.TransportConfig{Identity: cfg.Identity, Timeout: cfg.LLM.Budget.CallTimeoutParsed})
 		if err != nil {
@@ -309,7 +514,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 			confirmTools++
 		}
 	}
-	if confirmTools > 0 && !util.StdinIsTerminal() {
+	if confirmTools > 0 && !prompter.CanPrompt() {
 		events.Warn(Warning{Kind: WarnConfirmNoTerminal, Count: confirmTools})
 	}
 
@@ -337,50 +542,58 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	stats := &util.RunStats{Start: time.Now(), Model: cfg.LLM.Model}
 	res.Stats = stats
 
-	if opts.BaseURL != "" {
-		if err := util.ValidateBaseURL("--base-url / ANTHROPIC_BASE_URL", opts.BaseURL); err != nil {
-			return res, err
+	// The provider owns the wire call. When the caller injected one on Options it is
+	// used as-is: it was built by the caller, who owns its request hooks, so the tracer
+	// and HTTP-debug middlewares assembled below apply only to the registry path.
+	// Otherwise the provider is resolved from the registry by name rather than
+	// constructed directly, so a second backend is linked in the same way the a2a,
+	// memory and session backends are; the name comes from llm.provider, which defaults
+	// to anthropic, the only provider linked in today.
+	provider := opts.Provider
+	if provider == nil {
+		if opts.BaseURL != "" {
+			if err := util.ValidateBaseURL("--base-url / ANTHROPIC_BASE_URL", opts.BaseURL); err != nil {
+				return res, err
+			}
 		}
-	}
 
-	// The provider owns the wire call. Its cross-cutting request hooks (the HTTP debug
-	// dump and the request tracer) are assembled here, where their lifecycle lives: the
-	// tracer's summary and close are deferred against this run's stats and exit paths.
-	var middlewares []llm.Middleware
-	if opts.HTTPDebugOut != nil {
-		middlewares = append(middlewares, util.HttpDebugMiddleware(opts.HTTPDebugOut))
-	}
+		// The provider's cross-cutting request hooks (the HTTP debug dump and the request
+		// tracer) are assembled here, where their lifecycle lives: the tracer's summary
+		// and close are deferred against this run's stats and exit paths.
+		var middlewares []llm.Middleware
+		if opts.HTTPDebugOut != nil {
+			middlewares = append(middlewares, util.HttpDebugMiddleware(opts.HTTPDebugOut))
+		}
 
-	if opts.TraceFile != "" {
-		tracer, err := util.NewTracer(opts.TraceFile)
+		if opts.TraceFile != "" {
+			tracer, terr := util.NewTracer(opts.TraceFile, func(err error) {
+				events.Warn(Warning{Kind: WarnTraceWrite, Err: err})
+			})
+			if terr != nil {
+				return res, terr
+			}
+			// Close runs last; the summary line is written just before it. Both are
+			// deferred so they fire on every exit path, including errors.
+			defer func() {
+				if cerr := tracer.Close(); cerr != nil {
+					events.Warn(Warning{Kind: WarnTraceClose, Err: cerr})
+				}
+			}()
+			defer tracer.RecordSummary(stats)
+
+			tracer.RecordSession(cfg.LLM.Model, opts.ConfigFile, util.Version())
+			middlewares = append(middlewares, tracer.Middleware)
+		}
+
+		provider, err = llm.NewProvider(cfg.LLMProvider(), llm.Config{
+			APIKey:      opts.APIKey,
+			BaseURL:     opts.BaseURL,
+			Timeout:     cfg.LLM.Budget.CallTimeoutParsed,
+			Middlewares: middlewares,
+		})
 		if err != nil {
 			return res, err
 		}
-		// Close runs last; the summary line is written just before it. Both are
-		// deferred so they fire on every exit path, including errors.
-		defer func() {
-			if cerr := tracer.Close(); cerr != nil {
-				fmt.Fprintf(os.Stderr, "warning: closing trace file: %v\n", cerr)
-			}
-		}()
-		defer tracer.RecordSummary(stats)
-
-		tracer.RecordSession(cfg.LLM.Model, opts.ConfigFile, util.Version())
-		middlewares = append(middlewares, tracer.Middleware)
-	}
-
-	// The provider is resolved from the registry by name rather than constructed
-	// directly, so a second backend is linked in the same way the a2a, memory and
-	// session backends are. The name comes from llm.provider, which defaults to
-	// anthropic, the only provider linked in today.
-	provider, err := llm.NewProvider(cfg.LLMProvider(), llm.Config{
-		APIKey:      opts.APIKey,
-		BaseURL:     opts.BaseURL,
-		Timeout:     cfg.LLM.Budget.CallTimeoutParsed,
-		Middlewares: middlewares,
-	})
-	if err != nil {
-		return res, err
 	}
 
 	// Large tool sets are deferred and discovered via the tool search tool; small
@@ -473,7 +686,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 			return res, err
 		}
 
-		store, err := runstate.New(cfg.SessionBackend(), cfg.SessionRawOptions())
+		store, err := runstate.New(cfg.SessionBackend(), cfg.SessionRawOptions(), opts.StoreDir)
 		if err != nil {
 			return res, err
 		}
@@ -516,7 +729,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 			if err != nil {
 				return res, err
 			}
-			defer closeJournal(j)
+			defer closeJournal(j, events)
 
 			journal = j
 			seq = j.LastSeq()
@@ -580,7 +793,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 			if err != nil {
 				return res, err
 			}
-			defer closeJournal(j)
+			defer closeJournal(j, events)
 
 			journal = j
 			seq = 1
@@ -666,6 +879,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 		interactive:     interactive,
 		events:          events,
 		prompter:        prompter,
+		toolWorkDir:     opts.ToolWorkDir,
 		messages:        messages,
 		journal:         journal,
 		seq:             seq,
@@ -677,6 +891,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 
 		resumeAtInputBoundary: resumeAtInputBoundary,
 	}
+	activeRunner = r
 	if checkpointing {
 		r.suspendRequested = opts.SuspendRequested
 	}
@@ -696,10 +911,10 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 
 // closeJournal closes a session journal, warning rather than failing the run if
 // the close errors, since the run's own outcome is already decided.
-func closeJournal(j runstate.Journal) {
+func closeJournal(j runstate.Journal, events Events) {
 	err := j.Close()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: closing session journal: %v\n", err)
+		events.Warn(Warning{Kind: WarnJournalClose, Err: err})
 	}
 }
 
@@ -716,7 +931,10 @@ func endsOnAssistant(messages []llm.Message) bool {
 // resume without the operator re-passing the flag. It does not lock the session (the
 // subsequent resume takes the lock), so it is a cheap pre-flight read.
 func SessionInteractive(cfg *config.Config, id string) (bool, error) {
-	store, err := runstate.New(cfg.SessionBackend(), cfg.SessionRawOptions())
+	// This is a CLI-only pre-flight read, where run journals live in the XDG default,
+	// so it resolves with no store base. A server resume runs through Run, which passes
+	// its StoreDir.
+	store, err := runstate.New(cfg.SessionBackend(), cfg.SessionRawOptions(), "")
 	if err != nil {
 		return false, err
 	}

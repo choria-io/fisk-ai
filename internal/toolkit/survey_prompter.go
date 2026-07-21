@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/AlecAivazis/survey/v2"
+	"golang.org/x/term"
 )
 
 // surveyPrompter is the line-oriented Prompter used by the default CLI. It wraps
@@ -32,6 +33,15 @@ type surveyPrompter struct {
 // command traces to stderr.
 func NewSurveyPrompter() Prompter {
 	return &surveyPrompter{out: os.Stderr}
+}
+
+// CanPrompt reports whether stdin is an interactive terminal: survey reads and draws
+// on the real terminal, so it can only ask an operator when one is attached. This is
+// the single place the CLI's terminal check now lives; the agent, the confirm gate,
+// and the human-in-the-loop tools consult it through the Prompter rather than testing
+// the terminal themselves.
+func (p *surveyPrompter) CanPrompt() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
 }
 
 // ApproveCommand renders the confirm-gate header and command trace, then asks the

@@ -55,3 +55,4 @@
 - Modify `ABTaskFile`, `Dockerfile.goreleaser`, or CI configuration.
 - Run destructive git operations (force-push, reset --hard, branch -D) or skip hooks.
 - Change any git configuration
+- Do not perform `find` operations over the entire OS `/`

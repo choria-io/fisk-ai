@@ -10,9 +10,23 @@ import (
 	"sync"
 )
 
-// Factory constructs a Store for a backend from the agent identity and the raw
-// per-backend options block (harness.memory.options, verbatim; empty when
-// unset). It is registered under a backend name with Register.
+// RuntimeEnv carries the per-run environment a backend may need beyond its own
+// options. A backend uses what applies to it and ignores the rest: a directory
+// backend rebases a relative store path under StoreDir, a backend that keeps its
+// data elsewhere (a database, a key-value bucket) ignores it. It is a struct rather
+// than a bare argument so a later per-run value is a new field, not another change
+// across every backend.
+type RuntimeEnv struct {
+	// StoreDir is the base directory a directory backend resolves a relative or
+	// default store path under, so runs sharing one process can place their stores
+	// deterministically. Empty resolves as before (relative to the process working
+	// directory); an absolute configured directory ignores it.
+	StoreDir string
+}
+
+// Factory constructs a Store for a backend from the per-run environment, the agent
+// identity, and the raw per-backend options block (harness.memory.options, verbatim;
+// empty when unset). It is registered under a backend name with Register.
 //
 // An implementation must:
 //   - be safe for concurrent use by independent processes sharing a backing
@@ -26,7 +40,7 @@ import (
 //     mistyped option fails at run start, and surface a construction failure
 //     (bad options, an unwritable backing store) as an error rather than deferring
 //     it to the first tool call.
-type Factory func(identity string, options json.RawMessage) (Store, error)
+type Factory func(env RuntimeEnv, identity string, options json.RawMessage) (Store, error)
 
 var (
 	registryMu sync.Mutex

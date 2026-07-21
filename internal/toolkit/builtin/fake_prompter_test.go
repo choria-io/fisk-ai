@@ -18,12 +18,15 @@ import (
 // since reaching it means the caller prompted when it should have resolved the
 // outcome itself (for example when no terminal is attached).
 type fakePrompter struct {
+	canPrompt   bool
 	approveFn   func(toolkit.GateRequest) (toolkit.ConfirmChoice, error)
 	confirmFn   func(string) (bool, error)
 	selectFn    func(string, []string) (int, error)
 	inputFn     func(string, string) (string, error)
 	lastGateReq toolkit.GateRequest
 }
+
+func (f *fakePrompter) CanPrompt() bool { return f.canPrompt }
 
 func (f *fakePrompter) ApproveCommand(_ context.Context, req toolkit.GateRequest) (toolkit.ConfirmChoice, error) {
 	f.lastGateReq = req

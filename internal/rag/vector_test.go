@@ -83,7 +83,7 @@ func vectorConfig(dir, model string) *config.Config {
 // openWriterMock opens a writer and swaps in the mock embedder so no network is
 // touched, mirroring how a real writer holds an Embedder.
 func openWriterMock(cfg *config.Config, emb Embedder) *Store {
-	w, err := OpenWriter(cfg)
+	w, err := OpenWriter(cfg, "")
 	Expect(err).ToNot(HaveOccurred())
 	w.emb = emb
 
@@ -125,7 +125,7 @@ var _ = Describe("Store (vector tier)", func() {
 		Expect(st.Meta.Dimension).To(Equal(32))
 		Expect(st.Meta.Normalized).To(BeTrue())
 
-		r, err := Open(vectorConfig(storeD, "m1"))
+		r, err := Open(vectorConfig(storeD, "m1"), "")
 		Expect(err).ToNot(HaveOccurred())
 		defer r.Close()
 		r.emb = &fakeEmbedder{model: "m1", dim: 32}
@@ -183,13 +183,13 @@ var _ = Describe("Store (vector tier)", func() {
 	It("refuses on the read path when the configured model differs from the manifest", func() {
 		indexVector("m1", 32)
 
-		_, err := Open(vectorConfig(storeD, "m2"))
+		_, err := Open(vectorConfig(storeD, "m2"), "")
 		Expect(err).To(MatchError(ErrMetaMismatch))
 	})
 
 	It("refuses to add the vector tier to a lexical-only index without a reindex", func() {
 		// Build lexical first.
-		lw, err := OpenWriter(lexicalConfig(storeD))
+		lw, err := OpenWriter(lexicalConfig(storeD), "")
 		Expect(err).ToNot(HaveOccurred())
 		_, err = lw.Index(ctx, []string{docsD}, IndexOptions{Reconcile: true})
 		Expect(err).ToNot(HaveOccurred())
@@ -204,7 +204,7 @@ var _ = Describe("Store (vector tier)", func() {
 	It("degrades to lexical when the embeddings server is unreachable at query time", func() {
 		indexVector("m1", 32)
 
-		r, err := Open(vectorConfig(storeD, "m1"))
+		r, err := Open(vectorConfig(storeD, "m1"), "")
 		Expect(err).ToNot(HaveOccurred())
 		defer r.Close()
 		r.emb = &fakeEmbedder{model: "m1", dim: 32, failQuery: true}

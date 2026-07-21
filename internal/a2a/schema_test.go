@@ -118,6 +118,14 @@ var _ = Describe("Validator", func() {
 				Expect(err).ToNot(HaveOccurred(), "%T should validate", msg)
 			}
 		})
+
+		It("Should accept the suspended and max_iterations stop reasons", func() {
+			for _, reason := range []StopReason{StopSuspended, StopMaxIterations} {
+				result := NewResult(reason)
+				fillHeader(&result.Header)
+				Expect(v.ValidateMessage(result)).To(Succeed(), "stop_reason %q should validate", reason)
+			}
+		})
 	})
 
 	Describe("invalid messages", func() {

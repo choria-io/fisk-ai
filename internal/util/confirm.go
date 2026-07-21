@@ -74,12 +74,14 @@ func (g *ConfirmGate) Approve(ctx context.Context, toolName, commandPath, displa
 		return true, ""
 	}
 
-	// Default-deny lives here at the caller, not in the prompter: with no terminal
-	// there is no operator to ask, and a run canceled before the operator could
-	// answer must resolve to a denial rather than block or run. Both are checked
-	// before any prompt is shown so the prompter is never reached in a state where
-	// its answer could not be trusted.
-	if !StdinIsTerminal() {
+	// Default-deny lives here at the caller, not in the prompter: with no operator
+	// reachable there is no one to ask, and a run canceled before the operator could
+	// answer must resolve to a denial rather than block or run. Both are checked before
+	// any prompt is shown so the prompter is never reached in a state where its answer
+	// could not be trusted. Whether an operator is reachable is the prompter's own
+	// report, so a non-terminal channel that can still ask a human is honored rather
+	// than declined for lacking a TTY.
+	if !g.prompter.CanPrompt() {
 		return false, NoTerminalReason
 	}
 	if err := ctx.Err(); err != nil {

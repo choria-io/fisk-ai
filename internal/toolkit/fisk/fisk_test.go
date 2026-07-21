@@ -10,7 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/choria-io/fisk"
 	. "github.com/onsi/ginkgo/v2"
@@ -519,7 +521,7 @@ var _ = Describe("Command execution", func() {
 	It("Should run the command and return its output and exit code", func() {
 		tool := doTool(writeExecutable("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n"))
 
-		result, err := tool.Execute(context.Background(), json.RawMessage(`{"level":"info","subject":"hello"}`))
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{"level":"info","subject":"hello"}`), "")
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(result.ExitCode).To(Equal(0))
@@ -531,7 +533,7 @@ var _ = Describe("Command execution", func() {
 	It("Should report a non-zero exit in the result rather than as an error", func() {
 		tool := doTool(writeExecutable("#!/bin/sh\necho oops >&2\nexit 3\n"))
 
-		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`))
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`), "")
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(result.ExitCode).To(Equal(3))
@@ -604,7 +606,7 @@ var _ = Describe("Command execution", func() {
 	It("Should set LLMFORMAT=1 in the command environment", func() {
 		tool := doTool(writeExecutable("#!/bin/sh\nprintf 'LLMFORMAT=%s\\n' \"$LLMFORMAT\"\n"))
 
-		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`))
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`), "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Output).To(Equal("LLMFORMAT=1\n"))
 	})
@@ -618,7 +620,7 @@ var _ = Describe("Command execution", func() {
 		tool := doTool(writeExecutable("#!/bin/sh\n" +
 			"printf '" + fakeCredEnvVar + "=[%s]\\n' \"$" + fakeCredEnvVar + "\"\n"))
 
-		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`))
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`), "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Output).To(Equal(fakeCredEnvVar + "=[]\n"))
 	})
@@ -631,7 +633,7 @@ var _ = Describe("Command execution", func() {
 			"printf 'MY_OTHER_VAR=[%s]\\n' \"$MY_OTHER_VAR\"\n"))
 		tool.SensitiveEnvVars = []string{"MY_EMBED_KEY"}
 
-		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`))
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`), "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Output).To(Equal("MY_EMBED_KEY=[]\nMY_OTHER_VAR=[keep-me]\n"))
 	})
@@ -640,7 +642,7 @@ var _ = Describe("Command execution", func() {
 		GinkgoT().Setenv("ANTHROPIC_BASE_URL", "https://example.test")
 		tool := doTool(writeExecutable("#!/bin/sh\nprintf 'URL=[%s]\\n' \"$ANTHROPIC_BASE_URL\"\n"))
 
-		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`))
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`), "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Output).To(Equal("URL=[https://example.test]\n"))
 	})
@@ -648,7 +650,7 @@ var _ = Describe("Command execution", func() {
 	It("Should combine stdout and stderr preserving their order", func() {
 		tool := doTool(writeExecutable("#!/bin/sh\necho first\necho second >&2\necho third\n"))
 
-		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`))
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`), "")
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(result.Output).To(Equal("first\nsecond\nthird\n"))
@@ -657,7 +659,7 @@ var _ = Describe("Command execution", func() {
 	It("Should treat a null input as an empty argument object", func() {
 		tool := doTool(writeExecutable("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n"))
 
-		result, err := tool.Execute(context.Background(), json.RawMessage(`null`))
+		result, err := tool.Execute(context.Background(), json.RawMessage(`null`), "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.ExitCode).To(Equal(0))
 		Expect(result.Command).To(Equal("do"))
@@ -666,7 +668,7 @@ var _ = Describe("Command execution", func() {
 	It("Should treat an empty input as an empty argument object", func() {
 		tool := doTool(writeExecutable("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n"))
 
-		result, err := tool.Execute(context.Background(), nil)
+		result, err := tool.Execute(context.Background(), nil, "")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.ExitCode).To(Equal(0))
 		Expect(result.Command).To(Equal("do"))
@@ -675,7 +677,7 @@ var _ = Describe("Command execution", func() {
 	It("Should error when no application path is set", func() {
 		tool := doTool("")
 
-		_, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`))
+		_, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`), "")
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("no application path"))
 	})
@@ -683,7 +685,7 @@ var _ = Describe("Command execution", func() {
 	It("Should error when the binary cannot be run", func() {
 		tool := doTool(filepath.Join(GinkgoT().TempDir(), "does-not-exist"))
 
-		_, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`))
+		_, err := tool.Execute(context.Background(), json.RawMessage(`{"subject":"x"}`), "")
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("running command"))
 	})
@@ -691,7 +693,7 @@ var _ = Describe("Command execution", func() {
 	It("Should error when the arguments cannot be mapped to a command line", func() {
 		tool := doTool(writeExecutable("#!/bin/sh\n"))
 
-		_, err := tool.Execute(context.Background(), json.RawMessage(`{"unknown":"x"}`))
+		_, err := tool.Execute(context.Background(), json.RawMessage(`{"unknown":"x"}`), "")
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("unknown property"))
 	})
@@ -702,7 +704,7 @@ var _ = Describe("Command execution", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		_, err := tool.Execute(ctx, json.RawMessage(`{"subject":"x"}`))
+		_, err := tool.Execute(ctx, json.RawMessage(`{"subject":"x"}`), "")
 		Expect(err).To(HaveOccurred())
 	})
 })
@@ -985,14 +987,237 @@ var _ = Describe("Global flags", func() {
 
 var _ = Describe("Application-less config", func() {
 	It("LoadTools should return no tools and not introspect when application_path is unset", func() {
-		tools, err := LoadTools(&config.Config{})
+		tools, err := LoadTools(context.Background(), &config.Config{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(tools).To(BeEmpty())
 	})
 
 	It("AppGlobalFlags should return nothing and not introspect when application_path is unset", func() {
-		globals, err := AppGlobalFlags(&config.Config{})
+		globals, err := AppGlobalFlags(context.Background(), &config.Config{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(globals).To(BeEmpty())
+	})
+})
+
+var _ = Describe("bounded subprocess output", func() {
+	const marker = "\n...[output truncated]...\n"
+	half := maxToolOutputBytes / 2
+
+	Describe("capWriter", func() {
+		It("returns output verbatim below the cap and reports no truncation", func() {
+			w := newCapWriter()
+			n, err := w.Write([]byte("hello world"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(n).To(Equal(len("hello world")))
+
+			out, truncated := w.result()
+			Expect(truncated).To(BeFalse())
+			Expect(out).To(Equal("hello world"))
+		})
+
+		It("returns output verbatim at exactly the cap", func() {
+			w := newCapWriter()
+			in := strings.Repeat("a", maxToolOutputBytes)
+			_, err := w.Write([]byte(in))
+			Expect(err).NotTo(HaveOccurred())
+
+			out, truncated := w.result()
+			Expect(truncated).To(BeFalse())
+			Expect(out).To(Equal(in))
+		})
+
+		It("keeps the head and tail with a marker once the cap is exceeded", func() {
+			w := newCapWriter()
+			head := strings.Repeat("H", half)
+			mid := strings.Repeat("m", maxToolOutputBytes) // the discarded middle
+			tail := strings.Repeat("T", half)
+			_, err := w.Write([]byte(head + mid + tail))
+			Expect(err).NotTo(HaveOccurred())
+
+			out, truncated := w.result()
+			Expect(truncated).To(BeTrue())
+			Expect(out).To(Equal(head + marker + tail))
+		})
+
+		It("keeps the correct tail across many small writes that wrap the ring", func() {
+			w := newCapWriter()
+			chunk := []byte("0123456789")
+			var full []byte
+			for len(full) < maxToolOutputBytes*2+5 {
+				_, err := w.Write(chunk)
+				Expect(err).NotTo(HaveOccurred())
+				full = append(full, chunk...)
+			}
+
+			out, truncated := w.result()
+			Expect(truncated).To(BeTrue())
+			Expect(out).To(Equal(string(full[:half]) + marker + string(full[len(full)-half:])))
+		})
+	})
+
+	Describe("cappedBuffer", func() {
+		It("keeps everything below the limit and does not flag", func() {
+			b := &cappedBuffer{limit: 100}
+			_, err := b.Write([]byte("short"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(b.exceeded).To(BeFalse())
+			Expect(b.buf.String()).To(Equal("short"))
+		})
+
+		It("caps the buffer at the limit and flags when more arrives", func() {
+			b := &cappedBuffer{limit: 4}
+			// Write reports full consumption so the os/exec copier keeps draining.
+			n, err := b.Write([]byte("abcdef"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(n).To(Equal(6))
+			Expect(b.exceeded).To(BeTrue())
+			Expect(b.buf.String()).To(Equal("abcd"))
+
+			// A further write past a full buffer stays flagged and adds nothing.
+			_, err = b.Write([]byte("ghi"))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(b.buf.Len()).To(Equal(4))
+		})
+	})
+
+	Describe("Execute", func() {
+		It("bounds a command that emits far more than the cap", func() {
+			app := fisk.New("app", "an app")
+			app.Command("flood", "emit a lot")
+			tools, err := ApplicationTools(introspect(app))
+			Expect(err).NotTo(HaveOccurred())
+
+			tool := toolsByName(tools)["flood"]
+			Expect(tool).NotTo(BeNil())
+			tool.AppPath = writeExecutable("#!/bin/sh\nhead -c 200000 /dev/zero | tr '\\0' a\n")
+
+			result, err := tool.Execute(context.Background(), json.RawMessage(`{}`), "")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.ExitCode).To(Equal(0))
+			Expect(result.Truncated).To(BeTrue())
+			Expect(len(result.Output)).To(Equal(maxToolOutputBytes + len(marker)))
+			Expect(result.Output).To(ContainSubstring(marker))
+			Expect(result.Output).To(HavePrefix(strings.Repeat("a", half)))
+		})
+	})
+})
+
+var _ = Describe("FetchFiskAppModel", func() {
+	It("cancels a hung introspection and names the binary in the error", func() {
+		// exec replaces the shell with sleep so it is the direct child holding the output
+		// pipe; cancellation kills it promptly. A forked grandchild is covered separately
+		// by the process-group test in the Execute working directory suite.
+		app := writeExecutable("#!/bin/sh\nexec sleep 30\n")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+
+		start := time.Now()
+		_, err := FetchFiskAppModel(ctx, app, nil)
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("introspecting"))
+		Expect(err.Error()).To(ContainSubstring(app))
+		// It returned on cancellation rather than blocking for the binary's full sleep.
+		Expect(time.Since(start)).To(BeNumerically("<", 5*time.Second))
+	})
+
+	It("rejects introspection output larger than the ceiling", func() {
+		app := writeExecutable("#!/bin/sh\nhead -c 20000000 /dev/zero | tr '\\0' a\n")
+
+		_, err := FetchFiskAppModel(context.Background(), app, nil)
+		Expect(err).To(MatchError(ContainSubstring("produced more than")))
+	})
+})
+
+var _ = Describe("Execute working directory", func() {
+	// noArgTool builds a tool for a no-argument command "run" bound to an executable
+	// with the given body, so Execute can be driven with an empty argument object.
+	noArgTool := func(body string) *FiskCommandTool {
+		GinkgoHelper()
+
+		app := fisk.New("app", "an app")
+		app.Command("run", "run it")
+
+		tools, err := ApplicationTools(introspect(app))
+		Expect(err).NotTo(HaveOccurred())
+
+		tool := toolsByName(tools)["run"]
+		Expect(tool).NotTo(BeNil())
+
+		tool.AppPath = writeExecutable(body)
+		return tool
+	}
+
+	It("runs the command in the given working directory", func() {
+		dir, err := filepath.EvalSymlinks(GinkgoT().TempDir())
+		Expect(err).NotTo(HaveOccurred())
+
+		tool := noArgTool("#!/bin/sh\npwd -P\n")
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{}`), dir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(result.Output)).To(Equal(dir))
+	})
+
+	It("inherits the process working directory when the work dir is empty", func() {
+		wd, err := os.Getwd()
+		Expect(err).NotTo(HaveOccurred())
+		wd, err = filepath.EvalSymlinks(wd)
+		Expect(err).NotTo(HaveOccurred())
+
+		tool := noArgTool("#!/bin/sh\npwd -P\n")
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{}`), "")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(result.Output)).To(Equal(wd))
+	})
+
+	It("sets the child's PWD to the working directory", func() {
+		dir := GinkgoT().TempDir()
+
+		tool := noArgTool("#!/bin/sh\necho \"$PWD\"\n")
+		result, err := tool.Execute(context.Background(), json.RawMessage(`{}`), dir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(result.Output)).To(Equal(dir))
+	})
+
+	It("keeps a relative-path write inside the work dir, isolated from a sibling run", func() {
+		dirA := GinkgoT().TempDir()
+		dirB := GinkgoT().TempDir()
+		tool := noArgTool("#!/bin/sh\necho hi > marker.txt\n")
+
+		_, err := tool.Execute(context.Background(), json.RawMessage(`{}`), dirA)
+		Expect(err).NotTo(HaveOccurred())
+
+		data, err := os.ReadFile(filepath.Join(dirA, "marker.txt"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(strings.TrimSpace(string(data))).To(Equal("hi"))
+		// The sibling run's directory never saw the write.
+		Expect(filepath.Join(dirB, "marker.txt")).NotTo(BeAnExistingFile())
+
+		// The same tool run in the sibling directory writes only there.
+		_, err = tool.Execute(context.Background(), json.RawMessage(`{}`), dirB)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(filepath.Join(dirB, "marker.txt")).To(BeAnExistingFile())
+	})
+
+	It("kills a forked descendant on cancel, not just the direct child", func() {
+		dir := GinkgoT().TempDir()
+		// The command backgrounds a grandchild that would write a marker after a delay,
+		// then waits. On cancel the whole process group is killed, so the grandchild dies
+		// while still sleeping and the marker never appears.
+		tool := noArgTool("#!/bin/sh\n(sleep 1; echo done > marker.txt) &\nsleep 5\n")
+
+		ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+		defer cancel()
+
+		start := time.Now()
+		_, err := tool.Execute(ctx, json.RawMessage(`{}`), dir)
+		Expect(err).To(HaveOccurred())
+		// It returned on cancellation, not after the command's own 5s sleep.
+		Expect(time.Since(start)).To(BeNumerically("<", 3*time.Second))
+
+		// Give a leaked grandchild more than its 1s delay to write; with the group kill it
+		// was signaled while still sleeping, so no marker is ever written.
+		time.Sleep(1500 * time.Millisecond)
+		Expect(filepath.Join(dir, "marker.txt")).NotTo(BeAnExistingFile())
 	})
 })

@@ -27,7 +27,9 @@ import (
 func openSessionStore() (runstate.Store, error) {
 	sc := config.SessionConfigFromStateDir(stateDirFlag)
 
-	return runstate.New(sc.BackendName(), sc.RawOptions())
+	// The session command locates the store through --state-dir (folded into the
+	// backend options), not a store base, so it passes none.
+	return runstate.New(sc.BackendName(), sc.RawOptions(), "")
 }
 
 func registerSessionCommand(cmd *fisk.Application) {

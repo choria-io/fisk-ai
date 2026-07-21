@@ -15,6 +15,13 @@ const (
 	StopCanceled        StopReason = "canceled"
 	StopError           StopReason = "error"
 	StopBudgetExhausted StopReason = "budget_exhausted"
+	// StopSuspended is a task that parked at a resumable boundary (an async
+	// human-in-the-loop wait, a multi-hop delegation) rather than finishing. It mirrors
+	// runstate.ReasonSuspended.
+	StopSuspended StopReason = "suspended"
+	// StopMaxIterations is a task that hit its iteration cap without a final answer. It
+	// mirrors runstate.ReasonMaxIterations, which the runner already produces.
+	StopMaxIterations StopReason = "max_iterations"
 )
 
 // Usage reports token accounting. The fields mirror the agent's own accounting

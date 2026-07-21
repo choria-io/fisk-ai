@@ -255,6 +255,114 @@ expose:
 			Expect(err).To(MatchError(ContainSubstring("invalid confirm_over_mcp")))
 		})
 
+		It("Should parse the MCP and a2a per-server tool limits", func() {
+			cfg, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+expose:
+  agent:
+    agent_to_agent: true
+    mcp:
+      port: 8080
+      max_concurrent_tools: 8
+      tool_timeout: 45s
+    a2a:
+      max_concurrent_tools: 4
+      tool_timeout: 90s
+`))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.MCPMaxConcurrentTools()).To(Equal(8))
+			Expect(cfg.MCPToolTimeout()).To(Equal(45 * time.Second))
+			Expect(cfg.A2AMaxConcurrentTools()).To(Equal(4))
+			Expect(cfg.A2AToolTimeout()).To(Equal(90 * time.Second))
+		})
+
+		It("Should leave the tool limits at zero when unset, for the server to default", func() {
+			cfg, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+expose:
+  agent:
+    mcp:
+      port: 8080
+`))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.MCPMaxConcurrentTools()).To(Equal(0))
+			Expect(cfg.MCPToolTimeout()).To(Equal(time.Duration(0)))
+		})
+
+		It("Should accept a zero max_concurrent_tools as unset rather than rejecting it", func() {
+			cfg, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+expose:
+  agent:
+    mcp:
+      port: 8080
+      max_concurrent_tools: 0
+`))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.MCPMaxConcurrentTools()).To(Equal(0))
+		})
+
+		It("Should reject a negative max_concurrent_tools, naming the path", func() {
+			_, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+expose:
+  agent:
+    mcp:
+      port: 8080
+      max_concurrent_tools: -1
+`))
+			Expect(err).To(MatchError(ContainSubstring("invalid expose.agent.mcp.max_concurrent_tools")))
+			Expect(err).To(MatchError(ContainSubstring("must not be negative")))
+		})
+
+		It("Should reject a max_concurrent_tools above the ceiling", func() {
+			_, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+expose:
+  agent:
+    mcp:
+      port: 8080
+      max_concurrent_tools: 100000
+`))
+			Expect(err).To(MatchError(ContainSubstring("must not exceed")))
+		})
+
+		It("Should reject an invalid a2a tool_timeout, naming the path", func() {
+			_, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+expose:
+  agent:
+    agent_to_agent: true
+    a2a:
+      tool_timeout: not-a-duration
+`))
+			Expect(err).To(MatchError(ContainSubstring("invalid expose.agent.a2a.tool_timeout")))
+		})
+
 		It("Should return an error for an invalid llm call_timeout", func() {
 			cfg, err := ParseConfig([]byte(`
 identity: agent1
