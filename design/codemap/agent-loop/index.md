@@ -93,6 +93,8 @@ The assistant turn is journaled before any tool executes, and each tool result i
 
 The loop never draws anything. It emits typed callbacks through the `Events` interface, and the caller decides how they look. The same callbacks back both the line UI and the full-screen UI, which keeps the loop free of terminal concerns. Tracing distinguishes the three tool kinds so each is described correctly; the memory and `knowledge_search` tools are built-ins and trace as such.
 
+`Events` carries a contract, not just callbacks. Methods are called from the single run goroutine, so a per-run consumer needs no locking; a caller that shares one sink across concurrent runs makes it concurrent-safe itself. Methods may be called through teardown, after the run body has unwound, so a consumer stays callable until `Run` returns. It is a structured sink: the callbacks carry typed data rather than preformatted prose, so a server can log or stream them while the terminal renderers flatten them to text. A panic on the run goroutine is recovered and returned as a `PanicError` (a crash, not a terminal outcome the caller records) through the dedicated `Panicked(value, stack)` method; the stack reaches that method and nowhere else, since it leaks absolute paths and frame arguments and must never ride the returned error to a remote peer.
+
 {{% notice style="tip" title="Next" %}}
 Continue to [Providers and the Neutral Model]({{% relref "llm-providers" %}}) for the model call itself and how a backend is chosen.
 {{% /notice %}}

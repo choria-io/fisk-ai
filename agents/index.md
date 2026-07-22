@@ -621,11 +621,13 @@ system prompt as an index so the model knows what it has saved; `memory_list` is
 the live view during the run. Turn the index off with `no_index: true`.
 
 The `file` backend keeps each memory as a markdown file named for its key under
-the configured directory, which defaults to `memory/<identity>`. The `identity` is
-the agent's name, set with the `identity` configuration field and defaulting to the
-application binary's base name; the [configuration reference](../reference/) covers
-it in detail. Point two agents at the same directory and they share a memory; leave
-the default and each agent keeps its own. Because the files are shared state, treat what a memory contains
+the configured directory, which defaults to `memory/<identity>`. A relative
+directory, including that default, resolves under the store base when a deployment
+sets one and against the working directory otherwise; an absolute directory is used
+as-is. The `identity` is the agent's name, set with the `identity` configuration
+field and defaulting to the application binary's base name; the [configuration
+reference](../reference/) covers it in detail. Point two agents at the same directory
+and they share a memory; leave the default and each agent keeps its own. Because the files are shared state, treat what a memory contains
 as data the model saved, not as trusted instructions.
 
 We can use memory to ensure our agent never repeats jokes; change the`system_prompt` as follows:

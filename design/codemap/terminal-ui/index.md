@@ -64,7 +64,7 @@ With `--chat`, an input row is added above the status bar. At each turn boundary
 
 ## Keeping stdout pipeable
 
-The full-screen UI collapses answers, narration, and traces into one viewport, so it must protect the alt-screen. `muzzleStderr` redirects `os.Stderr` into a buffer for the whole run so library logging cannot corrupt the display, then flushes it to the restored terminal on exit. The raw answer, warnings, and rotated-session ids are captured as they arrive and re-printed to real stdout and stderr after teardown, so a piped answer still lands on stdout exactly as the line UI would deliver it.
+The full-screen UI collapses answers, narration, and traces into one viewport, so it must protect the alt-screen. `muzzleStderr` redirects `os.Stderr` into a buffer for the whole run so library logging cannot corrupt the display, then flushes it to the restored terminal on exit. The raw answer, warnings, rotated-session ids, and a crash stack when a run panics are captured as they arrive and re-printed to real stdout and stderr after teardown, so a piped answer still lands on stdout exactly as the line UI would deliver it and a stack is never lost to the alt-screen.
 
 {{% notice style="warning" title="Load-bearing decision" %}}
 When a run blocks on an operator decision, the prompter rings the terminal bell and recolors the status bar amber, unless `no_bell` is set. It rings only on the block transition, not while simply awaiting chat input, so an unattended run is noticed the moment it needs a human.

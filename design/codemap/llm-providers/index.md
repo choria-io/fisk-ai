@@ -1,4 +1,4 @@
-# Providers and the Neutral Model
+# LLM Providers
 
 Every part of Fisk AI that touches a model conversation speaks one provider-neutral vocabulary. The agent loop, the journal on disk, the renderers, and the tool kinds all hold `llm.Message` values, and a per-provider codec translates that vocabulary to a vendor's wire format at the last moment. The backend is chosen by name at startup. One provider ships today, `anthropic`.
 

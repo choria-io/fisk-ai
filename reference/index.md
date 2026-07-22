@@ -242,7 +242,10 @@ harness:
     # true to keep the store's contents out of the prompt. Negative switch.
     no_index: false
     # Backend-specific settings. For the "file" backend: "directory", the
-    # path memory files live under, defaulting to "memory/<identity>".
+    # path memory files live under, defaulting to "memory/<identity>". A
+    # relative directory resolves under the store base when a deployment
+    # sets one and against the working directory otherwise; an absolute
+    # directory is used as-is.
     options:
       directory: memory
 ```
@@ -315,6 +318,18 @@ expose:
       #            approval to the client's own UI
       confirm_over_mcp: auto
 
+      # Maximum tool calls run at once. 0 or unset uses the default 2, a
+      # negative value is rejected, and the ceiling is 1024. It is separate
+      # from the a2a knob because the MCP port can be network-reachable
+      # (address 0.0.0.0), a wider trust boundary than a2a's NATS peers.
+      max_concurrent_tools: 2
+
+      # Duration bounding a single served tool call, e.g. 60s. Unset uses
+      # the default 30s. Named tool_timeout, not call_timeout, to avoid
+      # colliding with llm.budget.call_timeout, which bounds a different
+      # unit of work. Config-only; there is no flag or environment override.
+      tool_timeout: 30s
+
     # Optional: narrow the served set further, within the top-level
     # include/exclude selection. With neither, every selected command is
     # served (subject to the tag rules). Same regex-over-tool-name and tag
@@ -355,6 +370,18 @@ expose:
     # selection. Confirmation-gated commands are never served, since there
     # is no operator to approve them.
     agent_to_agent: true
+
+    # Optional per-server tuning, a sibling of the agent_to_agent switch.
+    # agent_to_agent alone still serves with defaults. Its knobs are
+    # separate from the mcp block's because the two servers bound different
+    # trust boundaries (NATS peers vs anything reaching a TCP port).
+    a2a:
+      # Maximum tool calls run at once. 0 or unset uses the default 2, a
+      # negative value is rejected, and the ceiling is 1024.
+      max_concurrent_tools: 2
+      # Duration bounding a single served tool call, e.g. 60s. Unset uses
+      # the default 30s. Config-only, no flag or environment override.
+      tool_timeout: 30s
 
 # Import tools from one or more remote fisk-ai agents over NATS and expose
 # them to this agent alongside its local tools.

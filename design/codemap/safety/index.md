@@ -79,7 +79,7 @@ When the model calls a gated command, the gate runs the checks in a fixed order,
 <ol class="cm-steps">
   <li><b>Missing parameters first</b> A structurally invalid call is rejected before the gate, so the operator is never asked to approve a broken command. The runner reaches this through the `toolkit.ArgumentValidator` capability interface, which is why the check applies uniformly across tool kinds.</li>
   <li><b>Session-allow short-circuit</b> If the operator earlier chose "allow for the session" for this command, it runs without asking again.</li>
-  <li><b>No terminal, no run</b> Without an interactive terminal, or with a canceled context, `ConfirmGate.Approve` denies before any prompt is shown.</li>
+  <li><b>No operator, no run</b> When the prompter reports it cannot reach an operator (`CanPrompt` is false), or the context is canceled, `ConfirmGate.Approve` denies before any prompt is shown. Reachability is the prompter's own report, not a raw terminal check, so an operator reachable through a non-terminal channel can still approve while a run with no operator fails closed.</li>
   <li><b>Prompt the operator</b> The sanitized full command line is shown. Any prompter error, an interrupt, an end-of-input, or an Escape, is a denial.</li>
 </ol>
 
@@ -87,7 +87,7 @@ A denial is returned to the model as an authoritative, non-error result whose re
 
 ## The ask_human tools
 
-When `human_in_the_loop` is enabled the model gets three tools: `ask_human_confirm` (yes or no), `ask_human_select` (choose one option), and `ask_human_input` (a free-text value). Each denies by default: a missing terminal, an interrupt, an end-of-input, or a canceled context yields a negative answer rather than a guess, returned as a normal result with a reason so the model does not retry around it. `ask_human_select` caps the option list at 25.
+When `human_in_the_loop` is enabled the model gets three tools: `ask_human_confirm` (yes or no), `ask_human_select` (choose one option), and `ask_human_input` (a free-text value). Each denies by default: no reachable operator (the prompter's `CanPrompt` is false), an interrupt, an end-of-input, or a canceled context yields a negative answer rather than a guess, returned as a normal result with a reason so the model does not retry around it. `ask_human_select` caps the option list at 25.
 
 Model-supplied prompt text is stripped of terminal control sequences before any truncation, so a cut can never leave a dangling escape. The two prompter implementations differ in where they draw: the line prompter renders on stderr so a piped final answer stays clean, while the full-screen prompter draws a modal inside the terminal UI.
 
