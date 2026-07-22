@@ -42,6 +42,9 @@ import (
 	// Link the file memory backend in so it registers itself; memory.New resolves
 	// the configured backend from the registry, and this is the sole backend today.
 	_ "github.com/choria-io/fisk-ai/internal/memory/file"
+	// Link the jetstream memory backend in so it registers itself; it binds a
+	// pre-existing NATS KV bucket over the shared connection.
+	_ "github.com/choria-io/fisk-ai/internal/memory/jetstream"
 	"github.com/choria-io/fisk-ai/internal/rag"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"
@@ -383,15 +386,36 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 		events.Warn(Warning{Kind: WarnHITLNoTerminal})
 	}
 
+	// Acquire the shared NATS connection once, ahead of every subsystem that needs
+	// it: the jetstream memory backend just below, and remote tools further down. A
+	// run that uses several of them then establishes a single connection. A
+	// caller-injected Provider is borrowed: the caller established it and shares it
+	// across concurrent runs, so Run uses it but never Closes it. Only a connection
+	// Run dials itself is owned and released here; dialing per run is the CLI path.
+	memNeedsNats := memory.NeedsNats(cfg)
+	var natsConns *conns.Provider
+	if opts.Conns != nil {
+		natsConns = opts.Conns
+	} else if memNeedsNats || len(cfg.RemoteTools) > 0 {
+		p, err := conns.Connect(cfg.NatsContext, cfg.Identity)
+		if err != nil {
+			return res, fmt.Errorf("connecting to NATS: %w", err)
+		}
+		defer p.Close()
+		natsConns = p
+	}
+
 	// Built-in memory tools are added here in the agent run path too, but tracked
 	// in their own slice so they never perturb the human-in-the-loop system note or
 	// its no-terminal warning. They are pure (no operator), and like the HITL tools
 	// they are not reachable over MCP. The store is built now so a misconfiguration
-	// (unknown backend, bad options, an unwritable directory) fails before the loop.
+	// (unknown backend, bad options, an unwritable directory or an unusable KV
+	// bucket) fails before the loop. natsConns.Nats() is nil-safe and yields nil for
+	// a backend that needs no connection (the file backend ignores it).
 	var memStore memory.Store
 	var memBuiltins []*builtin.BuiltinTool
 	if cfg.MemoryEnabled() {
-		memStore, err = memory.New(cfg, opts.StoreDir)
+		memStore, err = memory.New(cfg, memory.RuntimeEnv{StoreDir: opts.StoreDir, Nats: natsConns.Nats()})
 		if err != nil {
 			return res, err
 		}
@@ -456,21 +480,9 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	var remoteTools []*a2a.RemoteTool
 	remoteByName := map[string]*a2a.RemoteTool{}
 	if len(cfg.RemoteTools) > 0 {
-		// A caller-injected Provider is borrowed: the caller established the connection
-		// and shares it across every concurrent run, so Run uses it but must never Close
-		// it. Only a connection Run dialed itself is owned and released here. Dialing per
-		// run is the CLI path and stays unchanged.
-		provider := opts.Conns
-		if provider == nil {
-			p, err := conns.Connect(cfg.NatsContext, cfg.Identity)
-			if err != nil {
-				return res, fmt.Errorf("connecting to NATS for remote tools: %w", err)
-			}
-			defer p.Close()
-			provider = p
-		}
-
-		transport, err := a2a.NewTransport(cfg.A2ATransport(), provider, a2a.TransportConfig{Identity: cfg.Identity, Timeout: cfg.LLM.Budget.CallTimeoutParsed})
+		// The shared connection was acquired above (natsConns), borrowed or owned as
+		// the case may be; remote tools reuse it rather than dialing a second time.
+		transport, err := a2a.NewTransport(cfg.A2ATransport(), natsConns, a2a.TransportConfig{Identity: cfg.Identity, Timeout: cfg.LLM.Budget.CallTimeoutParsed})
 		if err != nil {
 			return res, err
 		}

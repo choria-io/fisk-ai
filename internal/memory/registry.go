@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"sort"
 	"sync"
+
+	"github.com/nats-io/nats.go"
 )
 
 // RuntimeEnv carries the per-run environment a backend may need beyond its own
@@ -22,6 +24,13 @@ type RuntimeEnv struct {
 	// deterministically. Empty resolves as before (relative to the process working
 	// directory); an absolute configured directory ignores it.
 	StoreDir string
+
+	// Nats is the shared core NATS connection a connection-backed backend borrows,
+	// or nil when none was provisioned. It is borrowed: a backend uses it but must
+	// never close it, since the caller owns its lifecycle. A backend that needs it
+	// (the jetstream backend) fails construction loudly when it is nil rather than
+	// dereferencing it; a backend that keeps its data locally ignores it.
+	Nats *nats.Conn
 }
 
 // Factory constructs a Store for a backend from the per-run environment, the agent
@@ -42,22 +51,46 @@ type RuntimeEnv struct {
 //     it to the first tool call.
 type Factory func(env RuntimeEnv, identity string, options json.RawMessage) (Store, error)
 
+// RegisterOption declares a backend's requirements at registration, so the host can
+// resolve them before construction without naming the backend. A backend that keeps
+// its data locally needs none.
+type RegisterOption func(*registration)
+
+// RequiresNats declares that a backend needs a NATS connection on RuntimeEnv.Nats.
+// The host provisions one before building the store (see NeedsNats), so a
+// connection-backed backend is named nowhere outside its own registration.
+func RequiresNats() RegisterOption {
+	return func(r *registration) { r.needsNats = true }
+}
+
+// registration is a backend's factory plus the requirements it declared.
+type registration struct {
+	factory   Factory
+	needsNats bool
+}
+
 var (
 	registryMu sync.Mutex
-	registry   = map[string]Factory{}
+	registry   = map[string]registration{}
 )
 
-// Register adds a backend factory under name. It is meant to be called from a
-// backend package's init, so a program links a backend in simply by importing
-// its package. It panics on an empty name, a nil factory, or a duplicate
-// registration: each is a programming error resolved at compile time, mirroring
-// database/sql.Register. Do not call it outside init.
-func Register(name string, factory Factory) {
+// Register adds a backend factory under name, with any requirements it declares
+// (RequiresNats). It is meant to be called from a backend package's init, so a
+// program links a backend in simply by importing its package. It panics on an empty
+// name, a nil factory, or a duplicate registration: each is a programming error
+// resolved at compile time, mirroring database/sql.Register. Do not call it outside
+// init.
+func Register(name string, factory Factory, opts ...RegisterOption) {
 	if name == "" {
 		panic("memory: Register called with an empty backend name")
 	}
 	if factory == nil {
 		panic("memory: Register called with a nil factory for backend " + name)
+	}
+
+	reg := registration{factory: factory}
+	for _, opt := range opts {
+		opt(&reg)
 	}
 
 	registryMu.Lock()
@@ -67,7 +100,7 @@ func Register(name string, factory Factory) {
 		panic("memory: Register called twice for backend " + name)
 	}
 
-	registry[name] = factory
+	registry[name] = reg
 }
 
 // Backends returns the names of every backend linked into this build, sorted. A
@@ -86,12 +119,12 @@ func Backends() []string {
 	return names
 }
 
-// lookup returns the factory registered under name.
-func lookup(name string) (Factory, bool) {
+// lookup returns the registration for name.
+func lookup(name string) (registration, bool) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 
-	factory, ok := registry[name]
+	reg, ok := registry[name]
 
-	return factory, ok
+	return reg, ok
 }

@@ -39,6 +39,12 @@ func init() {
 		lastFake.options = string(options)
 		return stubStore{}, nil
 	})
+
+	// A second fake that declares it needs a connection, to prove NeedsNats reads
+	// the requirement off the registration rather than any backend name.
+	Register("faketest.conn", func(RuntimeEnv, string, json.RawMessage) (Store, error) {
+		return stubStore{}, nil
+	}, RequiresNats())
 }
 
 var _ = Describe("Register", func() {
@@ -73,7 +79,7 @@ var _ = Describe("New", func() {
 	}
 
 	It("Should dispatch to the registered backend with the identity and options", func() {
-		store, err := New(memCfg("faketest", `{"any":"thing"}`), "")
+		store, err := New(memCfg("faketest", `{"any":"thing"}`), RuntimeEnv{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(store).To(BeAssignableToTypeOf(stubStore{}))
 		Expect(lastFake.identity).To(Equal("agent"))
@@ -81,8 +87,30 @@ var _ = Describe("New", func() {
 	})
 
 	It("Should reject an unknown backend and list the known ones", func() {
-		_, err := New(memCfg("redis", ""), "")
+		_, err := New(memCfg("redis", ""), RuntimeEnv{})
 		Expect(err).To(MatchError(ContainSubstring("unknown memory backend")))
 		Expect(err).To(MatchError(ContainSubstring("faketest")))
+	})
+})
+
+var _ = Describe("NeedsNats", func() {
+	cfgFor := func(backend string, enabled bool) *config.Config {
+		return &config.Config{Harness: config.HarnessConfig{Memory: &config.MemoryConfig{Enabled: enabled, Backend: backend}}}
+	}
+
+	It("Should report true for a backend that declared RequiresNats", func() {
+		Expect(NeedsNats(cfgFor("faketest.conn", true))).To(BeTrue())
+	})
+
+	It("Should report false for a backend that did not", func() {
+		Expect(NeedsNats(cfgFor("faketest", true))).To(BeFalse())
+	})
+
+	It("Should report false when memory is disabled", func() {
+		Expect(NeedsNats(cfgFor("faketest.conn", false))).To(BeFalse())
+	})
+
+	It("Should report false for an unknown backend", func() {
+		Expect(NeedsNats(cfgFor("nonesuch", true))).To(BeFalse())
 	})
 })

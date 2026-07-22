@@ -175,7 +175,7 @@ var _ = Describe("New", func() {
 		dir := GinkgoT().TempDir()
 		GinkgoT().Chdir(dir)
 
-		store, err := memory.New(memCfg(""), "")
+		store, err := memory.New(memCfg(""), memory.RuntimeEnv{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(store).ToNot(BeNil())
 
@@ -187,7 +187,7 @@ var _ = Describe("New", func() {
 		dir := GinkgoT().TempDir()
 		target := filepath.Join(dir, "custom")
 
-		_, err := memory.New(memCfg(`{"directory":`+quote(target)+`}`), "")
+		_, err := memory.New(memCfg(`{"directory":`+quote(target)+`}`), memory.RuntimeEnv{})
 		Expect(err).ToNot(HaveOccurred())
 
 		_, err = os.Stat(target)
@@ -197,7 +197,7 @@ var _ = Describe("New", func() {
 	It("Should rebase the default directory under a store base", func() {
 		base := GinkgoT().TempDir()
 
-		store, err := memory.New(memCfg(""), base)
+		store, err := memory.New(memCfg(""), memory.RuntimeEnv{StoreDir: base})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(store).ToNot(BeNil())
 
@@ -209,7 +209,7 @@ var _ = Describe("New", func() {
 		base := GinkgoT().TempDir()
 		target := filepath.Join(GinkgoT().TempDir(), "custom")
 
-		_, err := memory.New(memCfg(`{"directory":`+quote(target)+`}`), base)
+		_, err := memory.New(memCfg(`{"directory":`+quote(target)+`}`), memory.RuntimeEnv{StoreDir: base})
 		Expect(err).ToNot(HaveOccurred())
 
 		_, err = os.Stat(target)
@@ -219,7 +219,7 @@ var _ = Describe("New", func() {
 	})
 
 	It("Should reject an unknown option key", func() {
-		_, err := memory.New(memCfg(`{"nonesuch":"x"}`), "")
+		_, err := memory.New(memCfg(`{"nonesuch":"x"}`), memory.RuntimeEnv{})
 		Expect(err).To(MatchError(ContainSubstring("invalid file memory options")))
 	})
 })

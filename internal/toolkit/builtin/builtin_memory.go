@@ -158,8 +158,10 @@ func memoryWriteTool(store memory.Store) *BuiltinTool {
 			"give the summary as description and the body as content, and memory_read returns only the body you stored. " +
 			"A key uses letters, digits and '.', '_', '=' or '-' (no slashes or spaces), for example \"build.notes\". " +
 			"By default (overwrite false) this creates a new memory and fails with a message if the key already exists; " +
-			"to deliberately replace a memory you know is there, set overwrite true. " +
-			"It returns {\"written\": true} on success, or {\"written\": false, \"reason\": ...} if the key already exists.",
+			"to replace a memory that is already there, first read it with memory_read to see its current value, then " +
+			"call this again with overwrite true. An overwrite may be refused if you have not read the memory in this " +
+			"run or it changed since you read it; read it again and retry. " +
+			"It returns {\"written\": true} on success, or {\"written\": false, \"reason\": ...} when it is refused.",
 		schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -300,12 +302,22 @@ func memoryWriteHandler(store memory.Store) builtinHandler {
 		if errors.Is(err, memory.ErrExists) {
 			return outcomeJSON(memoryWriteName, memoryWriteOutcome{Reason: existsReason(ctx, store, args.Key)})
 		}
+		if errors.Is(err, memory.ErrStale) {
+			return outcomeJSON(memoryWriteName, memoryWriteOutcome{Reason: staleReason(args.Key)})
+		}
 		if err != nil {
 			return "", fmt.Errorf("writing memory %q: %w", args.Key, err)
 		}
 
 		return outcomeJSON(memoryWriteName, memoryWriteOutcome{Written: true})
 	}
+}
+
+// staleReason builds the message returned when an overwrite is refused because the
+// current value was not read this run, or changed since it was read. Both have the
+// same remedy: read the current value, then write again.
+func staleReason(key string) string {
+	return fmt.Sprintf("cannot overwrite memory %q: read it first with memory_read to get the current value, then call memory_write again with overwrite true. This guards against replacing a memory you have not seen or that changed since you read it.", key)
 }
 
 // existsReason builds the message returned when a create is refused because the
