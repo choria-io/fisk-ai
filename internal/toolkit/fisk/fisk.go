@@ -5,6 +5,7 @@
 package fisk
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,9 +52,21 @@ const confirmTag = "ai:confirm"
 // the model's context. Output beyond this is truncated with a marker.
 const maxToolOutputBytes = 64 * 1024
 
+// maxIntrospectBytes bounds how much of a binary's --fisk-introspect output is read
+// into memory before decoding. The whole document must be valid JSON, so output past
+// this cannot be truncated the way tool output is; a binary that exceeds it is
+// rejected, bounding the memory an untrusted binary can force before it is parsed.
+const maxIntrospectBytes = 16 * 1024 * 1024
+
 // commandWaitDelay bounds how long a command's I/O may linger after its context
 // is canceled before the process and its pipes are forcibly torn down.
 const commandWaitDelay = 10 * time.Second
+
+// introspectTimeout bounds a --fisk-introspect call when the caller's context carries
+// no deadline of its own. It is a constant, not a config field: introspection is a
+// fast metadata read at the top of every run, and a hung binary must not block the run
+// forever. A caller that needs a different bound passes a context with its own deadline.
+const introspectTimeout = 30 * time.Second
 
 // FiskCommandTool is our intermediate representation of a fisk command exposed as a FiskCommandTool.
 // It is built from an application model, filtered with FilterTools, and finally
@@ -557,7 +570,13 @@ func (t *FiskCommandTool) TraceLineShort(args json.RawMessage) string {
 // A non-zero exit is reported in the result rather than as an error, so the model
 // can read the failure output and react; only an inability to run the binary, or
 // a canceled or timed-out context, is returned as an error.
-func (t *FiskCommandTool) Execute(ctx context.Context, args json.RawMessage) (*toolkit.CommandResult, error) {
+//
+// workDir is the directory the command runs in: with many runs sharing one process,
+// each run passes its own so a tool writing a relative path does not collide with a
+// sibling run's. It sets cmd.Dir only; it is not a sandbox, and the command can still
+// write anywhere the process uid can (an absolute path, $HOME, $TMPDIR). Empty inherits
+// the process working directory, today's behavior.
+func (t *FiskCommandTool) Execute(ctx context.Context, args json.RawMessage, workDir string) (*toolkit.CommandResult, error) {
 	if t.AppPath == "" {
 		return nil, fmt.Errorf("command %q has no application path to execute", t.Command())
 	}
@@ -570,11 +589,23 @@ func (t *FiskCommandTool) Execute(ctx context.Context, args json.RawMessage) (*t
 	cmd := exec.CommandContext(ctx, t.AppPath, argv...)
 	cmd.Stdin = nil
 	cmd.WaitDelay = commandWaitDelay
-	cmd.Env = commandEnv(t.SensitiveEnvVars)
+	cmd.Dir = workDir
+	cmd.Env = commandEnv(t.SensitiveEnvVars, workDir)
+	// Put the command in its own process group so a cancel kills its forked descendants
+	// too, not just the direct child, which would otherwise leak in a long-lived server.
+	configureProcessGroup(cmd)
 
 	// The command is non-interactive: stdin is closed and stdout and stderr are
-	// captured together in the order they were produced.
-	out, runErr := cmd.CombinedOutput()
+	// captured together in the order they were produced. The capturing writer keeps
+	// only the head and tail of the output within a fixed memory ceiling, so a command
+	// emitting far more than the cap (a runaway loop, gigabytes of logs) cannot grow
+	// the process to exhaustion the way buffering the whole stream first would. Setting
+	// the same writer on both streams makes os/exec serialize their writes into it, so
+	// the interleaving order is preserved, as with CombinedOutput.
+	capture := newCapWriter()
+	cmd.Stdout = capture
+	cmd.Stderr = capture
+	runErr := cmd.Run()
 
 	// A canceled or timed-out context is an execution failure, not a command
 	// outcome the model should reason about, so surface it as an error.
@@ -583,7 +614,7 @@ func (t *FiskCommandTool) Execute(ctx context.Context, args json.RawMessage) (*t
 	}
 
 	result := &toolkit.CommandResult{Command: strings.Join(argv, " ")}
-	result.Output, result.Truncated = capOutput(string(out))
+	result.Output, result.Truncated = capture.result()
 
 	var exitErr *exec.ExitError
 	switch {
@@ -617,7 +648,18 @@ func (t *FiskCommandTool) Execute(ctx context.Context, args json.RawMessage) (*t
 // tool cannot read them from its environment. It cannot catch the same secret value
 // an operator also exported under a second, unnamed variable. Empty names are
 // ignored.
-func commandEnv(extra []string) []string {
+//
+// workDir, when set, becomes the child's PWD. cmd.Dir changes the actual working
+// directory but leaves PWD inherited from the parent, so a shell wrapper or anything
+// reading $PWD would otherwise disagree with os.Getwd. The inherited PWD is dropped
+// and the canonical one appended, so the child never sees two. TMPDIR and HOME are
+// deliberately left as inherited: repointing TMPDIR into workDir would make a tool's
+// temp files collide with its own output there and would hand a tool that cleans
+// TMPDIR the power to delete that output, and repointing HOME breaks tools that read
+// their config or credentials from it. So $HOME-, $TMPDIR- and absolute-path writes
+// stay shared across runs; this is collision avoidance for relative writes, not a
+// sandbox.
+func commandEnv(extra []string, workDir string) []string {
 	current := os.Environ()
 	out := make([]string, 0, len(current)+1)
 
@@ -632,22 +674,99 @@ func commandEnv(extra []string) []string {
 		if name != "" && (slices.Contains(provider, name) || slices.Contains(extra, name)) {
 			continue
 		}
+		// The canonical PWD is appended below when a workDir is set, so drop any
+		// inherited one rather than leave the child with two conflicting entries.
+		if workDir != "" && name == "PWD" {
+			continue
+		}
 		out = append(out, kv)
+	}
+
+	if workDir != "" {
+		out = append(out, "PWD="+workDir)
 	}
 
 	return append(out, "LLMFORMAT=1")
 }
 
-// capOutput truncates s to maxToolOutputBytes, keeping the head and tail with a
-// marker between them, and reports whether it truncated.
-func capOutput(s string) (string, bool) {
-	if len(s) <= maxToolOutputBytes {
-		return s, false
+// capWriter is an io.Writer that retains at most the head and tail of everything
+// written to it, so a subprocess emitting far more than maxToolOutputBytes cannot
+// grow the process memory. It buffers the first maxToolOutputBytes in head and the
+// most recent half in a fixed-size tail ring, discarding the middle. result then
+// reproduces the same head/marker/tail truncation the model saw before, whether or
+// not the whole stream would have fit in memory. It is written by a single goroutine
+// at a time (os/exec guarantees this when it backs both Stdout and Stderr), so it
+// needs no lock.
+type capWriter struct {
+	head    []byte // first up to maxToolOutputBytes, in arrival order
+	tail    []byte // ring buffer holding the most recent up to len(tail) bytes
+	tailLen int    // number of valid bytes in the ring
+	tailPos int    // next write index in the ring
+	total   int64  // total bytes written, to decide whether truncation happened
+}
+
+func newCapWriter() *capWriter {
+	return &capWriter{
+		head: make([]byte, 0, maxToolOutputBytes),
+		tail: make([]byte, maxToolOutputBytes/2),
+	}
+}
+
+func (w *capWriter) Write(p []byte) (int, error) {
+	w.total += int64(len(p))
+
+	if len(w.head) < maxToolOutputBytes {
+		room := maxToolOutputBytes - len(w.head)
+		if room > len(p) {
+			room = len(p)
+		}
+		w.head = append(w.head, p[:room]...)
+	}
+
+	w.writeTail(p)
+
+	return len(p), nil
+}
+
+// writeTail keeps only the most recent len(w.tail) bytes across all writes. A write
+// at least the ring's size supersedes the whole ring, so it is copied in bulk rather
+// than byte by byte, keeping a gigabyte-scale stream cheap.
+func (w *capWriter) writeTail(p []byte) {
+	tl := len(w.tail)
+	if len(p) >= tl {
+		copy(w.tail, p[len(p)-tl:])
+		w.tailPos = 0
+		w.tailLen = tl
+		return
+	}
+
+	for _, b := range p {
+		w.tail[w.tailPos] = b
+		w.tailPos = (w.tailPos + 1) % tl
+		if w.tailLen < tl {
+			w.tailLen++
+		}
+	}
+}
+
+// result returns the captured output and whether it was truncated. Below the cap the
+// head holds the whole stream and is returned verbatim; above it, the first half of
+// head and the tail ring are joined with a marker, matching the old capOutput form.
+func (w *capWriter) result() (string, bool) {
+	if w.total <= maxToolOutputBytes {
+		return string(w.head), false
 	}
 
 	const marker = "\n...[output truncated]...\n"
 	half := maxToolOutputBytes / 2
-	return s[:half] + marker + s[len(s)-half:], true
+
+	start := (w.tailPos - w.tailLen + len(w.tail)) % len(w.tail)
+	tail := make([]byte, w.tailLen)
+	for i := 0; i < w.tailLen; i++ {
+		tail[i] = w.tail[(start+i)%len(w.tail)]
+	}
+
+	return string(w.head[:half]) + marker + string(tail), true
 }
 
 // ApplicationTools turns every runnable command of a fisk application model into
@@ -892,10 +1011,12 @@ func matchesFilter(t *FiskCommandTool, filter *config.ToolFilter, patterns []*re
 // credentialEnvNames (see config.CredentialEnvNames) is stored on every returned
 // tool as SensitiveEnvVars and used to scrub the introspection subprocess, so both
 // executions of the operator's binary run without the agent's named credentials.
-func ToolsForApp(appPath string, credentialEnvNames []string, globalFlags ...string) ([]*FiskCommandTool, error) {
-	model, err := FetchFiskAppModel(appPath, credentialEnvNames)
+func ToolsForApp(ctx context.Context, appPath string, credentialEnvNames []string, globalFlags ...string) ([]*FiskCommandTool, error) {
+	// FetchFiskAppModel already names the binary in its errors, so it is returned as-is
+	// rather than wrapped again with a second "introspecting %q".
+	model, err := FetchFiskAppModel(ctx, appPath, credentialEnvNames)
 	if err != nil {
-		return nil, fmt.Errorf("introspecting %q: %w", appPath, err)
+		return nil, err
 	}
 
 	tools, err := ApplicationTools(model, globalFlags...)
@@ -915,21 +1036,92 @@ func ToolsForApp(appPath string, credentialEnvNames []string, globalFlags ...str
 // command model. credentialEnvNames are stripped from the subprocess environment
 // (alongside the static sensitive set) so the operator's binary never sees the
 // agent's named credentials, even at introspection time.
-func FetchFiskAppModel(appPath string, credentialEnvNames []string) (*fisk.ApplicationModel, error) {
-	cmd := exec.Command(appPath, "--fisk-introspect")
-	cmd.Env = commandEnv(credentialEnvNames)
-	out, err := cmd.CombinedOutput()
+//
+// It runs on the LoadTools path at the top of every run, so a hung binary would
+// otherwise block the run forever. ctx governs cancellation; when ctx carries no
+// deadline of its own the default introspectTimeout is applied, so a run whose caller
+// did not bound it is still protected. WaitDelay bounds the I/O teardown after a
+// cancel, matching Execute, so a canceled introspection does not leave a lingering
+// pipe reader.
+func FetchFiskAppModel(ctx context.Context, appPath string, credentialEnvNames []string) (*fisk.ApplicationModel, error) {
+	// Apply the default bound only when the caller supplied none, so a caller that
+	// already bounded (or deliberately left unbounded and then bounded elsewhere) its
+	// context is not silently re-clamped, and so the timeout error can name the window.
+	defaultTimeout := false
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, introspectTimeout)
+		defer cancel()
+		defaultTimeout = true
+	}
+
+	cmd := exec.CommandContext(ctx, appPath, "--fisk-introspect")
+	cmd.WaitDelay = commandWaitDelay
+	// Introspection deliberately runs in the process working directory, not a per-run
+	// ToolWorkDir: it is a one-time read at run start, so it never collides, and a
+	// binary that reads a relative config at introspect time must see the same one the
+	// operator would, or the exposed tool set could differ per run.
+	cmd.Env = commandEnv(credentialEnvNames, "")
+	// A slow introspection binary that forks leaves no orphan when the timeout fires.
+	configureProcessGroup(cmd)
+
+	// Both streams feed one capped buffer, matching CombinedOutput's ordering while
+	// bounding the memory the binary can force: output past the ceiling is discarded
+	// and flagged rather than buffered, and the over-large document is then rejected.
+	buf := &cappedBuffer{limit: maxIntrospectBytes}
+	cmd.Stdout = buf
+	cmd.Stderr = buf
+	err := cmd.Run()
+
+	// A canceled or timed-out context is an introspection failure with a specific
+	// cause, not a decode problem. When it is the default bound, name the window and the
+	// expectation so an operator knows the binary must answer within it.
+	if ctx.Err() != nil {
+		if defaultTimeout && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("introspecting %q timed out after %s; the binary must respond within this window", appPath, introspectTimeout)
+		}
+		return nil, fmt.Errorf("introspecting %q: %w", appPath, ctx.Err())
+	}
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("introspecting %q: %w", appPath, err)
+	}
+	if buf.exceeded {
+		return nil, fmt.Errorf("introspecting %q produced more than %d bytes; the binary must emit a bounded introspection document", appPath, maxIntrospectBytes)
 	}
 
 	var appDef fisk.ApplicationModel
-	err = json.Unmarshal(out, &appDef)
+	err = json.Unmarshal(buf.buf.Bytes(), &appDef)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("introspecting %q: decoding the introspection document: %w", appPath, err)
 	}
 
 	return &appDef, nil
+}
+
+// cappedBuffer accumulates up to limit bytes and records whether more arrived. It
+// backs a subprocess read whose output must be decoded whole and so cannot be
+// truncated: past the limit the excess is counted and discarded rather than buffered,
+// bounding memory, and exceeded lets the caller reject an over-large document. Write
+// always reports full consumption so the os/exec copier keeps draining the pipe.
+type cappedBuffer struct {
+	buf      bytes.Buffer
+	limit    int
+	exceeded bool
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	room := c.limit - c.buf.Len()
+	switch {
+	case room >= len(p):
+		c.buf.Write(p)
+	case room > 0:
+		c.buf.Write(p[:room])
+		c.exceeded = true
+	case len(p) > 0:
+		c.exceeded = true
+	}
+
+	return len(p), nil
 }
 
 // GlobalFlagInfo describes an application global flag for display by the info
@@ -949,16 +1141,17 @@ type GlobalFlagInfo struct {
 // either by naming it under global_flags or because the application marks it
 // required. It backs the info command's listing of which globals exist and which
 // the operator has allowlisted.
-func AppGlobalFlags(cfg *config.Config) ([]GlobalFlagInfo, error) {
+func AppGlobalFlags(ctx context.Context, cfg *config.Config) ([]GlobalFlagInfo, error) {
 	// With no wrapped application there is nothing to introspect and so no global
 	// flags to report.
 	if cfg.ApplicationPath == "" {
 		return nil, nil
 	}
 
-	model, err := FetchFiskAppModel(cfg.ApplicationPath, cfg.CredentialEnvNames())
+	// FetchFiskAppModel already names the binary in its errors, so it is returned as-is.
+	model, err := FetchFiskAppModel(ctx, cfg.ApplicationPath, cfg.CredentialEnvNames())
 	if err != nil {
-		return nil, fmt.Errorf("introspecting %q: %w", cfg.ApplicationPath, err)
+		return nil, err
 	}
 
 	allow := map[string]bool{}

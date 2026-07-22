@@ -419,6 +419,10 @@ type AgentExpose struct {
 	// port. Its presence is the switch for the `fisk-ai mcp` command, which refuses
 	// to start unless it is set.
 	MCP *ExposedMCPConfig `json:"mcp,omitempty" yaml:"mcp,omitempty"`
+	// A2A carries the a2a server's per-server tuning (concurrency, tool timeout). It is
+	// optional and independent of the agent_to_agent switch above; agent_to_agent alone
+	// still serves with defaults.
+	A2A *ExposedA2AConfig `json:"a2a,omitempty" yaml:"a2a,omitempty"`
 	// Tools optionally narrows the served set, applied on top of the top-level
 	// include/exclude; it can only remove tools, never add them. When absent the
 	// whole top-level-selected set is served.
@@ -466,6 +470,37 @@ type ExposedMCPConfig struct {
 	// is a config error. Any client that can reach the port can then query the
 	// knowledge base, so this is an explicit, security-relevant opt-in.
 	Builtins []string `json:"builtins,omitempty" yaml:"builtins,omitempty"`
+	// MaxConcurrentTools bounds how many tool calls the MCP server runs at once, since
+	// an MCP client has no iteration budget. It is per-server on purpose: MCP bounds
+	// calls from anything that reaches the TCP port (address may be 0.0.0.0), a wider
+	// trust boundary than a2a's NATS peers, so it must not share a2a's knob. Unset (or
+	// 0) uses the server default; it is config-only, with no flag or envar override.
+	MaxConcurrentTools int `json:"max_concurrent_tools,omitempty" yaml:"max_concurrent_tools,omitempty"`
+	// ToolTimeoutString bounds a single served tool call as a duration string (e.g.
+	// 60s). It is named tool_timeout, not call_timeout, to avoid colliding with
+	// llm.budget.call_timeout, which bounds a different unit of work. Unset uses the
+	// server default.
+	ToolTimeoutString string `json:"tool_timeout,omitempty" yaml:"tool_timeout,omitempty"`
+	// ToolTimeoutParsed is the parsed form of ToolTimeoutString, filled by prepare().
+	ToolTimeoutParsed time.Duration `json:"-" yaml:"-"`
+}
+
+// ExposedA2AConfig carries the a2a server's per-server tuning. It is a sibling of the
+// agent_to_agent switch (which stays a bare bool) rather than folded into it, so an
+// agent opts in with agent_to_agent: true and tunes with an a2a: block. Its knobs are
+// separate from the MCP block's because the two servers bound different trust
+// boundaries (NATS peers vs anything reaching a TCP port).
+type ExposedA2AConfig struct {
+	// MaxConcurrentTools bounds how many tool calls the a2a server runs at once, since
+	// an a2a caller has no iteration budget. Unset (or 0) uses the server default;
+	// config-only, no flag or envar override.
+	MaxConcurrentTools int `json:"max_concurrent_tools,omitempty" yaml:"max_concurrent_tools,omitempty"`
+	// ToolTimeoutString bounds a single served tool call as a duration string (e.g.
+	// 60s). Named tool_timeout to avoid colliding with llm.budget.call_timeout. Unset
+	// uses the server default.
+	ToolTimeoutString string `json:"tool_timeout,omitempty" yaml:"tool_timeout,omitempty"`
+	// ToolTimeoutParsed is the parsed form of ToolTimeoutString, filled by prepare().
+	ToolTimeoutParsed time.Duration `json:"-" yaml:"-"`
 }
 
 // RemoteAgent is a remote agent we can talk to using a2a-like behaviors.
@@ -855,6 +890,46 @@ func (c *Config) MCPAddress() string {
 	return c.Expose.Agent.MCP.Address
 }
 
+// MCPMaxConcurrentTools returns the configured MCP tool concurrency, or 0 when unset;
+// the server applies its own default for 0.
+func (c *Config) MCPMaxConcurrentTools() int {
+	if c.Expose == nil || c.Expose.Agent == nil || c.Expose.Agent.MCP == nil {
+		return 0
+	}
+
+	return c.Expose.Agent.MCP.MaxConcurrentTools
+}
+
+// MCPToolTimeout returns the configured MCP per-tool-call timeout, or 0 when unset;
+// the server applies its own default for 0.
+func (c *Config) MCPToolTimeout() time.Duration {
+	if c.Expose == nil || c.Expose.Agent == nil || c.Expose.Agent.MCP == nil {
+		return 0
+	}
+
+	return c.Expose.Agent.MCP.ToolTimeoutParsed
+}
+
+// A2AMaxConcurrentTools returns the configured a2a tool concurrency, or 0 when unset;
+// the server applies its own default for 0.
+func (c *Config) A2AMaxConcurrentTools() int {
+	if c.Expose == nil || c.Expose.Agent == nil || c.Expose.Agent.A2A == nil {
+		return 0
+	}
+
+	return c.Expose.Agent.A2A.MaxConcurrentTools
+}
+
+// A2AToolTimeout returns the configured a2a per-tool-call timeout, or 0 when unset;
+// the server applies its own default for 0.
+func (c *Config) A2AToolTimeout() time.Duration {
+	if c.Expose == nil || c.Expose.Agent == nil || c.Expose.Agent.A2A == nil {
+		return 0
+	}
+
+	return c.Expose.Agent.A2A.ToolTimeoutParsed
+}
+
 // MCPInstructions returns the optional instructions configured under
 // expose.agent.mcp, or "" if none is set. The MCP server sends them to clients
 // at connection time only when non-empty.
@@ -947,6 +1022,20 @@ func (c *Config) prepare() error {
 			return err
 		}
 		c.Expose.Agent.MCP.Builtins = builtins
+
+		d, err := prepareServerToolLimits("expose.agent.mcp", c.Expose.Agent.MCP.MaxConcurrentTools, c.Expose.Agent.MCP.ToolTimeoutString)
+		if err != nil {
+			return err
+		}
+		c.Expose.Agent.MCP.ToolTimeoutParsed = d
+	}
+
+	if c.Expose != nil && c.Expose.Agent != nil && c.Expose.Agent.A2A != nil {
+		d, err := prepareServerToolLimits("expose.agent.a2a", c.Expose.Agent.A2A.MaxConcurrentTools, c.Expose.Agent.A2A.ToolTimeoutString)
+		if err != nil {
+			return err
+		}
+		c.Expose.Agent.A2A.ToolTimeoutParsed = d
 	}
 
 	if err := c.LLM.Budget.prepare(); err != nil {
@@ -1103,6 +1192,40 @@ func normalizeTags(tags []string) []string {
 	}
 
 	return out
+}
+
+// maxConcurrentToolsCeiling caps a server's max_concurrent_tools so a typo cannot
+// request an absurd number of concurrent tool subprocesses.
+const maxConcurrentToolsCeiling = 1024
+
+// prepareServerToolLimits validates and parses the per-server tool limits shared by
+// the MCP and a2a server blocks. path is the config path for error messages (e.g.
+// "expose.agent.mcp"). A zero max_concurrent_tools or an empty tool_timeout is left
+// for the server to default (an omitted key unmarshals to zero, so zero must be
+// treated as unset rather than rejected); a negative or over-ceiling count, or an
+// unparseable or negative duration, is rejected. It returns the parsed timeout, zero
+// when unset.
+func prepareServerToolLimits(path string, maxConcurrent int, timeout string) (time.Duration, error) {
+	if maxConcurrent < 0 {
+		return 0, fmt.Errorf("invalid %s.max_concurrent_tools %d: must not be negative", path, maxConcurrent)
+	}
+	if maxConcurrent > maxConcurrentToolsCeiling {
+		return 0, fmt.Errorf("invalid %s.max_concurrent_tools %d: must not exceed %d", path, maxConcurrent, maxConcurrentToolsCeiling)
+	}
+
+	if timeout == "" {
+		return 0, nil
+	}
+
+	d, err := time.ParseDuration(timeout)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s.tool_timeout %q: %w", path, timeout, err)
+	}
+	if d < 0 {
+		return 0, fmt.Errorf("invalid %s.tool_timeout %q: must not be negative", path, timeout)
+	}
+
+	return d, nil
 }
 
 // prepare applies LLM budget defaults and parses the call timeout.

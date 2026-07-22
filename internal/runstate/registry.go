@@ -27,13 +27,26 @@ import (
 //     component, and enforce the append contract with CheckAppend so the seq rules
 //     cannot drift between backends;
 //   - return ErrExists from Create when the id is already present, ErrNotFound from
-//     Open and Load when it is absent, and ErrLocked when another process holds the
-//     run;
+//     Open and Load when it is absent, and ErrLocked when the run is already locked
+//     (by another process or a concurrent run of the same id in this process);
 //   - decode its options block strictly (reject unknown keys) so an operator's
 //     mistyped option fails at run start, and surface a construction failure (bad
 //     options, an unwritable backing store) as an error rather than deferring it to
 //     the first operation.
-type Factory func(options json.RawMessage) (Store, error)
+type Factory func(env RuntimeEnv, options json.RawMessage) (Store, error)
+
+// RuntimeEnv carries the per-run environment a backend may need beyond its own
+// options, mirroring memory.RuntimeEnv. A backend uses what applies to it and
+// ignores the rest.
+type RuntimeEnv struct {
+	// StoreDir is the run-store base. When set, the file backend roots journals under
+	// StoreDir/runs (still absolute, still never the working directory) so a run's state
+	// sits alongside its memory and knowledge; a resume must then be given the same
+	// StoreDir. Empty keeps the XDG default, the CLI's behavior, and a resume needs no
+	// StoreDir. A relative configured directory is rebased under it; an absolute one is
+	// honored verbatim.
+	StoreDir string
+}
 
 var (
 	registryMu sync.Mutex

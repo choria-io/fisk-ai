@@ -44,7 +44,7 @@ func a2aAction(_ *fisk.ParseContext) error {
 		return fmt.Errorf("fisk-ai a2a requires expose.agent.agent_to_agent: true in %q; this agent is not configured to serve its tools to other agents", configFile)
 	}
 
-	tools, err := fisktool.ServedTools(cfg)
+	tools, err := fisktool.ServedTools(ctx, cfg)
 	if err != nil {
 		return err
 	}
@@ -67,6 +67,8 @@ func a2aAction(_ *fisk.ParseContext) error {
 		Identity:    cfg.Identity,
 		Version:     util.Version(),
 		ConfirmTags: cfg.ConfirmTags(),
+		Concurrency: cfg.A2AMaxConcurrentTools(),
+		CallTimeout: cfg.A2AToolTimeout(),
 	})
 	if err != nil {
 		return err

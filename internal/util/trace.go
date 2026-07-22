@@ -46,6 +46,10 @@ type Tracer struct {
 	id     int
 	closed bool
 	warned bool
+	// warn reports the first trace write failure. It exists because the tracer cannot
+	// reach the run's event sink (util is a dependency of the agent, not the other way
+	// around), so the caller injects a func that routes to it; nil falls back to stderr.
+	warn func(error)
 }
 
 // traceEvent is one line in the trace file. Fields are omitted when empty so each
@@ -87,14 +91,16 @@ type traceEvent struct {
 // NewTracer creates a trace file at path and returns a Tracer writing to it. The
 // file must not already exist: an existing path is an error so a prior trace is
 // never clobbered. It is created 0600 because the trace holds full prompts and
-// responses.
-func NewTracer(path string) (*Tracer, error) {
+// responses. warn reports the first write failure to the caller (typically routed to
+// the run's event sink so it stays attributable when many runs share one process); a
+// nil warn falls back to stderr.
+func NewTracer(path string, warn func(error)) (*Tracer, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("creating trace file: %w", err)
 	}
 
-	return &Tracer{w: f}, nil
+	return &Tracer{w: f, warn: warn}, nil
 }
 
 // Middleware records the request and its response (or error) as trace lines. Its
@@ -282,6 +288,10 @@ func (t *Tracer) warnOnce(err error) {
 		return
 	}
 	t.warned = true
+	if t.warn != nil {
+		t.warn(err)
+		return
+	}
 	fmt.Fprintf(os.Stderr, "warning: trace write failed, trace will be incomplete: %v\n", err)
 }
 

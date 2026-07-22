@@ -27,7 +27,7 @@ func (stubStore) Delete(string) error                        { return nil }
 var lastFakeOptions string
 
 func init() {
-	Register("faketest", func(options json.RawMessage) (Store, error) {
+	Register("faketest", func(_ RuntimeEnv, options json.RawMessage) (Store, error) {
 		lastFakeOptions = string(options)
 		return stubStore{}, nil
 	})
@@ -39,7 +39,7 @@ var _ = Describe("Register", func() {
 	})
 
 	It("Should panic on an empty name", func() {
-		Expect(func() { Register("", func(json.RawMessage) (Store, error) { return stubStore{}, nil }) }).To(Panic())
+		Expect(func() { Register("", func(RuntimeEnv, json.RawMessage) (Store, error) { return stubStore{}, nil }) }).To(Panic())
 	})
 
 	It("Should panic on a nil factory", func() {
@@ -47,7 +47,7 @@ var _ = Describe("Register", func() {
 	})
 
 	It("Should panic on a duplicate registration", func() {
-		f := func(json.RawMessage) (Store, error) { return stubStore{}, nil }
+		f := func(RuntimeEnv, json.RawMessage) (Store, error) { return stubStore{}, nil }
 		Register("duplicate.throwaway", f)
 		Expect(func() { Register("duplicate.throwaway", f) }).To(Panic())
 	})
@@ -55,14 +55,14 @@ var _ = Describe("Register", func() {
 
 var _ = Describe("New", func() {
 	It("Should dispatch to the registered backend with the options", func() {
-		store, err := New("faketest", json.RawMessage(`{"any":"thing"}`))
+		store, err := New("faketest", json.RawMessage(`{"any":"thing"}`), "")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(store).To(BeAssignableToTypeOf(stubStore{}))
 		Expect(lastFakeOptions).To(Equal(`{"any":"thing"}`))
 	})
 
 	It("Should reject an unknown backend and list the known ones", func() {
-		_, err := New("redis", nil)
+		_, err := New("redis", nil, "")
 		Expect(err).To(MatchError(ContainSubstring("unknown session backend")))
 		Expect(err).To(MatchError(ContainSubstring("faketest")))
 	})

@@ -5,20 +5,23 @@
 package fisk
 
 import (
+	"context"
+
 	"github.com/choria-io/fisk-ai/config"
 )
 
 // LoadTools introspects the application, then always strips ai:deny tools before
 // applying the configured include and exclude filters. The unconditional first
-// pass is what enforces ai:deny even when neither filter is set.
-func LoadTools(cfg *config.Config) ([]*FiskCommandTool, error) {
+// pass is what enforces ai:deny even when neither filter is set. ctx bounds the
+// introspection subprocess (see FetchFiskAppModel).
+func LoadTools(ctx context.Context, cfg *config.Config) ([]*FiskCommandTool, error) {
 	// With no wrapped application there is nothing to introspect; the agent runs on
 	// its built-in and remote tools alone.
 	if cfg.ApplicationPath == "" {
 		return nil, nil
 	}
 
-	tools, err := ToolsForApp(cfg.ApplicationPath, cfg.CredentialEnvNames(), cfg.GlobalFlagNames()...)
+	tools, err := ToolsForApp(ctx, cfg.ApplicationPath, cfg.CredentialEnvNames(), cfg.GlobalFlagNames()...)
 	if err != nil {
 		return nil, err
 	}
@@ -51,8 +54,8 @@ func LoadTools(cfg *config.Config) ([]*FiskCommandTool, error) {
 // selection can only remove tools the agent already has; when it is absent the
 // whole loaded set is served, so enabling a transport with no selection serves
 // the agent's focused toolset as-is.
-func ServedTools(cfg *config.Config) ([]*FiskCommandTool, error) {
-	tools, err := LoadTools(cfg)
+func ServedTools(ctx context.Context, cfg *config.Config) ([]*FiskCommandTool, error) {
+	tools, err := LoadTools(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}

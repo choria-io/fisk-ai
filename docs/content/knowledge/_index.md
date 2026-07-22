@@ -171,14 +171,20 @@ harness:
 |--------------------------------|---------------------------------------------------------------------------------------------|
 | `enabled` (boolean)            | turns the feature on; absent or `false` means off                                           |
 | `paths` (array)                | default index roots used when `knowledge index` is run with no path argument                |
-| `directory` (string)           | store location, resolved relative to the working directory; default `knowledge/<identity>`  |
+| `directory` (string)           | store location; a relative value resolves under the store base when set, else the working directory; default `knowledge/<identity>`  |
 | `top_k` (integer)              | default retrieval count, default `5`, hard ceiling `20`                                      |
 | `max_injected_tokens` (integer)| cap on the total retrieved text fed to the model, default `6000`                             |
 | `embeddings`                   | optional block; its presence turns on the vector tier                                       |
 
-The `directory` follows the same rule as memory's `options.directory`: resolved against the working directory when it is
-not absolute, and defaulting to `knowledge/<identity>`. The `identity` is the agent's name, so two agents pointed at the
-same directory share an index and the default keeps each agent's index its own.
+The `directory` follows the same rule as memory's `options.directory`: an absolute value is used as-is; a relative
+value, including the default `knowledge/<identity>`, resolves under the store base when one is set and against the
+working directory otherwise. The `identity` is the agent's name, so two agents pointed at the same directory share an
+index and the default keeps each agent's index its own.
+
+The store base is a deployment concern for running many agents in one process, not an agent setting: a programmatic
+caller passes `store_dir`, and the `knowledge` command takes a matching `--store-dir` flag or `FISK_AI_STORE_DIR`
+environment variable. An absolute `directory` both the agent and the `knowledge` command read from the same config
+needs neither, and is the surest way to keep them pointed at the same index.
 
 ### Embeddings
 
@@ -302,9 +308,10 @@ Only when `embeddings` is configured does it probe the endpoint and check the st
 
 ## Store location and layout
 
-The index is project-local. It lives at `knowledge/<identity>` relative to the working directory, alongside the
-`memory/<identity>` store, which suits the one-project-per-directory workflow where an `agent.yaml`, a `memory/`
-directory, and a `knowledge/` directory sit side by side. The `directory` field overrides the location.
+The index is project-local by default. It lives at `knowledge/<identity>` relative to the working directory, alongside
+the `memory/<identity>` store, which suits the one-project-per-directory workflow where an `agent.yaml`, a `memory/`
+directory, and a `knowledge/` directory sit side by side. A store base relocates that default under it, and the
+`directory` field overrides the location outright.
 
 The store is a single SQLite file with its `-wal` and `-shm` sidecars. The agent opens it read-only while `knowledge
 index` is the single writer, so an index can be rebuilt while an agent runs without the agent seeing a half-written

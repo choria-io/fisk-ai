@@ -51,6 +51,7 @@ func (nopEvents) ToolCall(ToolTrace)                                            
 func (nopEvents) ToolResult(ToolResultTrace)                                             {}
 func (nopEvents) Message(llm.Response, bool)                                             {}
 func (nopEvents) SessionRotated(string)                                                  {}
+func (nopEvents) Panicked(any, []byte)                                                   {}
 
 // captureEvents records the tool traces so a test can assert what was emitted; it
 // inherits the no-op behavior for every other event.
@@ -352,12 +353,13 @@ var _ = Describe("runner", func() {
 				stats:  &util.RunStats{},
 				events: ev,
 				tools:  map[string]toolkit.Tool{"stream_rm": tool},
-				gate:   util.NewConfirmGate(nil),
+				gate:   util.NewConfirmGate(toolkit.DefaultDenyPrompter()),
 			}
 
-			// With no interactive terminal there is no operator to approve, so the gate
-			// denies. The gated tool is never run: no call or result line is emitted, and
-			// the denial is an authoritative non-error result to the model.
+			// With no operator reachable (the deny prompter reports it cannot prompt)
+			// there is no one to approve, so the gate denies. The gated tool is never run:
+			// no call or result line is emitted, and the denial is an authoritative
+			// non-error result to the model.
 			block, remote := r.executeTool(context.Background(), llm.ToolUseBlock{ID: "t1", Name: "stream_rm"})
 			Expect(remote).To(BeFalse())
 			Expect(block.ToolUseID).To(Equal("t1"))
@@ -1041,6 +1043,85 @@ var _ = Describe("Run tool availability guard", func() {
 		_, err := Run(context.Background(), opts, nopEvents{}, nil)
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).ToNot(ContainSubstring("no tools available after filtering"))
+	})
+})
+
+var _ = Describe("Run with an injected Options.Provider", func() {
+	// ragAppCfg points at a fake fisk application that introspects to zero commands
+	// and enables knowledge, so the run gets past the tool-availability guard on the
+	// knowledge_search built-in and reaches the model call with the injected provider.
+	ragAppCfg := func() *config.Config {
+		dir := GinkgoT().TempDir()
+		app := filepath.Join(dir, "fakeapp")
+		Expect(os.WriteFile(app, []byte("#!/bin/sh\necho '{}'\n"), 0o755)).To(Succeed())
+
+		cfg := &config.Config{ApplicationPath: app}
+		cfg.LLM.Model = "test-model"
+		cfg.LLM.Budget.MaxIterations = 1
+		cfg.Harness.RAG = &config.RAGConfig{Enabled: true, Directory: GinkgoT().TempDir()}
+		return cfg
+	}
+
+	It("uses the injected provider and never consults the registry", func() {
+		cfg := ragAppCfg()
+		// An unregistered provider name proves the registry is bypassed: the nil-provider
+		// path would fail NewProvider with "unknown llm provider" before any model call.
+		cfg.LLM.Provider = "definitely-not-a-registered-backend"
+
+		var called atomic.Bool
+		provider := providerFunc(func(context.Context, llm.Request) (*llm.Response, error) {
+			called.Store(true)
+			return mustResponse(`{"role":"assistant","stop_reason":"end_turn","content":[{"type":"text","text":"done"}]}`), nil
+		})
+
+		opts := Options{Config: cfg, ConfigFile: "agent.yaml", Provider: provider}
+		res, err := Run(context.Background(), opts, nopEvents{}, nil)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(called.Load()).To(BeTrue())
+		Expect(res.Reason).To(Equal(runstate.ReasonCompleted))
+	})
+})
+
+// failCloseJournal is a runstate.Journal whose Close fails, to exercise the
+// journal-close warning routing. Only Close is called by closeJournal.
+type failCloseJournal struct {
+	runstate.Journal
+}
+
+func (failCloseJournal) Close() error { return errors.New("disk gone") }
+
+var _ = Describe("closeJournal", func() {
+	It("routes a journal close failure through events.Warn rather than raw stderr", func() {
+		ev := &warnRecorder{}
+		closeJournal(failCloseJournal{}, ev)
+		Expect(ev.has(WarnJournalClose)).To(BeTrue())
+	})
+})
+
+var _ = Describe("validateCallerDir", func() {
+	It("accepts an empty value as inherit-today's-behavior", func() {
+		Expect(validateCallerDir("tool_work_dir", "")).To(Succeed())
+	})
+
+	It("rejects a relative path, naming the option", func() {
+		err := validateCallerDir("tool_work_dir", "rel/dir")
+		Expect(err).To(MatchError(ContainSubstring("tool_work_dir must be an absolute path")))
+	})
+
+	It("rejects a missing directory", func() {
+		err := validateCallerDir("tool_work_dir", filepath.Join(GinkgoT().TempDir(), "absent"))
+		Expect(err).To(MatchError(ContainSubstring("does not exist")))
+	})
+
+	It("rejects a path that is not a directory", func() {
+		f := filepath.Join(GinkgoT().TempDir(), "afile")
+		Expect(os.WriteFile(f, []byte("x"), 0o600)).To(Succeed())
+		err := validateCallerDir("tool_work_dir", f)
+		Expect(err).To(MatchError(ContainSubstring("is not a directory")))
+	})
+
+	It("accepts an existing absolute directory", func() {
+		Expect(validateCallerDir("tool_work_dir", GinkgoT().TempDir())).To(Succeed())
 	})
 })
 

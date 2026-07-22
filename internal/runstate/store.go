@@ -28,8 +28,11 @@ var (
 	// ErrInvalidID is returned when a run id is not a valid KSUID; it must be
 	// validated before it is ever used as a path component.
 	ErrInvalidID = errors.New("invalid run id")
-	// ErrLocked is returned when another process holds the run's lock.
-	ErrLocked = errors.New("run is locked by another process")
+	// ErrLocked is returned when the run's lock is already held. The flock is per open
+	// file description and each acquire opens its own, so it is held either by another
+	// process or by another run of the same id in this process (a server running many
+	// runs at once); the message names neither, since a caller cannot tell which.
+	ErrLocked = errors.New("run is already locked (by another process or a concurrent run of the same id)")
 	// ErrSeqGap is returned by Append when a seq skips ahead of the journal.
 	ErrSeqGap = errors.New("record seq gap")
 )
@@ -83,19 +86,21 @@ type Store interface {
 	Delete(id string) error
 }
 
-// New builds the session store for the named backend, handing the factory the raw
-// per-backend options block. It returns an error for an unknown backend or
+// New builds the session store for the named backend, handing the factory the
+// per-run environment and the raw per-backend options block. storeDir is the
+// run-store base: when set, the file backend roots journals under storeDir/runs;
+// empty keeps the XDG default. It returns an error for an unknown backend or
 // malformed backend options, so an operator's mistake surfaces at run start rather
 // than on the first operation. An unknown backend most often means the backend
 // package was not imported into this build; the error lists the backends that are
 // linked in.
-func New(backend string, options json.RawMessage) (Store, error) {
+func New(backend string, options json.RawMessage, storeDir string) (Store, error) {
 	factory, ok := lookup(backend)
 	if !ok {
 		return nil, fmt.Errorf("unknown session backend %q: known backends are %v", backend, Backends())
 	}
 
-	return factory(options)
+	return factory(RuntimeEnv{StoreDir: storeDir}, options)
 }
 
 // DefaultDir returns the default run store directory, honoring XDG_STATE_HOME and

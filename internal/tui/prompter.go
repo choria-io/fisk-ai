@@ -40,6 +40,10 @@ func newTcellPrompter(live *Live) *tcellPrompter {
 
 var _ toolkit.Prompter = (*tcellPrompter)(nil)
 
+// CanPrompt reports true: the tcell prompter only exists when the full-screen UI owns
+// an interactive terminal, so an operator is always reachable through its modals.
+func (p *tcellPrompter) CanPrompt() bool { return true }
+
 // ApproveCommand shows the confirm-gate modal (No default-focused; Enter on it or
 // Esc declines) and returns the three-way choice.
 func (p *tcellPrompter) ApproveCommand(ctx context.Context, req toolkit.GateRequest) (toolkit.ConfirmChoice, error) {

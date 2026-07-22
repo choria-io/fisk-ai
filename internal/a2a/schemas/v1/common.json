@@ -118,7 +118,9 @@
         "refusal",
         "canceled",
         "error",
-        "budget_exhausted"
+        "budget_exhausted",
+        "suspended",
+        "max_iterations"
       ]
     },
     "exec_result": {

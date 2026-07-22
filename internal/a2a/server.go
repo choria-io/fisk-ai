@@ -223,7 +223,9 @@ func (s *Server) handleTool(ctx context.Context, body []byte, reply Replier) {
 		log.Info("Running tool call")
 
 		start := time.Now()
-		result, err := tool.Execute(runCtx, tr.Input)
+		// The served tool runs in the process working directory; a per-call scratch
+		// directory for served tools is future server work, not this run path.
+		result, err := tool.Execute(runCtx, tr.Input, "")
 		duration := time.Since(start)
 
 		switch {

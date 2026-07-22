@@ -41,7 +41,7 @@ func knowledgeWatchAction(_ *fisk.ParseContext) error {
 
 	// Print the tier line from a read-only store so it never contends with the writer
 	// locks the watcher takes for each index pass.
-	rstore, err := rag.Open(cfg)
+	rstore, err := rag.Open(cfg, knowledgeStoreDir)
 	if err != nil {
 		return err
 	}
@@ -56,6 +56,7 @@ func knowledgeWatchAction(_ *fisk.ParseContext) error {
 		Debounce:    knowledgeWatchDebounce,
 		Reconcile:   reconcile,
 		SkipInitial: knowledgeWatchNoInitial,
+		BaseDir:     knowledgeStoreDir,
 	}, watchReporter(roots))
 	if err != nil {
 		return err

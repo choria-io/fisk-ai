@@ -20,18 +20,12 @@ import (
 )
 
 var _ = Describe("Built-in tools", func() {
-	// The terminal check is stubbed per spec, since the test runner has no terminal;
-	// the original is restored afterwards. The prompts are driven through a
-	// fakePrompter installed per spec.
-	var savedStdinIsTerminal func() bool
+	// Whether an operator is reachable is now the prompter's own report, so a spec
+	// drives it through the fakePrompter (interactive by default) rather than stubbing a
+	// process-global terminal check.
 	var prompter *fakePrompter
 	BeforeEach(func() {
-		savedStdinIsTerminal = util.StdinIsTerminal
-		util.StdinIsTerminal = func() bool { return true }
-		prompter = &fakePrompter{}
-	})
-	AfterEach(func() {
-		util.StdinIsTerminal = savedStdinIsTerminal
+		prompter = &fakePrompter{canPrompt: true}
 	})
 
 	// confirmResult runs the ask_human_confirm handler through the spec's prompter
@@ -115,7 +109,7 @@ var _ = Describe("Built-in tools", func() {
 		})
 
 		It("Should deny without asking when no interactive terminal is attached", func() {
-			util.StdinIsTerminal = func() bool { return false }
+			prompter.canPrompt = false
 			prompter.confirmFn = func(string) (bool, error) {
 				Fail("the prompter must not be called without a terminal")
 				return false, nil
@@ -190,7 +184,7 @@ var _ = Describe("Built-in tools", func() {
 		})
 
 		It("Should never auto-pick when no terminal is attached", func() {
-			util.StdinIsTerminal = func() bool { return false }
+			prompter.canPrompt = false
 			prompter.selectFn = func(string, []string) (int, error) {
 				Fail("the prompter must not be called without a terminal")
 				return 0, nil
@@ -287,7 +281,7 @@ var _ = Describe("Built-in tools", func() {
 		})
 
 		It("Should deny without asking when no terminal is attached", func() {
-			util.StdinIsTerminal = func() bool { return false }
+			prompter.canPrompt = false
 
 			outcome, err := inputResult(`{"question":"Name?"}`)
 			Expect(err).NotTo(HaveOccurred())

@@ -488,7 +488,9 @@ func toolHandler(t *fisk.FiskCommandTool, policy confirmPolicy, sem chan struct{
 
 		fmt.Fprintf(logOut, "Running %s\n", cmdLine)
 
-		result, err := t.Execute(callCtx, req.Params.Arguments)
+		// The served tool runs in the process working directory; a per-call scratch
+		// directory for served tools is future server work, not this run path.
+		result, err := t.Execute(callCtx, req.Params.Arguments, "")
 		if err != nil {
 			return errorResult(err.Error()), nil
 		}

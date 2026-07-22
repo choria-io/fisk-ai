@@ -158,6 +158,14 @@ func runAction(_ *fisk.ParseContext) error {
 
 	res, err := agent.Run(runCtx, opts, &cliEvents{verbose: verbose, noColor: noColor, showToolOutput: showToolOutput}, toolkit.NewSurveyPrompter())
 
+	// A crash already printed its stack through cliEvents.Panicked; return the generic
+	// PanicError for a non-zero exit without a normal-looking stats block that would read
+	// as a successful finish.
+	var panicErr *agent.PanicError
+	if errors.As(err, &panicErr) {
+		return err
+	}
+
 	if res != nil {
 		if res.Reason == runstate.ReasonSuspended {
 			fmt.Fprintf(os.Stderr, "\nsuspended; resume with: fisk-ai run --resume %s\n", res.SessionID)
@@ -286,6 +294,15 @@ func runWithTUI(ctx context.Context, opts agent.Options, cfg *config.Config, int
 	// their resume commands to native scrollback so their ids survive the alt-screen teardown.
 	for _, id := range events.rotatedSessions {
 		fmt.Fprintf(os.Stderr, "previous session saved; resume with: fisk-ai run --resume %s\n", id)
+	}
+	// A crash captured during the run is re-printed to the restored terminal (the
+	// alt-screen it happened under is gone), then returned as the generic PanicError.
+	var panicErr *agent.PanicError
+	if errors.As(runErr, &panicErr) {
+		if len(events.panicStack) > 0 {
+			fmt.Fprintf(os.Stderr, "\npanic: %v\n\n%s\n", events.panicValue, events.panicStack)
+		}
+		return runErr
 	}
 	if events.answer != "" {
 		fmt.Fprintln(os.Stdout, util.RenderAnswer(events.answer, noColor))

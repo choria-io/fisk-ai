@@ -54,7 +54,13 @@ type options struct {
 // newStore is the memory.Factory for the file backend: it decodes the options
 // block, resolves the directory, and opens the store. A construction failure
 // (bad options, an unwritable directory) surfaces here at run start.
-func newStore(identity string, raw json.RawMessage) (memory.Store, error) {
+//
+// The directory is the configured one, else the default memory/<identity>. A
+// relative result is rebased under env.StoreDir when the caller set one, so runs
+// sharing a process place their stores deterministically; an absolute configured
+// directory is honored verbatim and ignores StoreDir, and an empty StoreDir keeps
+// today's process-working-directory behavior.
+func newStore(env memory.RuntimeEnv, identity string, raw json.RawMessage) (memory.Store, error) {
 	opts, err := decodeOptions(raw)
 	if err != nil {
 		return nil, err
@@ -63,6 +69,9 @@ func newStore(identity string, raw json.RawMessage) (memory.Store, error) {
 	dir := opts.Directory
 	if dir == "" {
 		dir = filepath.Join(defaultDirectory, identity)
+	}
+	if env.StoreDir != "" && !filepath.IsAbs(dir) {
+		dir = filepath.Join(env.StoreDir, dir)
 	}
 
 	return newFileStore(dir)

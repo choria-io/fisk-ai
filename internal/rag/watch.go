@@ -38,6 +38,10 @@ type WatchOptions struct {
 	Reconcile bool
 	// SkipInitial skips the startup index pass and only watches for later changes.
 	SkipInitial bool
+	// BaseDir is the store base a relative or default index path is resolved under,
+	// the same value the agent passes so the watched index and the agent's index are
+	// one directory. Empty resolves against the process working directory.
+	BaseDir string
 }
 
 // WatchReporter renders a Watcher's lifecycle events. The rag package owns the
@@ -68,6 +72,7 @@ type Watcher struct {
 	reconcile   bool
 	skipInitial bool
 	exts        map[string]bool
+	baseDir     string
 	storeDir    string
 	reporter    WatchReporter
 
@@ -96,7 +101,8 @@ func NewWatcher(cfg *config.Config, opts WatchOptions, r WatchReporter) (*Watche
 		reconcile:   opts.Reconcile,
 		skipInitial: opts.SkipInitial,
 		exts:        DefaultExtensions,
-		storeDir:    filepath.Clean(resolveDir(cfg)),
+		baseDir:     opts.BaseDir,
+		storeDir:    filepath.Clean(resolveDir(cfg, opts.BaseDir)),
 		reporter:    r,
 		fsw:         fsw,
 	}, nil
@@ -166,7 +172,7 @@ func (w *Watcher) resolveRoots() ([]string, error) {
 // initialIndex runs the startup pass: a first-build estimate when relevant, then a
 // full incremental index reconciling deletions over the configured corpus.
 func (w *Watcher) initialIndex(ctx context.Context) error {
-	store, err := OpenWriter(w.cfg)
+	store, err := OpenWriter(w.cfg, w.baseDir)
 	if err != nil {
 		return err
 	}
@@ -409,7 +415,7 @@ func (w *Watcher) handleEvent(ev fsnotify.Event, pending, deletes map[string]boo
 // only for the pass. Deletions are stat-guarded so an editor's atomic save (a
 // transient rename that Index has already re-added) does not drop a live file.
 func (w *Watcher) indexOnce(ctx context.Context, delKeys []string) indexResult {
-	store, err := OpenWriter(w.cfg)
+	store, err := OpenWriter(w.cfg, w.baseDir)
 	if err != nil {
 		return indexResult{err: err}
 	}

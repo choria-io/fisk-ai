@@ -216,7 +216,7 @@ func askHumanConfirm(ctx context.Context, input json.RawMessage, prompter toolki
 		return "", fmt.Errorf("%s requires a non-empty question", askHumanConfirmName)
 	}
 
-	if !util.StdinIsTerminal() {
+	if !prompter.CanPrompt() {
 		return outcomeJSON(askHumanConfirmName, confirmOutcome{Reason: util.NoTerminalReason})
 	}
 	if err := ctx.Err(); err != nil {
@@ -293,7 +293,7 @@ func askHumanSelect(ctx context.Context, input json.RawMessage, prompter toolkit
 		return "", fmt.Errorf("%s supports at most %d options, got %d", askHumanSelectName, maxSelectOptions, len(options))
 	}
 
-	if !util.StdinIsTerminal() {
+	if !prompter.CanPrompt() {
 		return outcomeJSON(askHumanSelectName, selectOutcome{Reason: util.NoTerminalReason})
 	}
 	if err := ctx.Err(); err != nil {
@@ -364,7 +364,7 @@ func askHumanInput(ctx context.Context, input json.RawMessage, prompter toolkit.
 		return "", fmt.Errorf("%s requires a non-empty question", askHumanInputName)
 	}
 
-	if !util.StdinIsTerminal() {
+	if !prompter.CanPrompt() {
 		return outcomeJSON(askHumanInputName, inputOutcome{Reason: util.NoTerminalReason})
 	}
 	if err := ctx.Err(); err != nil {

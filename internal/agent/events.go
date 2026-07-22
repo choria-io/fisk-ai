@@ -13,8 +13,21 @@ import (
 )
 
 // Events receives a run's narration, tool traces and advisories as it happens, so
-// the caller owns all wording and rendering: the package decides what happened,
-// the caller decides how it looks. Methods are called from the run goroutine.
+// the caller owns all wording and rendering: the package decides what happened, the
+// caller decides how it looks.
+//
+// Contract:
+//   - Methods are called from the single run goroutine, so a per-run instance sees
+//     exactly one run and needs no locking of its own. A caller that shares one Events
+//     across concurrent runs (an aggregating server sink) must make its implementation
+//     safe for concurrent use; that shared-aggregator contract is defined with the job
+//     system, not here.
+//   - Methods may be called during teardown, including Panicked from Run's deferred
+//     recover after the run body has already returned or unwound, so an implementation
+//     must stay callable until Run returns rather than tearing itself down early.
+//   - It is a structured sink: methods carry typed data, not preformatted prose, so a
+//     consumer is free to render, log, or stream it. The two terminal renderers happen
+//     to flatten to prose; a structured (for example slog) consumer keeps the types.
 type Events interface {
 	// Warn reports an operator-facing advisory as structured data.
 	Warn(Warning)
@@ -43,6 +56,17 @@ type Events interface {
 	// leaving the previous one saved and resumable under prevID, so the caller can show
 	// the operator how to return to it.
 	SessionRotated(prevID string)
+
+	// Panicked reports that the run crashed: Run recovered a panic on its goroutine and
+	// is returning a PanicError. value is the recovered panic value and stack is the
+	// captured goroutine stack. It is terminal, not an advisory (every Warning is a
+	// continue-anyway note), so it is its own method and each surface renders it its own
+	// way. The stack reaches this sink and nowhere else: it leaks absolute paths, module
+	// layout and frame arguments, so an implementation on a path that forwards to a
+	// remote peer must keep the stack local (a server log) and send the peer only the
+	// generic PanicError message. It is called from Run's deferred recover during
+	// unwind, so an implementation must not itself panic or block.
+	Panicked(value any, stack []byte)
 }
 
 // WarningKind selects which advisory a Warning carries and which of its fields
@@ -95,6 +119,22 @@ const (
 	// no_tool_search is set, so every tool is sent to the model directly and uses more
 	// context on each request.
 	WarnToolSearchDisabled
+	// WarnKnowledgeIndexAbsent: knowledge is enabled and a store base (StoreDir) is in
+	// effect, but no index exists at the resolved path Name. Most often the knowledge
+	// CLI wrote the index elsewhere because it ran with a different (or no) store base;
+	// without this the run would start clean and knowledge_search would silently return
+	// nothing.
+	WarnKnowledgeIndexAbsent
+	// WarnTraceClose: closing the trace file at run end failed with Err. It is routed
+	// through the events sink rather than written to the shared process stderr so it
+	// stays attributable to its run when many run at once.
+	WarnTraceClose
+	// WarnJournalClose: closing the session journal at run end failed with Err. Routed
+	// through the events sink for the same reason as WarnTraceClose.
+	WarnJournalClose
+	// WarnTraceWrite: writing a line to the trace file failed with Err, so the trace is
+	// incomplete. Reported once per run; the run continues, the trace is best-effort.
+	WarnTraceWrite
 )
 
 // Warning is a typed operator advisory. Kind selects which fields are meaningful;

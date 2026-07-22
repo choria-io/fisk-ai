@@ -83,6 +83,8 @@ agent-only harness settings are ignored.
 | `expose.agent.mcp.address`           | host or IP to bind when `--address` and `FISK_AI_MCP_ADDRESS` are unset, default `127.0.0.1` (loopback); use `0.0.0.0` to listen on all interfaces |
 | `expose.agent.mcp.instructions`      | free-text guidance sent to clients on connect                                        |
 | `expose.agent.mcp.confirm_over_mcp` | how confirmation-gated commands behave when a client cannot be asked                 |
+| `expose.agent.mcp.max_concurrent_tools` | maximum tool calls run at once; `0` or unset uses the default `2`, negative is rejected, capped at `1024` |
+| `expose.agent.mcp.tool_timeout`      | duration bounding a single served tool call, for example `60s`; unset uses the default `30s` |
 | `include` / `exclude`                | select which commands become tools, matched on tool name (regex) or tag              |
 | `expose.agent.tools`                 | narrow the exposed set further within the `include`/`exclude` selection              |
 | `identity`                           | the MCP server name; optional                                                        |
@@ -117,8 +119,8 @@ Each tool also carries MCP annotations:
 
 The served tools are the agent's `include`/`exclude` selection, narrowed further by `expose.agent.tools` when it is set.
 With neither, every command is served, subject to the tag rules below. Tool selection uses the same regular expressions
-over the tool name as the [agent](../agents/#tool-selection). A tool call runs the command and returns its result; a
-per-call timeout and a concurrency limit bound execution.
+over the tool name as the [agent](../agents/#tool-selection). A tool call runs the command and returns its result,
+bounded by `tool_timeout` per call and `max_concurrent_tools` in flight at once.
 
 ## Command tags over MCP
 
@@ -183,8 +185,9 @@ The threat model is wider than an agent run and worth understanding:
 
 * Any client that can reach the server's port can invoke every exposed tool with any schema-valid arguments.
   `ai:deny` and `include`/`exclude` are the gate on what is reachable, so scope the exposed set deliberately.
-* There is no agent loop, prompt, or token budget bounding aggregate use. A per-call timeout and a concurrency limit
-  bound execution, but not the total number of calls, so do not expose the server on an untrusted network.
+* There is no agent loop, prompt, or token budget bounding aggregate use. `tool_timeout` and `max_concurrent_tools`
+  bound a single call and how many run at once, but not the total number of calls, so do not expose the server on an
+  untrusted network.
 * Command output is returned to the connected client rather than to Anthropic, so whoever connects sees whatever the
   commands print.
 * Confirm-tagged commands are gated by elicitation, a request the client fulfills rather than an access control the

@@ -15,18 +15,12 @@ import (
 )
 
 var _ = Describe("ConfirmGate", func() {
-	// The terminal check is stubbed per spec, since the test runner has no terminal;
-	// the original is restored afterwards. The approval prompt is driven through a
-	// fakePrompter installed per spec.
-	var savedStdinIsTerminal func() bool
+	// Whether an operator is reachable is now the prompter's own report, so a spec
+	// drives it through the fakePrompter (interactive by default) rather than stubbing a
+	// process-global terminal check.
 	var prompter *fakePrompter
 	BeforeEach(func() {
-		savedStdinIsTerminal = StdinIsTerminal
-		StdinIsTerminal = func() bool { return true }
-		prompter = &fakePrompter{}
-	})
-	AfterEach(func() {
-		StdinIsTerminal = savedStdinIsTerminal
+		prompter = &fakePrompter{canPrompt: true}
 	})
 
 	// newGate builds a gate wired to the spec's fakePrompter.
@@ -114,10 +108,10 @@ var _ = Describe("ConfirmGate", func() {
 			Expect(reason).To(ContainSubstring("interrupt"))
 		})
 
-		It("Should deny with the no-terminal reason when no terminal is attached", func() {
-			StdinIsTerminal = func() bool { return false }
+		It("Should deny with the no-terminal reason when no operator is reachable", func() {
+			prompter.canPrompt = false
 			prompter.approveFn = func(toolkit.GateRequest) (toolkit.ConfirmChoice, error) {
-				Fail("must not prompt without a terminal")
+				Fail("must not prompt when no operator is reachable")
 				return toolkit.ConfirmNo, nil
 			}
 			gate := newGate()

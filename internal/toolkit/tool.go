@@ -13,11 +13,17 @@ import (
 
 // ExecDeps carries the per-run dependencies a tool may need to run a model
 // tool_use. A kind that needs none ignores it; only the human-in-the-loop
-// built-ins use the Prompter.
+// built-ins use the Prompter and only local command tools use the WorkDir.
 type ExecDeps struct {
 	// Prompter is the operator interaction path a built-in tool uses to reach a
 	// person. It is nil for tools that never prompt.
 	Prompter Prompter
+
+	// WorkDir is the directory a local command tool runs in, so concurrent runs
+	// sharing one process do not collide on relative-path writes. Empty inherits the
+	// process working directory. It sets the child's directory only and confines
+	// nothing.
+	WorkDir string
 }
 
 // Tool is the model-facing contract every tool kind satisfies, however it runs:

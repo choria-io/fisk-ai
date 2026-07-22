@@ -34,7 +34,7 @@ var lastFake struct {
 }
 
 func init() {
-	Register("faketest", func(identity string, options json.RawMessage) (Store, error) {
+	Register("faketest", func(_ RuntimeEnv, identity string, options json.RawMessage) (Store, error) {
 		lastFake.identity = identity
 		lastFake.options = string(options)
 		return stubStore{}, nil
@@ -47,7 +47,9 @@ var _ = Describe("Register", func() {
 	})
 
 	It("Should panic on an empty name", func() {
-		Expect(func() { Register("", func(string, json.RawMessage) (Store, error) { return stubStore{}, nil }) }).To(Panic())
+		Expect(func() {
+			Register("", func(RuntimeEnv, string, json.RawMessage) (Store, error) { return stubStore{}, nil })
+		}).To(Panic())
 	})
 
 	It("Should panic on a nil factory", func() {
@@ -55,7 +57,7 @@ var _ = Describe("Register", func() {
 	})
 
 	It("Should panic on a duplicate registration", func() {
-		f := func(string, json.RawMessage) (Store, error) { return stubStore{}, nil }
+		f := func(RuntimeEnv, string, json.RawMessage) (Store, error) { return stubStore{}, nil }
 		Register("duplicate.throwaway", f)
 		Expect(func() { Register("duplicate.throwaway", f) }).To(Panic())
 	})
@@ -71,7 +73,7 @@ var _ = Describe("New", func() {
 	}
 
 	It("Should dispatch to the registered backend with the identity and options", func() {
-		store, err := New(memCfg("faketest", `{"any":"thing"}`))
+		store, err := New(memCfg("faketest", `{"any":"thing"}`), "")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(store).To(BeAssignableToTypeOf(stubStore{}))
 		Expect(lastFake.identity).To(Equal("agent"))
@@ -79,7 +81,7 @@ var _ = Describe("New", func() {
 	})
 
 	It("Should reject an unknown backend and list the known ones", func() {
-		_, err := New(memCfg("redis", ""))
+		_, err := New(memCfg("redis", ""), "")
 		Expect(err).To(MatchError(ContainSubstring("unknown memory backend")))
 		Expect(err).To(MatchError(ContainSubstring("faketest")))
 	})

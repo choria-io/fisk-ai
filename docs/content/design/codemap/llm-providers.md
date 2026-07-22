@@ -1,5 +1,5 @@
 +++
-title = "Providers and the Neutral Model"
+title = "LLM Providers"
 weight = 45
 description = "The provider-neutral conversation model every subsystem speaks, and the seam where one model backend is swapped for another."
 +++
