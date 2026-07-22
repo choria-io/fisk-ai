@@ -2,7 +2,7 @@
 //
 //  SPDX-License-Identifier: Apache-2.0
 
-package file
+package memory
 
 import (
 	. "github.com/onsi/ginkgo/v2"
@@ -12,9 +12,9 @@ import (
 var _ = Describe("frontmatter", func() {
 	roundTrip := func(description, content string) {
 		GinkgoHelper()
-		data, err := serialize(description, content)
+		data, err := Serialize(description, content)
 		Expect(err).ToNot(HaveOccurred())
-		gotDesc, gotContent := parse(data)
+		gotDesc, gotContent := Parse(data)
 		Expect(gotDesc).To(Equal(description))
 		Expect(gotContent).To(Equal(content))
 	}
@@ -36,13 +36,13 @@ var _ = Describe("frontmatter", func() {
 	})
 
 	It("Should treat a headerless document as body with an empty description", func() {
-		desc, content := parse([]byte("no frontmatter here\n"))
+		desc, content := Parse([]byte("no frontmatter here\n"))
 		Expect(desc).To(BeEmpty())
 		Expect(content).To(Equal("no frontmatter here\n"))
 	})
 
 	It("Should treat an unterminated header as body, not frontmatter", func() {
-		desc, content := parse([]byte("---\ndescription: dangling\n"))
+		desc, content := Parse([]byte("---\ndescription: dangling\n"))
 		Expect(desc).To(BeEmpty())
 		Expect(content).To(Equal("---\ndescription: dangling\n"))
 	})

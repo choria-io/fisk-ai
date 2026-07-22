@@ -5,6 +5,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/llm"
+	"github.com/choria-io/fisk-ai/internal/memory"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
 	fisktool "github.com/choria-io/fisk-ai/internal/toolkit/fisk"
@@ -87,6 +89,7 @@ func infoAction(_ *fisk.ParseContext) error {
 	defer c.WriteTo(os.Stdout)
 
 	printModelSection(c, cfg)
+	printMemorySection(c, cfg)
 
 	tbl := table.NewTableWriter("")
 	tbl.AddHeaders("Tool", "Source", "Confirm", "Description", "Tags")
@@ -207,6 +210,57 @@ func printModelSection(c *columns.Document, cfg *config.Config) {
 		c.Item("Thinking", thinking)
 
 		c.Item("Tool search", toolSearchStatus(cfg))
+	})
+}
+
+// printMemorySection shows the memory backend and, for the jetstream backend, the
+// KV bucket, the NATS context it lives on, and the key prefix that namespaces this
+// agent's memories, so an operator can confirm where memory is stored (and whether
+// it is shared with other agents) without starting a run. It resolves everything
+// from config and never dials NATS, so it works offline. It is skipped when memory
+// is disabled.
+func printMemorySection(c *columns.Document, cfg *config.Config) {
+	if !cfg.MemoryEnabled() {
+		return
+	}
+
+	c.Section("Memory", func(c *columns.Document) {
+		backend := cfg.MemoryBackend()
+		c.Item("Backend", backend)
+
+		if backend == memory.BackendJetStream {
+			var opts struct {
+				Bucket string  `json:"bucket"`
+				Prefix *string `json:"prefix"`
+			}
+			// Best-effort: info is a display surface, so a decode error (an operator's
+			// typo the run path rejects strictly) leaves the fields blank rather than
+			// failing the listing.
+			_ = json.Unmarshal(cfg.MemoryRawOptions(), &opts)
+
+			bucket := opts.Bucket
+			if bucket == "" {
+				bucket = "(not set)"
+			}
+			c.Item("Bucket", bucket)
+
+			context := cfg.NatsContext
+			if context == "" {
+				context = "(default)"
+			}
+			c.Item("Context", context)
+
+			prefix := cfg.Identity
+			if opts.Prefix != nil {
+				prefix = *opts.Prefix
+			}
+			if prefix == "" {
+				prefix = "none (keys shared flat with other agents on this bucket)"
+			}
+			c.Item("Prefix", prefix)
+		}
+
+		c.Item("Limits", fmt.Sprintf("%d KB per entry, %d entries", memory.MaxContentBytes/1024, memory.MaxEntries))
 	})
 }
 

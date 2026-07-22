@@ -10,7 +10,6 @@
 package file
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -61,7 +60,7 @@ type options struct {
 // directory is honored verbatim and ignores StoreDir, and an empty StoreDir keeps
 // today's process-working-directory behavior.
 func newStore(env memory.RuntimeEnv, identity string, raw json.RawMessage) (memory.Store, error) {
-	opts, err := decodeOptions(raw)
+	opts, err := memory.DecodeOptions[options](raw, "file memory")
 	if err != nil {
 		return nil, err
 	}
@@ -75,25 +74,6 @@ func newStore(env memory.RuntimeEnv, identity string, raw json.RawMessage) (memo
 	}
 
 	return newFileStore(dir)
-}
-
-// decodeOptions strictly decodes the backend options. The options arrive as
-// canonical JSON (config parses with UseJSONUnmarshaler), so a stdlib decoder
-// with DisallowUnknownFields catches a mistyped option key the same way the YAML
-// layer catches a mistyped top-level key.
-func decodeOptions(raw json.RawMessage) (options, error) {
-	var opts options
-	if len(raw) == 0 {
-		return opts, nil
-	}
-
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&opts); err != nil {
-		return opts, fmt.Errorf("invalid file memory options: %w", err)
-	}
-
-	return opts, nil
 }
 
 // fileStore is the file-backed Store: one markdown file per key under dir.
@@ -130,7 +110,7 @@ func (s *fileStore) Read(_ context.Context, key string) (string, string, error) 
 		return "", "", err
 	}
 
-	description, content := parse(data)
+	description, content := memory.Parse(data)
 
 	return description, content, nil
 }
@@ -141,7 +121,7 @@ func (s *fileStore) Write(_ context.Context, key, description, content string, o
 		return err
 	}
 
-	data, err := serialize(description, content)
+	data, err := memory.Serialize(description, content)
 	if err != nil {
 		return err
 	}
@@ -189,7 +169,7 @@ func (s *fileStore) List(_ context.Context) ([]memory.Item, error) {
 			// skipped rather than failing the whole listing.
 			continue
 		}
-		description, _ := parse(data)
+		description, _ := memory.Parse(data)
 		entries = append(entries, memory.Item{Key: key, Description: description})
 	}
 

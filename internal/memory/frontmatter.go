@@ -2,7 +2,7 @@
 //
 //  SPDX-License-Identifier: Apache-2.0
 
-package file
+package memory
 
 import (
 	"fmt"
@@ -21,12 +21,14 @@ type frontmatter struct {
 	Description string `yaml:"description"`
 }
 
-// serialize renders a memory value: a YAML frontmatter block holding the
+// Serialize renders a memory value: a YAML frontmatter block holding the
 // description, then the body verbatim. The description is encoded by a real YAML
 // marshaller so a value containing a colon, a quote or a leading dash cannot
 // corrupt the header. The store guarantees the description is a single line, so
-// the header is always a single key.
-func serialize(description, content string) ([]byte, error) {
+// the header is always a single key. It lives in the memory package rather than a
+// single backend so every backend writes one on-disk format and a value migrates
+// between backends unchanged.
+func Serialize(description, content string) ([]byte, error) {
 	header, err := yaml.Marshal(frontmatter{Description: description})
 	if err != nil {
 		return nil, fmt.Errorf("encoding memory frontmatter: %w", err)
@@ -43,13 +45,12 @@ func serialize(description, content string) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// parse splits a stored value into its description and body. It is lenient: a
+// Parse splits a stored value into its description and body. It is lenient: a
 // value that does not open with a frontmatter block is treated as a bodyless-header
 // file whose whole content is the body and whose description is empty, so a
-// hand-written file in the memory directory still reads. Only the first closing
-// delimiter after the header is honored, so a body that itself contains a "---"
-// line is preserved intact.
-func parse(data []byte) (description, content string) {
+// hand-written value still reads. Only the first closing delimiter after the header
+// is honored, so a body that itself contains a "---" line is preserved intact.
+func Parse(data []byte) (description, content string) {
 	s := string(data)
 
 	opening := frontmatterDelimiter + "\n"

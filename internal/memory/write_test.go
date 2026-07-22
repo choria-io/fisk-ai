@@ -24,7 +24,7 @@ var _ = Describe("ValidateWrite", func() {
 	})
 
 	It("Should reject content over the size limit", func() {
-		_, err := ValidateWrite("k", "d", strings.Repeat("x", maxContentBytes+1))
+		_, err := ValidateWrite("k", "d", strings.Repeat("x", MaxContentBytes+1))
 		Expect(err).To(MatchError(ContainSubstring("too large")))
 	})
 
@@ -36,10 +36,10 @@ var _ = Describe("ValidateWrite", func() {
 
 var _ = Describe("CheckCapacity", func() {
 	It("Should permit a create below the cap", func() {
-		Expect(CheckCapacity(maxEntries - 1)).To(Succeed())
+		Expect(CheckCapacity(MaxEntries - 1)).To(Succeed())
 	})
 
 	It("Should reject a create at or above the cap", func() {
-		Expect(CheckCapacity(maxEntries)).To(MatchError(ContainSubstring("memory is full")))
+		Expect(CheckCapacity(MaxEntries)).To(MatchError(ContainSubstring("memory is full")))
 	})
 })

@@ -26,8 +26,8 @@ func ValidateWrite(key, description, content string) (normalizedDescription stri
 		return "", fmt.Errorf("a memory description must not be empty")
 	}
 
-	if len(content) > maxContentBytes {
-		return "", fmt.Errorf("memory content is too large: %d bytes, limit is %d", len(content), maxContentBytes)
+	if len(content) > MaxContentBytes {
+		return "", fmt.Errorf("memory content is too large: %d bytes, limit is %d", len(content), MaxContentBytes)
 	}
 
 	return description, nil
@@ -37,8 +37,8 @@ func ValidateWrite(key, description, content string) (normalizedDescription stri
 // a new key. A backend calls it from its create path (overwrite off) with its
 // current entry count so the shared cap and its message stay in one place.
 func CheckCapacity(count int) error {
-	if count >= maxEntries {
-		return fmt.Errorf("memory is full: %d entries, limit is %d; delete an entry before creating another", count, maxEntries)
+	if count >= MaxEntries {
+		return fmt.Errorf("memory is full: %d entries, limit is %d; delete an entry before creating another", count, MaxEntries)
 	}
 
 	return nil

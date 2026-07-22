@@ -7,17 +7,17 @@ description = "A small key/value store that lets the model keep durable notes ac
 Memory gives the model a small key/value store that persists across runs, so it can keep durable notes and pick them up next time rather than rediscovering them. It is opt-in, agent-mode only, and never exposed over MCP.
 
 {{% notice style="note" title="Where it lives" %}}
-`internal/memory` holds the backend-agnostic core: the `Store` interface and the `New` factory in `store.go`, the backend registry in `registry.go`, key validation in `key.go`, and the shared write validation in `write.go`. The file backend lives in its own `internal/memory/file` package, with the backend and its options in `file.go`, the on-disk format in `frontmatter.go`, and the symlink defense split across `nofollow.go` and `windows.go`. The four model-facing tools and the system-prompt index are in `internal/toolkit/builtin/builtin_memory.go`.
+`internal/memory` holds the backend-agnostic core: the `Store` interface and the `New` factory in `store.go`, the backend registry in `registry.go`, key validation in `key.go`, the shared write validation in `write.go`, and the shared on-disk format (`Serialize`/`Parse`) in `frontmatter.go` so every backend reads and writes one format. The file backend lives in its own `internal/memory/file` package, with the backend and its options in `file.go` and the symlink defense split across `nofollow.go` and `windows.go`; the JetStream KV backend lives in `internal/memory/jetstream`. The four model-facing tools and the system-prompt index are in `internal/toolkit/builtin/builtin_memory.go`.
 {{% /notice %}}
 
 ## Four tools over one interface
 
 When memory is enabled the model gets four tools: `memory_list` returns keys and descriptions, `memory_read` fetches one entry, `memory_write` saves an entry, and `memory_delete` removes one. All four go through the `Store` interface, so the storage backend is pluggable behind them.
 
-Each backend registers itself under a name in `registry.go`, so a backend links into the binary by being imported and `New` builds whichever one `agent.yaml` selects. An unknown backend name fails at the start of a run and lists the backends that are linked in. Backends share the same key and write rules through `ValidateKey` and `ValidateWrite`, so a value written by one is legal in another. The file backend is the only one today; a NATS KV backend is the planned second.
+Each backend registers itself under a name in `registry.go`, so a backend links into the binary by being imported and `New` builds whichever one `agent.yaml` selects. An unknown backend name fails at the start of a run and lists the backends that are linked in. Backends share the same key and write rules through `ValidateKey` and `ValidateWrite`, and the same `Serialize`/`Parse` on-disk format, so a value written by one is legal in another and migrates unchanged. There are two backends today: the `file` backend and the `jetstream` NATS KV backend.
 
 <figure class="cm-diagram">
-  <svg viewBox="0 0 760 210" role="img" aria-label="Four memory tools call one Store interface backed by a file backend of markdown files">
+  <svg viewBox="0 0 760 210" role="img" aria-label="Four memory tools call one Store interface backed by a pluggable backend">
     <defs>
       <marker id="mm" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
         <path d="M0,0 L7,3 L0,6 Z" fill="var(--cm-accent)"/>
@@ -36,11 +36,10 @@ Each backend registers itself under a name in `registry.go`, so a backend links 
     <rect x="260" y="70" width="150" height="88" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
     <text class="cm-svg-label" x="335" y="110" text-anchor="middle" style="fill:var(--cm-accent)">memory.Store</text>
     <text class="cm-svg-sub"   x="335" y="128" text-anchor="middle">one interface</text>
-    <!-- file backend -->
+    <!-- backend -->
     <rect class="cm-svg-box" x="470" y="70" width="170" height="88" rx="8"/>
-    <text class="cm-svg-label" x="555" y="104" text-anchor="middle">file backend</text>
-    <text class="cm-svg-sub"   x="555" y="122" text-anchor="middle">one .md per key</text>
-    <text class="cm-svg-sub"   x="555" y="138" text-anchor="middle">under memory/id</text>
+    <text class="cm-svg-label" x="555" y="110" text-anchor="middle">backend</text>
+    <text class="cm-svg-sub"   x="555" y="128" text-anchor="middle">registered by name</text>
     <!-- arrows: tools to store -->
     <line x1="166" y1="46"  x2="258" y2="104" stroke="var(--cm-accent)" stroke-width="1.5" marker-end="url(#mm)"/>
     <line x1="166" y1="90"  x2="258" y2="112" stroke="var(--cm-accent)" stroke-width="1.5" marker-end="url(#mm)"/>
@@ -49,14 +48,18 @@ Each backend registers itself under a name in `registry.go`, so a backend links 
     <!-- store to backend -->
     <line x1="410" y1="114" x2="468" y2="114" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#mm)"/>
   </svg>
-  <figcaption>The tools depend only on the interface. The file backend is the one implementation today.</figcaption>
+  <figcaption>The tools depend only on the interface; a backend registered by name plugs in behind it.</figcaption>
 </figure>
 
 ## Keys, files, and races
 
 A key is letters, digits, and `. _ = -`, with no leading or trailing dot and no `..`, enforced by `ValidateKey` in `key.go`. The slash that a NATS KV key also permits is deliberately excluded, so a key maps one-to-one to a flat filename with no separator to traverse. `ValidateKey` guards every operation and filters directory entries, which makes it a path-traversal defense as well as a format rule.
 
-The file backend stores each entry as a markdown file with a YAML frontmatter description under `memory/<identity>`, where the identity defaults to the application binary's base name. A relative store path, including that default, resolves under the `StoreDir` base when a caller supplies one and against the working directory otherwise, so a server running many agents places each run's store deterministically; an absolute configured directory ignores it. Two agents pointed at the same directory share a memory; the default keeps each separate. Create and overwrite use the filesystem for atomicity: a create links a staged temp file into place and fails if the name exists, giving a race-safe create guard, while an overwrite renames over the target. Content is capped at 64 KiB, sized to what a future NATS KV backend would accept.
+The file backend stores each entry as a markdown file with a YAML frontmatter description under `memory/<identity>`, where the identity defaults to the application binary's base name. A relative store path, including that default, resolves under the `StoreDir` base when a caller supplies one and against the working directory otherwise, so a server running many agents places each run's store deterministically; an absolute configured directory ignores it. Two agents pointed at the same directory share a memory; the default keeps each separate. Create and overwrite use the filesystem for atomicity: a create links a staged temp file into place and fails if the name exists, giving a race-safe create guard, while an overwrite renames over the target. Content is capped at 64 KiB, sized to what the JetStream KV backend also accepts.
+
+The `jetstream` backend stores each entry as a value in a pre-existing NATS KV bucket, over the shared connection carried on `RuntimeEnv.Nats`. It binds the bucket but never creates it, so the operator owns its durability policy; at construction it rejects a bucket that would silently lose memories (a TTL, or a max value size too small for a serialized entry, the 64 KiB body plus its frontmatter header) rather than degrading the run. `Create` gives the race-safe create guard the file backend gets from a hard link, and each agent's keys are namespaced under a prefix defaulting to its `identity` so two agents on one bucket do not collide unless they opt into a shared prefix. The entry cap is a separate key count ahead of the create, so like the file backend's it is best-effort under concurrency.
+
+Unlike the file backend, an overwrite is a revision-checked compare-and-swap, not a blind replace. `Read` records the KV revision it saw in a per-run map; an overwrite uses `Update` against that revision and is refused with `ErrStale` when the key was not read this run or its revision has moved, so a concurrent writer cannot be clobbered (a real lost-update guard over a shared bucket). A create or a successful overwrite records the new revision, so a run reads a key once and can keep editing it; only the model's `Read` records a revision, never the index build or `List`, so seeing a key in the index does not grant overwrite authority. The `no_require_read_before_update` option turns the guard off for a blind `Put`.
 
 ## The start-of-run index
 
