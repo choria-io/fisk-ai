@@ -14,13 +14,29 @@ import (
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 )
 
-// A FiskCommandTool is a model-facing Tool that can require operator confirmation
-// and can pre-validate a call's required arguments.
+// A FiskCommandTool is a model-facing Tool that describes its own presentation, can
+// require operator confirmation, and can pre-validate a call's required arguments.
 var (
 	_ toolkit.Tool              = (*FiskCommandTool)(nil)
+	_ toolkit.Describer         = (*FiskCommandTool)(nil)
 	_ toolkit.Confirmable       = (*FiskCommandTool)(nil)
 	_ toolkit.ArgumentValidator = (*FiskCommandTool)(nil)
 )
+
+// Describe presents the tool as an application command: its call is traced with the
+// resolved command line and a short form with long argument values middle-elided, so
+// a width-aware surface can fall back to the short line only when the full one would
+// overflow. Both are already sanitized by TraceLine and TraceLineShort. It runs in
+// the caller's per-run working directory so concurrent runs do not collide, and it
+// never prompts.
+func (t *FiskCommandTool) Describe(input json.RawMessage) toolkit.CallInfo {
+	return toolkit.CallInfo{
+		Present:      toolkit.PresentCommand,
+		Display:      t.TraceLine(input),
+		DisplayShort: t.TraceLineShort(input),
+		NeedsWorkDir: true,
+	}
+}
 
 // Definition renders the command tool as a neutral tool definition. A tool tagged
 // ai:no_defer is always sent directly, even within a deferred set, so its deferral

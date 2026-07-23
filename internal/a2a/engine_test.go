@@ -110,6 +110,22 @@ var _ = Describe("selectExposed", func() {
 		Expect(exposed).To(HaveLen(1))
 		Expect(exposed[0].Name()).To(Equal("keep"))
 	})
+
+	It("Should drop a tool that advertises no description", func() {
+		app := fisk.New("app", "an app")
+		app.Command("keep", "kept")
+		app.Command("bare", "")
+
+		s := server()
+		exposed := s.selectExposed(toolsFor(app))
+
+		names := make([]string, len(exposed))
+		for i, t := range exposed {
+			names[i] = t.Name()
+		}
+		Expect(names).To(ConsistOf("keep"))
+		Expect(s.byName).NotTo(HaveKey("bare"))
+	})
 })
 
 var _ = Describe("resultToToolResult", func() {

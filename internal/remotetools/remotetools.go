@@ -22,6 +22,7 @@ import (
 	"github.com/choria-io/fisk-ai/internal/a2a"
 	_ "github.com/choria-io/fisk-ai/internal/a2a/nats"
 	"github.com/choria-io/fisk-ai/internal/conns"
+	"github.com/choria-io/fisk-ai/internal/toolkit/functool"
 )
 
 // remoteToolNamePattern is the character set an imported tool's local name must
@@ -40,7 +41,7 @@ type HostImport struct {
 	Discovered int
 	Version    string
 	Kept       []a2a.ToolDescriptor
-	Tools      []*a2a.RemoteTool
+	Tools      []*functool.Tool
 	Skipped    []string
 	// IgnoredIncludeTags is set when the host's include filter used tags, which
 	// discovery cannot carry, so the tag part of the filter was ignored.
@@ -54,7 +55,7 @@ type HostImport struct {
 // per-host outcomes so the caller can warn about ignored tag filters, skipped
 // tools, or a host that contributed nothing. The client stays owned by the
 // caller, which must keep it open for the run and close it afterwards.
-func ImportForRun(ctx context.Context, client *a2a.Client, cfg *config.Config, taken map[string]bool) ([]*a2a.RemoteTool, map[string]*a2a.RemoteTool, []HostImport, error) {
+func ImportForRun(ctx context.Context, client *a2a.Client, cfg *config.Config, taken map[string]bool) ([]*functool.Tool, map[string]*functool.Tool, []HostImport, error) {
 	imports := importRemoteToolHosts(ctx, client, cfg.RemoteTools)
 
 	for _, imp := range imports {
@@ -68,7 +69,7 @@ func ImportForRun(ctx context.Context, client *a2a.Client, cfg *config.Config, t
 		return nil, nil, imports, err
 	}
 
-	var remoteTools []*a2a.RemoteTool
+	var remoteTools []*functool.Tool
 	for i := range imports {
 		remoteTools = append(remoteTools, imports[i].Tools...)
 	}
@@ -166,7 +167,7 @@ func importHost(ctx context.Context, client *a2a.Client, host config.RemoteToolH
 // run path can fail closed. taken holds the names already claimed by local tools
 // and built-ins. The imports slice is updated in place with the built Tools and
 // any Skipped notes.
-func resolveRemoteTools(taken map[string]bool, imports []HostImport, invoker a2a.RemoteInvoker) (map[string]*a2a.RemoteTool, error) {
+func resolveRemoteTools(taken map[string]bool, imports []HostImport, invoker a2a.RemoteInvoker) (map[string]*functool.Tool, error) {
 	// Count bare names across every host so a name exposed by more than one host
 	// is prefixed for all of them, symmetrically.
 	bareCount := map[string]int{}
@@ -199,7 +200,7 @@ func resolveRemoteTools(taken map[string]bool, imports []HostImport, invoker a2a
 		}
 	}
 
-	byName := map[string]*a2a.RemoteTool{}
+	byName := map[string]*functool.Tool{}
 	var collisions []string
 
 	for i := range imports {

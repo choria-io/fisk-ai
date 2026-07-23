@@ -26,6 +26,7 @@ import (
 	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
 	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
+	"github.com/choria-io/fisk-ai/internal/toolkit/functool"
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/a2a"
@@ -211,6 +212,36 @@ type Options struct {
 	// so the CLI path is unchanged. It is consulted only when the config enables
 	// knowledge.
 	RAGStore *rag.Store
+
+	// CustomTools are application tools a Go caller injects into the run, addressed by
+	// the model by name alongside the wrapped application's command tools, the built-ins
+	// and any remote tools. The recommended way to build one is functool.New (whose
+	// handler returns functool.Result), but any toolkit.Tool is accepted. They are the
+	// programmatic counterpart to the config-declared tool sources: a caller embedding
+	// the agent registers a tool its own process implements, without a wrapped binary or
+	// a remote agent.
+	//
+	// A custom tool runs in-process with the agent's own privileges and the unscrubbed
+	// ambient environment: unlike a command tool, no credential scrub applies to it or to
+	// any subprocess it spawns (the commandEnv/llm.CredentialEnvNames scrub is
+	// subprocess-only and never reaches in-process code). It is trusted code, not a
+	// sandbox; the caller owns what it reads and what it hands to a child process.
+	//
+	// A name may not collide with an application, built-in, or remote tool, nor with
+	// another custom tool: a collision aborts the run rather than silently shadowing one
+	// (shadowing a confirm-gated tool would strip its gate). Each tool's Definition() JSON
+	// (name, description, schema, deferral) must be deterministic across process restarts:
+	// a checkpointed run fingerprints the tool set, so a Definition that varies run to run
+	// makes a resume refuse. The slice order does not matter; the tools are ordered by name
+	// internally, so a set built by ranging a map still fingerprints identically.
+	//
+	// A custom tool built by functool.New with no Trace renderer runs silently: its call
+	// and result line are suppressed except under verbose, as a human-in-the-loop built-in
+	// is. Set functool.Spec.Trace to have its calls traced like the memory tools. A
+	// function tool is never rendered as an application-command line. A custom tool whose
+	// Name, Definition, or Describe panics crashes the run as a *PanicError; the harness
+	// does not sandbox it.
+	CustomTools []toolkit.Tool
 }
 
 // Continuation is the operator's decision at an interactive turn boundary. Continue
@@ -373,7 +404,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	// are never deferred, so enabling them neither hides them behind tool search
 	// nor changes how the application tools are presented.
 	builtins := builtin.HITLTools(cfg)
-	builtinByName := make(map[string]*builtin.BuiltinTool, len(builtins))
+	builtinByName := make(map[string]*functool.Tool, len(builtins))
 	for _, b := range builtins {
 		if taken[b.Name()] {
 			return res, fmt.Errorf("human_in_the_loop adds a built-in tool %q but the application already exposes a tool with that name; exclude or rename it", b.Name())
@@ -413,7 +444,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	// bucket) fails before the loop. natsConns.Nats() is nil-safe and yields nil for
 	// a backend that needs no connection (the file backend ignores it).
 	var memStore memory.Store
-	var memBuiltins []*builtin.BuiltinTool
+	var memBuiltins []*functool.Tool
 	if cfg.MemoryEnabled() {
 		memStore, err = memory.New(cfg, memory.RuntimeEnv{StoreDir: opts.StoreDir, Nats: natsConns.Nats()})
 		if err != nil {
@@ -436,7 +467,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	// as a soft empty state, so a first run never fails to start. The store is opened
 	// read-only; knowledge index is the writer.
 	var ragStore *rag.Store
-	var ragBuiltins []*builtin.BuiltinTool
+	var ragBuiltins []*functool.Tool
 	if cfg.RAGEnabled() {
 		// A caller-injected store is borrowed: a fleet shares one read-only store (one
 		// sqlite handle and its database/sql pool) across every run rather than each
@@ -477,8 +508,8 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	// strict: a named remote agent that cannot be reached or imported aborts the
 	// run rather than silently dropping tools the prompt may depend on. The
 	// connection is held open for the whole run since each remote tool call uses it.
-	var remoteTools []*a2a.RemoteTool
-	remoteByName := map[string]*a2a.RemoteTool{}
+	var remoteTools []*functool.Tool
+	remoteByName := map[string]*functool.Tool{}
 	if len(cfg.RemoteTools) > 0 {
 		// The shared connection was acquired above (natsConns), borrowed or owned as
 		// the case may be; remote tools reuse it rather than dialing a second time.
@@ -500,11 +531,58 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 		events.RemoteHostNotes(imports)
 	}
 
+	// Caller-injected custom tools are registered last, after every other source has
+	// claimed its names, so a collision is caught against all of them and the clashing
+	// kind can be named. A custom tool may never shadow an existing one: shadowing a
+	// confirm-gated command would strip its gate, so this aborts the run like every
+	// other name clash rather than silently replacing a tool.
+	customByName := make(map[string]toolkit.Tool, len(opts.CustomTools))
+	for i, t := range opts.CustomTools {
+		if t == nil {
+			return res, fmt.Errorf("custom tool at index %d is nil", i)
+		}
+
+		name := t.Name()
+		if name == "" {
+			return res, fmt.Errorf("custom tool at index %d has an empty name", i)
+		}
+
+		// The model addresses a tool by its Definition name but the runner dispatches on
+		// Name(); a mismatch would advertise a tool the model could call but the runner
+		// could not find. Reject it here rather than leave it silently unreachable.
+		if defName := t.Definition(false).Name; defName != name {
+			return res, fmt.Errorf("custom tool %q reports Definition name %q; Name() and Definition().Name must match", name, defName)
+		}
+
+		switch {
+		case byName[name] != nil:
+			return res, fmt.Errorf("custom tool at index %d (%q) collides with an existing application tool of the same name; a custom tool may not shadow it", i, name)
+		case builtinByName[name] != nil:
+			return res, fmt.Errorf("custom tool at index %d (%q) collides with an existing built-in tool of the same name; a custom tool may not shadow it", i, name)
+		case remoteByName[name] != nil:
+			return res, fmt.Errorf("custom tool at index %d (%q) collides with an existing remote tool of the same name; a custom tool may not shadow it", i, name)
+		case customByName[name] != nil:
+			return res, fmt.Errorf("custom tool at index %d (%q) duplicates an earlier custom tool of the same name", i, name)
+		}
+
+		// A custom tool runs in-process; one that presents as remote would be counted as
+		// an a2a call and journaled remote, corrupting the remote-call accounting the
+		// resume path recomputes. Remote presentation is reserved for tools a remote
+		// agent actually serves.
+		if d, ok := t.(toolkit.Describer); ok && d.Describe(json.RawMessage("{}")).Present == toolkit.PresentRemote {
+			return res, fmt.Errorf("custom tool %q presents as remote; injected tools run in-process and may not claim remote presentation", name)
+		}
+
+		customByName[name] = t
+		taken[name] = true
+	}
+
 	// The run needs at least one callable tool, counting every source the model can
 	// address: filtered application tools, the built-in HITL/memory/knowledge_search
-	// tools, and imported remote tools. Checking only the application tools would
-	// abort a run whose sole tools are native (e.g. knowledge_search) or remote.
-	if len(tools)+len(builtins)+len(memBuiltins)+len(ragBuiltins)+len(remoteTools) == 0 {
+	// tools, imported remote tools, and caller-injected custom tools. Checking only the
+	// application tools would abort a run whose sole tools are native (e.g.
+	// knowledge_search), remote, or injected by the caller.
+	if len(tools)+len(builtins)+len(memBuiltins)+len(ragBuiltins)+len(remoteTools)+len(opts.CustomTools) == 0 {
 		if cfg.ApplicationPath == "" {
 			return res, fmt.Errorf("no tools available: this agent wraps no application (application_path unset) and enables no built-in or remote tools; set application_path, or enable harness.knowledge, harness.memory, human_in_the_loop, or remote_tools in %q", opts.ConfigFile)
 		}
@@ -523,6 +601,14 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	confirmTools := 0
 	for _, t := range tools {
 		if t.NeedsConfirm(confirmTags) {
+			confirmTools++
+		}
+	}
+	// A custom tool is gated exactly as the runner gates it: it opts into confirmation
+	// through toolkit.Confirmable, so count the same interface the gate consults, else a
+	// gated injected tool would go uncounted and the no-operator advisory would undercount.
+	for _, t := range opts.CustomTools {
+		if c, ok := t.(toolkit.Confirmable); ok && c.NeedsConfirm(confirmTags) {
 			confirmTools++
 		}
 	}
@@ -615,12 +701,25 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	// it, so a backend that cannot honor deferred loading always gets every tool direct.
 	caps := provider.Capabilities()
 	toolSearchAllowed := caps.SupportsToolSearch && cfg.ToolSearchEnabled()
-	deferrable := make([]toolkit.Tool, 0, len(tools)+len(remoteTools))
+	deferrable := make([]toolkit.Tool, 0, len(tools)+len(remoteTools)+len(customByName))
 	for _, t := range tools {
 		deferrable = append(deferrable, t)
 	}
 	for _, rt := range remoteTools {
 		deferrable = append(deferrable, rt)
+	}
+	// Custom tools are appended in name order rather than the caller's slice order, so the
+	// tool set the run fingerprints is identical whether the caller built the slice in a
+	// fixed order or by ranging a map. Each honors deferral through its own Definition (a
+	// tool built to never defer stays direct even inside a deferred set), like the
+	// application tools, so they need no special handling here.
+	customNames := make([]string, 0, len(customByName))
+	for name := range customByName {
+		customNames = append(customNames, name)
+	}
+	slices.Sort(customNames)
+	for _, name := range customNames {
+		deferrable = append(deferrable, customByName[name])
 	}
 	toolDefs, toolSearch := util.BuildToolParams(deferrable, len(builtins)+len(memBuiltins)+len(ragBuiltins), toolSearchAllowed)
 	for _, b := range builtins {
@@ -861,7 +960,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	// added (the taken set), so merging local, built-in and remote tools cannot
 	// shadow one another. The per-kind maps above are kept only where a consumer still
 	// needs the concrete kind: byName feeds the resume transcript renderer.
-	allTools := make(map[string]toolkit.Tool, len(byName)+len(builtinByName)+len(remoteByName))
+	allTools := make(map[string]toolkit.Tool, len(byName)+len(builtinByName)+len(remoteByName)+len(customByName))
 	for name, t := range byName {
 		allTools[name] = t
 	}
@@ -870,6 +969,9 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	}
 	for name, rt := range remoteByName {
 		allTools[name] = rt
+	}
+	for name, t := range customByName {
+		allTools[name] = t
 	}
 
 	r := &runner{

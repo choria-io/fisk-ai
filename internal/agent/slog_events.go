@@ -93,6 +93,13 @@ func (s *SlogEvents) RemoteHostNotes(imports []remotetools.HostImport) {
 		}
 
 		s.log.Info("remote tool host imported", attrs...)
+
+		if imp.IgnoredIncludeTags {
+			s.log.Warn("remote tool include filter uses tags, which discovery does not carry; the tag filter was ignored", "host", imp.Host.Name)
+		}
+		if len(imp.Skipped) > 0 {
+			s.log.Warn("remote tools skipped during import", "host", imp.Host.Name, "skipped", imp.Skipped)
+		}
 	}
 }
 

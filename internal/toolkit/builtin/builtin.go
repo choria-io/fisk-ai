@@ -11,8 +11,8 @@ import (
 	"strings"
 
 	"github.com/choria-io/fisk-ai/config"
-	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
+	"github.com/choria-io/fisk-ai/internal/toolkit/functool"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
@@ -34,91 +34,45 @@ const maxPromptRunes = 500
 // call cannot flood the terminal with an unusable list.
 const maxSelectOptions = 25
 
-// BuiltinTool is a tool fisk-ai implements itself and runs in-process, as opposed
-// to a *FiskCommandTool, which runs a command of the introspected fisk application. Built-in
-// tools provide capabilities that are not part of any application, such as putting
-// a question to the operator. They run with the agent's own privileges and
-// environment — not the stripped, LLMFORMAT-tagged environment a command
-// subprocess gets (see commandEnv) — so a handler must never read a sensitive
-// variable or hand the ambient environment to a subprocess.
-type BuiltinTool struct {
-	name        string
-	description string
-	schema      map[string]any
-	// handler runs the tool in-process and returns the JSON result for the model.
-	// A returned error is an invocation failure surfaced to the model as an error
-	// result; an outcome the model should reason about (such as a declined
-	// confirmation) is a normal result carried in the returned string. The prompter
-	// is the per-run path to the operator; a handler that puts a question to the
-	// operator uses it and treats any error it returns as a denial.
-	handler func(ctx context.Context, input json.RawMessage, prompter toolkit.Prompter) (string, error)
-	// trace, when set, renders a one-line call trace from the tool's input for a
-	// tool that does not render its own operator interaction (the memory tools), so
-	// its call and result are shown like an application tool's. It is nil for a
-	// self-rendering tool (the human-in-the-loop tools), whose trace would only
-	// duplicate the prompt the tool itself puts on the screen.
-	trace func(input json.RawMessage) string
-}
+// A built-in tool is a tool fisk-ai implements itself and runs in-process, built on
+// the functool backend, as opposed to a *FiskCommandTool, which runs a command of
+// the introspected fisk application. Built-in tools provide capabilities that are
+// not part of any application, such as putting a question to the operator. They run
+// with the agent's own privileges and unscrubbed ambient environment (see the
+// functool.Tool doc), so a handler must never read a sensitive variable or hand the
+// ambient environment to a subprocess.
 
-// Name is the tool name presented to the model.
-func (b *BuiltinTool) Name() string { return b.name }
-
-// Traced reports whether this tool's call and result should be shown like an
-// application tool's rather than suppressed. It is true for a tool that has no
-// operator interaction of its own (the memory tools) and false for a
-// self-rendering one (the human-in-the-loop tools).
-func (b *BuiltinTool) Traced() bool { return b.trace != nil }
-
-// TraceLine renders the one-line call trace for input, or "" when the tool is not
-// traced.
-func (b *BuiltinTool) TraceLine(input json.RawMessage) string {
-	if b.trace == nil {
-		return ""
+// mustNew builds a built-in from a static, compiled-in Spec. Those specs are
+// complete and correct by construction, so functool.New cannot fail at runtime; a
+// failure would be a programming error in this package, surfaced as a panic rather
+// than threaded through every factory's signature, in the manner of the standard
+// library's regexp.MustCompile.
+func mustNew(spec functool.Spec) *functool.Tool {
+	t, err := functool.New(spec)
+	if err != nil {
+		panic(fmt.Sprintf("invalid built-in tool %q: %v", spec.Name, err))
 	}
 
-	return b.trace(input)
+	return t
 }
 
-// Description is the tool description presented to the model.
-func (b *BuiltinTool) Description() string { return b.description }
-
-// InputSchema returns the tool's JSON-schema input definition, for a caller that
-// registers the built-in outside the Anthropic tool path (the MCP server, which
-// consumes the raw schema directly).
-func (b *BuiltinTool) InputSchema() map[string]any { return b.schema }
-
-// Call runs the built-in in-process and returns its JSON result string. It is the
-// direct handler seam for a non-agent caller (the MCP server); the agent path uses
-// ExecuteBuiltinUse. The prompter is the operator path a handler uses for a
-// question; a caller with no operator (MCP) passes DefaultDenyPrompter so any
-// unexpected prompt fails closed rather than hanging. A returned error is an
-// invocation failure; an outcome the caller should reason about is carried in the
-// string.
-func (b *BuiltinTool) Call(ctx context.Context, input json.RawMessage, prompter toolkit.Prompter) (string, error) {
-	return b.handler(ctx, input, prompter)
-}
-
-// Definition renders the built-in as a neutral tool definition. It is never
-// deferred: built-in tools are few and always relevant, and deferring one behind
-// the tool-search tool could leave it undiscovered. The deferLoading argument is
-// ignored to satisfy the Tool contract; a built-in never opts into deferral, so
-// DeferLoading is left false.
-func (b *BuiltinTool) Definition(_ bool) llm.ToolDef {
-	return llm.ToolDef{
-		Name:        b.name,
-		Description: b.description,
-		InputSchema: b.schema,
+// withPrompter adapts a built-in handler, which takes the operator prompter
+// directly, to a functool.Handler, which receives its per-run dependencies through
+// a CallContext. A built-in needs only the prompter, never the working directory.
+func withPrompter(h builtinHandler) functool.Handler {
+	return func(ctx context.Context, input json.RawMessage, tc *functool.CallContext) (string, error) {
+		return h(ctx, input, tc.Prompter())
 	}
 }
 
 // HITLTools returns the built-in human-in-the-loop tools enabled by cfg, or nil
 // when they are disabled.
-func HITLTools(cfg *config.Config) []*BuiltinTool {
+func HITLTools(cfg *config.Config) []*functool.Tool {
 	if !cfg.HumanInTheLoopEnabled() {
 		return nil
 	}
 
-	return []*BuiltinTool{
+	return []*functool.Tool{
 		askHumanConfirmTool(),
 		askHumanSelectTool(),
 		askHumanInputTool(),
@@ -131,7 +85,7 @@ func HITLTools(cfg *config.Config) []*BuiltinTool {
 // run instead of reaching anyone; without this the model has no way to know that
 // the operator is unreachable except through these tools. The note names the tools
 // actually enabled so it stays accurate as the set changes.
-func HITLSystemNote(builtins []*BuiltinTool) string {
+func HITLSystemNote(builtins []*functool.Tool) string {
 	if len(builtins) == 0 {
 		return ""
 	}
@@ -149,33 +103,16 @@ func HITLSystemNote(builtins []*BuiltinTool) string {
 		"whether to continue, repeat, or stop.", strings.Join(names, ", "))
 }
 
-// A BuiltinTool is a model-facing Tool. It is not Confirmable: a built-in has no
-// operator confirmation of its own (a human-in-the-loop tool does its own asking).
-var _ toolkit.Tool = (*BuiltinTool)(nil)
-
-// ExecuteUse runs the built-in for a model tool_use block and returns the matching
-// tool result, mirroring the command tool: a handler error becomes an error
-// result; its output becomes a normal result. A human-in-the-loop built-in reaches
-// the operator through deps.Prompter.
-func (b *BuiltinTool) ExecuteUse(ctx context.Context, use llm.ToolUseBlock, deps toolkit.ExecDeps) llm.ToolResultBlock {
-	out, err := b.handler(ctx, use.Input, deps.Prompter)
-	if err != nil {
-		return llm.ToolResultBlock{ToolUseID: use.ID, Content: err.Error(), IsError: true}
-	}
-
-	return llm.ToolResultBlock{ToolUseID: use.ID, Content: out}
-}
-
 // askHumanConfirmTool builds the ask_human_confirm confirmation tool.
-func askHumanConfirmTool() *BuiltinTool {
-	return &BuiltinTool{
-		name: askHumanConfirmName,
-		description: "Ask the human operator a yes/no question at the terminal and wait for their answer. " +
+func askHumanConfirmTool() *functool.Tool {
+	return mustNew(functool.Spec{
+		Name: askHumanConfirmName,
+		Description: "Ask the human operator a yes/no question at the terminal and wait for their answer. " +
 			"Use this only for a decision you should not make alone: confirming an irreversible or destructive action before you take it (deleting data, overwriting, restarting a service), or resolving a genuine ambiguity that turns on the operator's intent. " +
 			"Do not use it for anything you can determine yourself, to narrate progress, or to ask permission for ordinary read-only steps. " +
 			"The operator is a person at a terminal and each call interrupts them, so ask only when their answer changes what you do next. " +
 			"It returns {\"confirmed\": true} only when the operator answered yes; any other outcome (a no, or no operator could be reached) returns {\"confirmed\": false} with a reason. A false result is authoritative and must not be retried.",
-		schema: map[string]any{
+		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"question": map[string]any{
@@ -185,8 +122,8 @@ func askHumanConfirmTool() *BuiltinTool {
 			},
 			"required": []any{"question"},
 		},
-		handler: askHumanConfirm,
-	}
+		Handler: withPrompter(askHumanConfirm),
+	})
 }
 
 // confirmOutcome is the JSON result the ask_human_confirm tool returns to the model.
@@ -234,14 +171,14 @@ func askHumanConfirm(ctx context.Context, input json.RawMessage, prompter toolki
 // ----- ask_human_select: choose one of a list -----
 
 // askHumanSelectTool builds the ask_human_select chooser tool.
-func askHumanSelectTool() *BuiltinTool {
-	return &BuiltinTool{
-		name: askHumanSelectName,
-		description: "Ask the human operator to choose one option from a list you provide, at the terminal, and wait for their choice. " +
+func askHumanSelectTool() *functool.Tool {
+	return mustNew(functool.Spec{
+		Name: askHumanSelectName,
+		Description: "Ask the human operator to choose one option from a list you provide, at the terminal, and wait for their choice. " +
 			"Use this when the decision depends on the operator's intent or knowledge and you have a concrete, bounded set of options to pick among (which environment, which of several matching resources, which approach). " +
 			"Do not use it for a yes/no question (use ask_human_confirm) or for anything you can determine yourself. " +
 			"It returns {\"selected\": \"<the chosen option>\"}; if the operator cancels or none could be reached it returns {\"selected\": null} with a reason, which is authoritative and must not be retried.",
-		schema: map[string]any{
+		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"question": map[string]any{
@@ -256,8 +193,8 @@ func askHumanSelectTool() *BuiltinTool {
 			},
 			"required": []any{"question", "options"},
 		},
-		handler: askHumanSelect,
-	}
+		Handler: withPrompter(askHumanSelect),
+	})
 }
 
 // selectOutcome is the JSON result the ask_human_select tool returns to the model.
@@ -312,15 +249,15 @@ func askHumanSelect(ctx context.Context, input json.RawMessage, prompter toolkit
 }
 
 // askHumanInputTool builds the ask_human_input free-text tool.
-func askHumanInputTool() *BuiltinTool {
-	return &BuiltinTool{
-		name: askHumanInputName,
-		description: "Ask the human operator to type a free-text value at the terminal and wait for their answer. " +
+func askHumanInputTool() *functool.Tool {
+	return mustNew(functool.Spec{
+		Name: askHumanInputName,
+		Description: "Ask the human operator to type a free-text value at the terminal and wait for their answer. " +
 			"Use this for a value you genuinely cannot determine yourself and that depends on the operator (a name, a path, an identifier, a short reason). " +
 			"You may provide a default the operator can accept or edit, which is the preferred way to let them correct a value you drafted. " +
 			"Do not use it for a yes/no question (use ask_human_confirm), for choosing among known options (use ask_human_select), or to collect a secret or password. " +
 			"It returns {\"value\": \"<the text>\"} (which may be empty if the operator entered nothing); if the operator cancels or none could be reached it returns {\"value\": null} with a reason.",
-		schema: map[string]any{
+		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"question": map[string]any{
@@ -334,8 +271,8 @@ func askHumanInputTool() *BuiltinTool {
 			},
 			"required": []any{"question"},
 		},
-		handler: askHumanInput,
-	}
+		Handler: withPrompter(askHumanInput),
+	})
 }
 
 // inputOutcome is the JSON result the ask_human_input tool returns to the model.

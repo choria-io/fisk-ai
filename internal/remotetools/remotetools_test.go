@@ -12,6 +12,7 @@ import (
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/a2a"
+	"github.com/choria-io/fisk-ai/internal/toolkit/functool"
 )
 
 func TestRemoteTools(t *testing.T) {
@@ -22,7 +23,7 @@ func TestRemoteTools(t *testing.T) {
 func descriptors(names ...string) []a2a.ToolDescriptor {
 	out := make([]a2a.ToolDescriptor, len(names))
 	for i, n := range names {
-		out[i] = a2a.ToolDescriptor{Name: n}
+		out[i] = a2a.ToolDescriptor{Name: n, Description: n + " tool"}
 	}
 
 	return out
@@ -142,7 +143,7 @@ var _ = Describe("resolveRemoteTools", func() {
 		r, err := resolveRemoteTools(taken, reverse, nil)
 		Expect(err).NotTo(HaveOccurred())
 
-		keys := func(m map[string]*a2a.RemoteTool) []string {
+		keys := func(m map[string]*functool.Tool) []string {
 			out := make([]string, 0, len(m))
 			for k := range m {
 				out = append(out, k)

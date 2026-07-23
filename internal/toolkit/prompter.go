@@ -100,7 +100,7 @@ var errNoOperator = errors.New("no operator is available to answer on this path"
 type denyPrompter struct{}
 
 // DefaultDenyPrompter returns a Prompter whose every method fails closed. Use it
-// wherever a BuiltinTool must be invoked with no operator reachable.
+// wherever an in-process tool must be invoked with no operator reachable.
 func DefaultDenyPrompter() Prompter { return denyPrompter{} }
 
 // CanPrompt reports false: this prompter exists precisely because no operator is

@@ -31,6 +31,7 @@ import (
 	"github.com/choria-io/fisk-ai/internal/rag"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
+	"github.com/choria-io/fisk-ai/internal/toolkit/functool"
 )
 
 // exampleConfirmApp is exampleApp with its command gated behind ai:confirm, so a run
@@ -578,4 +579,194 @@ func TestExample_TokenBudget(t *testing.T) {
 	res, err := agent.Run(context.Background(), opts, events, agenttest.NewScriptedPrompter(t))
 	g.Expect(err).To(MatchError(ContainSubstring("token budget")))
 	g.Expect(res.Reason).To(Equal(runstate.ReasonBudget))
+}
+
+// TestExample_CustomToolRoundTrip injects a caller-built tool through
+// Options.CustomTools: the model calls it, the handler runs in-process and returns its
+// result with functool.Result, and the result feeds back keyed to the tool_use id. It is
+// the load-bearing example of the injection seam, showing functool.New, functool.Result,
+// a hand-written schema, and a Trace renderer that makes the call visible in the run.
+func TestExample_CustomToolRoundTrip(t *testing.T) {
+	g := NewWithT(t)
+
+	// A function tool needs only a name, description, schema and handler. The handler
+	// ignores its CallContext here (it neither prompts an operator nor touches the
+	// working directory) and returns its JSON result through functool.Result. The Trace
+	// renderer gives the call a one-line trace, like a command's.
+	tool, err := functool.New(functool.Spec{
+		Name:        "lookup_ticket",
+		Description: "look up a support ticket by id",
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"id": map[string]any{"type": "string", "description": "the ticket id"}},
+			"required":   []any{"id"},
+		},
+		ValidateRequired: true,
+		Handler: func(_ context.Context, input json.RawMessage, _ *functool.CallContext) (string, error) {
+			var args struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(input, &args); err != nil {
+				return "", err
+			}
+			return functool.Result(map[string]any{"ticket": args.ID, "status": "open"})
+		},
+		Trace: func(input json.RawMessage) string {
+			var args struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(input, &args); err != nil {
+				return "lookup_ticket"
+			}
+			return "lookup_ticket " + args.ID
+		},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	app := agenttest.NewFakeApp(t, exampleApp())
+	provider := agenttest.NewScriptedProvider(t,
+		agenttest.ToolUseResponse("call-1", "lookup_ticket", json.RawMessage(`{"id":"T-42"}`)),
+		agenttest.TextResponse("finished"),
+	)
+	events := agenttest.NewRecordingEvents()
+
+	cfg := agenttest.Config(t, app)
+	opts := agent.Options{
+		Config:      cfg,
+		ConfigFile:  "agent.yaml",
+		Prompt:      []string{"look up ticket T-42"},
+		Provider:    provider,
+		CustomTools: []toolkit.Tool{tool},
+	}
+
+	res, err := agent.Run(context.Background(), opts, events, agenttest.NewScriptedPrompter(t))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.Reason).To(Equal(runstate.ReasonCompleted))
+
+	// The handler's result came back, keyed to the tool_use id the model chose.
+	results := events.ToolResults()
+	g.Expect(results).To(HaveLen(1))
+	g.Expect(results[0].IsError).To(BeFalse())
+	g.Expect(results[0].Output).To(ContainSubstring(`"ticket":"T-42"`))
+	g.Expect(results[0].Output).To(ContainSubstring(`"status":"open"`))
+
+	last := provider.Requests()[1].Messages[len(provider.Requests()[1].Messages)-1]
+	g.Expect(last.Content[0].ToolResult.ToolUseID).To(Equal("call-1"))
+
+	// The custom tool was advertised to the model alongside the application tool.
+	advertised := false
+	for _, td := range provider.Requests()[0].Tools {
+		if td.Name == "lookup_ticket" {
+			advertised = true
+		}
+	}
+	g.Expect(advertised).To(BeTrue())
+
+	// Because a Trace renderer was set, the call was traced with its one-line form; a
+	// tool with no Trace would render no call line.
+	calls := events.ToolCalls()
+	g.Expect(calls).To(HaveLen(1))
+	g.Expect(calls[0].Name).To(Equal("lookup_ticket"))
+	g.Expect(calls[0].Display).To(ContainSubstring("lookup_ticket T-42"))
+}
+
+// TestExample_CustomToolError shows the handler error path: a handler that returns an
+// error surfaces to the model as an error result, and the run continues rather than
+// aborting, so the model can react to the failure like any other tool's.
+func TestExample_CustomToolError(t *testing.T) {
+	g := NewWithT(t)
+
+	tool, err := functool.New(functool.Spec{
+		Name:        "flaky",
+		Description: "a tool that fails",
+		Schema:      map[string]any{"type": "object"},
+		Handler: func(_ context.Context, _ json.RawMessage, _ *functool.CallContext) (string, error) {
+			return "", errors.New("backend unavailable")
+		},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	app := agenttest.NewFakeApp(t, exampleApp())
+	provider := agenttest.NewScriptedProvider(t,
+		agenttest.ToolUseResponse("call-1", "flaky", json.RawMessage(`{}`)),
+		agenttest.TextResponse("recovered"),
+	)
+	events := agenttest.NewRecordingEvents()
+
+	cfg := agenttest.Config(t, app)
+	opts := agent.Options{
+		Config:      cfg,
+		ConfigFile:  "agent.yaml",
+		Prompt:      []string{"try the flaky tool"},
+		Provider:    provider,
+		CustomTools: []toolkit.Tool{tool},
+	}
+
+	res, err := agent.Run(context.Background(), opts, events, agenttest.NewScriptedPrompter(t))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.Reason).To(Equal(runstate.ReasonCompleted))
+
+	results := events.ToolResults()
+	g.Expect(results).To(HaveLen(1))
+	g.Expect(results[0].IsError).To(BeTrue())
+	g.Expect(results[0].Output).To(ContainSubstring("backend unavailable"))
+}
+
+// TestExample_CustomToolConfirmGated proves an injected tool's confirmation gate is real
+// at runtime, not merely counted: a custom tool built with a functool.ConfirmSpec is put
+// to the operator before it runs, and only the approved call executes. The prompter
+// reports it can prompt (a stand-in for a non-terminal operator channel), so the tool
+// runs even without a TTY and the no-operator advisory does not fire.
+func TestExample_CustomToolConfirmGated(t *testing.T) {
+	g := NewWithT(t)
+
+	tool, err := functool.New(functool.Spec{
+		Name:        "delete_ticket",
+		Description: "delete a support ticket",
+		Schema: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{"id": map[string]any{"type": "string"}},
+			"required":   []any{"id"},
+		},
+		Handler: func(_ context.Context, _ json.RawMessage, _ *functool.CallContext) (string, error) {
+			return functool.Result(map[string]any{"deleted": true})
+		},
+		Confirm: &functool.ConfirmSpec{
+			Summary: func(json.RawMessage) string { return "delete_ticket" },
+		},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	app := agenttest.NewFakeApp(t, exampleApp())
+	provider := agenttest.NewScriptedProvider(t,
+		agenttest.ToolUseResponse("call-1", "delete_ticket", json.RawMessage(`{"id":"T-9"}`)),
+		agenttest.TextResponse("done"),
+	)
+	events := agenttest.NewRecordingEvents()
+
+	prompter := agenttest.NewScriptedPrompter(t)
+	approved := false
+	prompter.ApproveFn = func(toolkit.GateRequest) (toolkit.ConfirmChoice, error) {
+		approved = true
+		return toolkit.ConfirmOnce, nil
+	}
+
+	cfg := agenttest.Config(t, app)
+	opts := agent.Options{
+		Config:      cfg,
+		ConfigFile:  "agent.yaml",
+		Prompt:      []string{"delete ticket T-9"},
+		Provider:    provider,
+		CustomTools: []toolkit.Tool{tool},
+	}
+
+	res, err := agent.Run(context.Background(), opts, events, prompter)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.Reason).To(Equal(runstate.ReasonCompleted))
+
+	// The gate was consulted for the injected tool and the approved call ran; no
+	// no-operator advisory fired because the prompter could prompt.
+	g.Expect(approved).To(BeTrue())
+	g.Expect(events.ToolResults()).To(HaveLen(1))
+	g.Expect(events.HasWarning(agent.WarnConfirmNoTerminal)).To(BeFalse())
 }

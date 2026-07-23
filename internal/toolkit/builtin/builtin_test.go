@@ -16,6 +16,7 @@ import (
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
+	"github.com/choria-io/fisk-ai/internal/toolkit/functool"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
@@ -57,7 +58,7 @@ var _ = Describe("Built-in tools", func() {
 		})
 
 		It("Should never defer the built-in tools", func() {
-			for _, tool := range []*BuiltinTool{askHumanConfirmTool(), askHumanSelectTool(), askHumanInputTool()} {
+			for _, tool := range []*functool.Tool{askHumanConfirmTool(), askHumanSelectTool(), askHumanInputTool()} {
 				Expect(tool.Definition(false).DeferLoading).To(BeFalse())
 			}
 		})

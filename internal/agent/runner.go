@@ -9,11 +9,8 @@ import (
 	"fmt"
 
 	"github.com/choria-io/fisk-ai/internal/toolkit"
-	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
-	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 
 	"github.com/choria-io/fisk-ai/config"
-	"github.com/choria-io/fisk-ai/internal/a2a"
 	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/util"
@@ -41,8 +38,8 @@ type runner struct {
 	// kind (local command, in-process built-in, remote), keyed by the unique name the
 	// model addresses it by. executeTool looks a call up here once and runs it through
 	// the uniform Tool contract, consulting narrow capability interfaces for the
-	// kind-specific policy (argument validation, confirmation) and a type switch for
-	// the kind-specific call trace.
+	// kind-specific policy (argument validation, confirmation) and the Describer
+	// interface for the kind-specific call trace and execution dependencies.
 	tools       map[string]toolkit.Tool
 	confirmTags []string
 	gate        *util.ConfirmGate
@@ -594,35 +591,65 @@ func (r *runner) executeTool(ctx context.Context, use llm.ToolUseBlock) (llm.Too
 
 // traceCall emits the ToolCall trace for a dispatched call and returns the kind
 // (for the matching result trace), the execution dependencies the kind needs, and
-// whether it is a remote call. The trace shapes are per kind: a built-in shows its
-// own call line (a human-in-the-loop tool is distracting to name and is shown only
-// under verbose downstream, a memory tool is traced like a command); a remote tool
-// names the agent it runs on; a local command tool carries the full call line and a
-// short form with long argument values elided, so a width-aware surface can fall
-// back to the short one only when the full line would overflow.
+// whether it is a remote call. It asks the tool to describe its own call rather than
+// switching on its concrete type, so the presentation and dependency needs travel
+// with the tool: a built-in shows its own call line (a human-in-the-loop tool is
+// distracting to name and is shown only under verbose downstream, a memory tool is
+// traced like a command); a remote tool names the agent it runs on; a local command
+// tool carries the full call line and a short form with long argument values elided,
+// so a width-aware surface can fall back to the short one only when the full line
+// would overflow. A tool that does not describe itself is traced by name alone, with
+// no dependencies and not as a remote call.
 func (r *runner) traceCall(use llm.ToolUseBlock) (ToolKind, toolkit.ExecDeps, bool) {
-	switch t := r.tools[use.Name].(type) {
-	case *builtin.BuiltinTool:
-		kind := ToolBuiltin
-		if t.Traced() {
-			kind = ToolMemory
-		}
-		r.events.ToolCall(ToolTrace{Name: use.Name, Display: t.TraceLine(use.Input), Kind: kind})
-		return kind, toolkit.ExecDeps{Prompter: r.prompter}, false
-
-	case *a2a.RemoteTool:
-		r.events.ToolCall(ToolTrace{Name: use.Name, Kind: ToolRemote, Agent: t.Agent()})
-		return ToolRemote, toolkit.ExecDeps{}, true
-
-	case *fisk.FiskCommandTool:
-		r.events.ToolCall(ToolTrace{Name: use.Name, Display: t.TraceLine(use.Input), DisplayShort: t.TraceLineShort(use.Input), Kind: ToolLocal})
-		return ToolLocal, toolkit.ExecDeps{WorkDir: r.toolWorkDir}, false
-
-	default:
-		// A model-facing tool of an unforeseen kind still runs uniformly; it is traced
-		// by name alone rather than dropped.
+	d, ok := r.tools[use.Name].(toolkit.Describer)
+	if !ok {
 		r.events.ToolCall(ToolTrace{Name: use.Name, Kind: ToolLocal})
 		return ToolLocal, toolkit.ExecDeps{}, false
+	}
+
+	info := d.Describe(use.Input)
+	kind := toolKind(info.Present)
+
+	r.events.ToolCall(ToolTrace{
+		Name:         use.Name,
+		Display:      info.Display,
+		DisplayShort: info.DisplayShort,
+		Agent:        info.Agent,
+		Kind:         kind,
+	})
+
+	// A kind receives only the dependencies it asked for: a command tool the per-run
+	// working directory, a built-in the operator prompter (and a working directory it
+	// ignores), a remote tool neither. The remote flag is taken from the presentation
+	// explicitly and never inferred from the agent name, which a remote tool may leave
+	// empty.
+	var deps toolkit.ExecDeps
+	if info.NeedsPrompter {
+		deps.Prompter = r.prompter
+	}
+	if info.NeedsWorkDir {
+		deps.WorkDir = r.toolWorkDir
+	}
+
+	return kind, deps, info.Present == toolkit.PresentRemote
+}
+
+// toolKind maps a tool's declared presentation to the trace ToolKind the runner and
+// its downstream consumers switch on for output suppression and the machine-readable
+// slog tokens. An unrecognized presentation is traced as a local call, the safe
+// default for a tool of an unforeseen kind.
+func toolKind(p toolkit.Presentation) ToolKind {
+	switch p {
+	case toolkit.PresentRemote:
+		return ToolRemote
+	case toolkit.PresentSelfRendered:
+		return ToolBuiltin
+	case toolkit.PresentTraced:
+		return ToolMemory
+	case toolkit.PresentCommand:
+		return ToolLocal
+	default:
+		return ToolLocal
 	}
 }
 

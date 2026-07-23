@@ -43,18 +43,17 @@ var _ = Describe("RemoteTool", func() {
 	}
 
 	Describe("NewRemoteTool", func() {
-		It("Should prefix the local name and keep the remote name on the wire", func() {
+		It("Should prefix the local name and present its agent, keeping the remote name on the wire", func() {
 			rt, err := NewRemoteTool("nats_stream_info", "nats", descriptor, &fakeInvoker{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(rt.Name()).To(Equal("nats_stream_info"))
-			Expect(rt.RemoteName()).To(Equal("stream_info"))
-			Expect(rt.Agent()).To(Equal("nats"))
+			Expect(rt.Describe(nil).Agent).To(Equal("nats"))
 			Expect(rt.Description()).To(Equal("Reports on a stream"))
 			Expect(rt.InputSchema()).To(HaveKey("properties"))
 		})
 
 		It("Should default to an object schema when none is advertised", func() {
-			rt, err := NewRemoteTool("nats_x", "nats", ToolDescriptor{Name: "x"}, &fakeInvoker{})
+			rt, err := NewRemoteTool("nats_x", "nats", ToolDescriptor{Name: "x", Description: "does x"}, &fakeInvoker{})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(rt.InputSchema()).To(Equal(map[string]any{"type": "object"}))
 		})
@@ -62,6 +61,17 @@ var _ = Describe("RemoteTool", func() {
 		It("Should reject an unparsable input schema", func() {
 			_, err := NewRemoteTool("nats_x", "nats", ToolDescriptor{Name: "x", InputSchema: json.RawMessage(`not json`)}, &fakeInvoker{})
 			Expect(err).To(MatchError(ContainSubstring("unparsable input schema")))
+		})
+
+		It("Should reject a descriptor that advertises no description", func() {
+			_, err := NewRemoteTool("nats_x", "nats", ToolDescriptor{Name: "x"}, &fakeInvoker{})
+			Expect(err).To(MatchError(ContainSubstring("advertises no description")))
+		})
+
+		It("Should not validate required arguments locally, leaving that to the serving agent", func() {
+			rt, err := NewRemoteTool("nats_stream_info", "nats", descriptor, &fakeInvoker{})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(rt.MissingRequired(json.RawMessage(`{}`))).To(BeNil())
 		})
 	})
 
