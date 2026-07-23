@@ -18,6 +18,10 @@ const (
 	// BackendFile stores each run as a JSON-lines journal under a directory. It is
 	// the name the file subpackage registers under and the config default.
 	BackendFile = "file"
+	// BackendJetStream stores each run as messages on a pre-existing JetStream stream,
+	// keyed by subject (<prefix>.<run>.<seq>) with MaxMsgsPerSubject=1. It is the name
+	// the jetstream subpackage registers under.
+	BackendJetStream = "jetstream"
 )
 
 var (
@@ -87,20 +91,20 @@ type Store interface {
 }
 
 // New builds the session store for the named backend, handing the factory the
-// per-run environment and the raw per-backend options block. storeDir is the
-// run-store base: when set, the file backend roots journals under storeDir/runs;
-// empty keeps the XDG default. It returns an error for an unknown backend or
-// malformed backend options, so an operator's mistake surfaces at run start rather
-// than on the first operation. An unknown backend most often means the backend
-// package was not imported into this build; the error lists the backends that are
-// linked in.
-func New(backend string, options json.RawMessage, storeDir string) (Store, error) {
-	factory, ok := lookup(backend)
+// per-run environment and the raw per-backend options block. env carries what a
+// backend needs beyond its options: the file backend roots journals under
+// env.StoreDir/runs when set (empty keeps the XDG default), and a connection-backed
+// backend borrows env.Nats. It returns an error for an unknown backend or malformed
+// backend options, so an operator's mistake surfaces at run start rather than on the
+// first operation. An unknown backend most often means the backend package was not
+// imported into this build; the error lists the backends that are linked in.
+func New(backend string, options json.RawMessage, env RuntimeEnv) (Store, error) {
+	reg, ok := lookup(backend)
 	if !ok {
 		return nil, fmt.Errorf("unknown session backend %q: known backends are %v", backend, Backends())
 	}
 
-	return factory(RuntimeEnv{StoreDir: storeDir}, options)
+	return reg.factory(env, options)
 }
 
 // DefaultDir returns the default run store directory, honoring XDG_STATE_HOME and

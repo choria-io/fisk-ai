@@ -946,7 +946,43 @@ harness:
 			Expect(string(sc.RawOptions())).To(MatchJSON(`{"directory":"/tmp/runs"}`))
 		})
 
-		It("Should not parse a sessions block from the config file yet", func() {
+		It("Should parse a file sessions block and capture its options as canonical JSON", func() {
+			cfg, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+harness:
+  sessions:
+    backend: file
+    options:
+      directory: /tmp/runs
+`))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(cfg.SessionBackend()).To(Equal("file"))
+			Expect(string(cfg.SessionRawOptions())).To(MatchJSON(`{"directory":"/tmp/runs"}`))
+		})
+
+		It("Should parse a jetstream sessions block", func() {
+			cfg, err := ParseConfig([]byte(`
+identity: agent1
+application_path: /usr/bin/nats
+system_prompt: do the thing
+llm:
+  model: claude-sonnet-4-6
+harness:
+  sessions:
+    backend: jetstream
+    options:
+      stream: FISK_SESSIONS
+`))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(cfg.SessionBackend()).To(Equal("jetstream"))
+			Expect(string(cfg.SessionRawOptions())).To(MatchJSON(`{"stream":"FISK_SESSIONS"}`))
+		})
+
+		It("Should reject an unknown key inside the sessions block", func() {
 			_, err := ParseConfig([]byte(`
 identity: agent1
 application_path: /usr/bin/nats
@@ -956,9 +992,46 @@ llm:
 harness:
   sessions:
     backend: file
+    bogus: 1
 `))
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("sessions"))
+			Expect(err.Error()).To(ContainSubstring("bogus"))
+		})
+	})
+
+	Describe("ApplyStateDir", func() {
+		It("Should be a no-op for an empty dir, leaving the nil default", func() {
+			cfg := &Config{}
+			Expect(cfg.ApplyStateDir("")).To(Succeed())
+			Expect(cfg.Harness.Sessions).To(BeNil())
+			Expect(cfg.SessionBackend()).To(Equal("file"))
+		})
+
+		It("Should fold a set dir into the file backend directory option", func() {
+			cfg := &Config{}
+			Expect(cfg.ApplyStateDir("/tmp/runs")).To(Succeed())
+			Expect(cfg.SessionBackend()).To(Equal("file"))
+			Expect(string(cfg.SessionRawOptions())).To(MatchJSON(`{"directory":"/tmp/runs"}`))
+		})
+
+		It("Should override a configured file directory, the flag winning last", func() {
+			cfg := &Config{Harness: HarnessConfig{Sessions: SessionConfigFromStateDir("/from/config")}}
+			Expect(cfg.ApplyStateDir("/from/flag")).To(Succeed())
+			Expect(string(cfg.SessionRawOptions())).To(MatchJSON(`{"directory":"/from/flag"}`))
+		})
+
+		It("Should hard error when combined with a non-file backend and leave it untouched", func() {
+			cfg := &Config{Harness: HarnessConfig{Sessions: &SessionConfig{Backend: "jetstream"}}}
+			err := cfg.ApplyStateDir("/tmp/runs")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(`backend is "jetstream"`))
+			Expect(cfg.SessionBackend()).To(Equal("jetstream"))
+		})
+
+		It("Should leave a non-file backend untouched for an empty dir", func() {
+			cfg := &Config{Harness: HarnessConfig{Sessions: &SessionConfig{Backend: "jetstream"}}}
+			Expect(cfg.ApplyStateDir("")).To(Succeed())
+			Expect(cfg.SessionBackend()).To(Equal("jetstream"))
 		})
 	})
 

@@ -15,6 +15,7 @@ import (
 	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/memory"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
+	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
 	fisktool "github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 	"github.com/choria-io/fisk-ai/internal/util"
@@ -90,6 +91,7 @@ func infoAction(_ *fisk.ParseContext) error {
 
 	printModelSection(c, cfg)
 	printMemorySection(c, cfg)
+	printSessionsSection(c, cfg)
 
 	tbl := table.NewTableWriter("")
 	tbl.AddHeaders("Tool", "Source", "Confirm", "Description", "Tags")
@@ -257,6 +259,60 @@ func printMemorySection(c *columns.Document, cfg *config.Config) {
 		}
 
 		c.Item("Limits", fmt.Sprintf("%d KB per entry, %d entries", memory.MaxContentBytes/1024, memory.MaxEntries))
+	})
+}
+
+// printSessionsSection shows where checkpointed run journals are stored, the parallel
+// of the Memory section, so an operator can confirm the session backend without
+// starting a run. Like the Memory section it resolves everything from config and never
+// dials NATS, so it works offline. It is gated on a model being set (the same rule as
+// the Model section): an MCP-only config has no run to checkpoint, so it stays quiet.
+func printSessionsSection(c *columns.Document, cfg *config.Config) {
+	if cfg.LLM.Model == "" {
+		return
+	}
+
+	c.Section("Sessions", func(c *columns.Document) {
+		backend := cfg.SessionBackend()
+		c.Item("Backend", backend)
+
+		switch backend {
+		case runstate.BackendJetStream:
+			var opts struct {
+				Stream string `json:"stream"`
+			}
+			// Best-effort, like the Memory section: a decode error (an operator's typo the
+			// run path rejects strictly) leaves the field blank rather than failing info.
+			_ = json.Unmarshal(cfg.SessionRawOptions(), &opts)
+
+			stream := opts.Stream
+			if stream == "" {
+				stream = "(not set)"
+			}
+			c.Item("Stream", stream)
+
+			context := cfg.NatsContext
+			if context == "" {
+				context = "(default)"
+			}
+			c.Item("Context", context)
+
+			// The subject prefix is derived by binding the stream at connect time (its
+			// single wildcard subject), so it is not knowable offline; naming that here
+			// mirrors Memory's Prefix so the omission reads as by-design, not a bug.
+			c.Item("Prefix", "(derived from the stream at connect time)")
+		case runstate.BackendFile:
+			var opts struct {
+				Directory string `json:"directory"`
+			}
+			_ = json.Unmarshal(cfg.SessionRawOptions(), &opts)
+
+			directory := opts.Directory
+			if directory == "" {
+				directory = "(XDG default)"
+			}
+			c.Item("Directory", directory)
+		}
 	})
 }
 
