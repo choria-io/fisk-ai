@@ -82,6 +82,12 @@ func (e *tcellEvents) Starting(info agent.RunInfo) {
 func (e *tcellEvents) RemoteHostNotes(imports []remotetools.HostImport) {
 	var lines []tui.Line
 	for _, imp := range imports {
+		if imp.IgnoredIncludeTags {
+			lines = append(lines, tui.Line{Kind: tui.LineWarning, Text: fmt.Sprintf("remote agent %q include filter uses tags, which discovery does not carry; the tag filter was ignored (filter by tool name instead)", imp.Host.Name)})
+		}
+		if len(imp.Skipped) > 0 {
+			lines = append(lines, tui.Line{Kind: tui.LineWarning, Text: fmt.Sprintf("remote agent %q: skipped %s", imp.Host.Name, strings.Join(imp.Skipped, "; "))})
+		}
 		if len(imp.Tools) == 0 {
 			lines = append(lines, tui.Line{Kind: tui.LineWarning, Text: fmt.Sprintf("remote agent %q contributed no tools after filtering; check the include/exclude for that host", imp.Host.Name)})
 		}

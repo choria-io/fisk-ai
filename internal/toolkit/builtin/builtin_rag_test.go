@@ -15,6 +15,7 @@ import (
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/rag"
+	"github.com/choria-io/fisk-ai/internal/toolkit/functool"
 )
 
 var _ = Describe("knowledge_search tool", func() {
@@ -33,7 +34,7 @@ var _ = Describe("knowledge_search tool", func() {
 	It("returns an error when invoked with a nil store", func() {
 		tools := RAGTools(enabled(""), nil)
 		Expect(tools).To(HaveLen(1))
-		_, err := tools[0].handler(ctx, json.RawMessage(`{"query":"x"}`), nil)
+		_, err := tools[0].Call(ctx, json.RawMessage(`{"query":"x"}`), nil)
 		Expect(err).To(MatchError(errRAGStoreUnconfigured))
 	})
 
@@ -64,7 +65,7 @@ var _ = Describe("knowledge_search tool", func() {
 		var (
 			tmp   string
 			cfg   *config.Config
-			tools []*BuiltinTool
+			tools []*functool.Tool
 		)
 
 		buildIndex := func() {
@@ -93,7 +94,7 @@ var _ = Describe("knowledge_search tool", func() {
 
 		It("reports index_not_built before any index exists", func() {
 			open()
-			out, err := tools[0].handler(ctx, json.RawMessage(`{"query":"anything"}`), nil)
+			out, err := tools[0].Call(ctx, json.RawMessage(`{"query":"anything"}`), nil)
 			Expect(err).ToNot(HaveOccurred())
 
 			var res knowledgeSearchOutcome
@@ -106,7 +107,7 @@ var _ = Describe("knowledge_search tool", func() {
 			buildIndex()
 			open()
 
-			out, err := tools[0].handler(ctx, json.RawMessage(`{"query":"sharding horizontal scale"}`), nil)
+			out, err := tools[0].Call(ctx, json.RawMessage(`{"query":"sharding horizontal scale"}`), nil)
 			Expect(err).ToNot(HaveOccurred())
 
 			var res knowledgeSearchOutcome

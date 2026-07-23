@@ -150,8 +150,10 @@ func (s *Server) Stop() error {
 
 // selectExposed filters tools to those safe to serve and records them by name for
 // invocation. Confirm-gated tools have no operator to approve them on a served
-// agent and are dropped; a tool with a name a caller could not use is dropped.
-// Each drop is logged with its reason.
+// agent and are dropped; a tool with a name a caller could not use is dropped; a
+// tool that advertises no description is dropped, since a remote agent importing it
+// would reject it as giving the model nothing to decide on. Each drop is logged with
+// its reason.
 func (s *Server) selectExposed(tools []*fisk.FiskCommandTool) []*fisk.FiskCommandTool {
 	var exposed []*fisk.FiskCommandTool
 	for _, t := range tools {
@@ -160,6 +162,8 @@ func (s *Server) selectExposed(tools []*fisk.FiskCommandTool) []*fisk.FiskComman
 			s.opts.Logger.Warn("Skipping tool: confirmation-gated commands are not served over a2a (no operator to approve); use ai:deny to suppress this", "tool", t.Name())
 		case !toolNamePattern.MatchString(t.Name()):
 			s.opts.Logger.Warn("Skipping tool: not a valid a2a tool name", "tool", t.Name())
+		case t.ModelDescription() == "":
+			s.opts.Logger.Warn("Skipping tool: served tools must advertise a description; remote agents will not import a description-less tool", "tool", t.Name())
 		default:
 			exposed = append(exposed, t)
 			s.byName[t.Name()] = t

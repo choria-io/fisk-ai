@@ -34,19 +34,20 @@ const denyTag = "ai:deny"
 // so they stay immediately available.
 const noDeferTag = "ai:no_defer"
 
-// confirmTag marks a command as requiring the operator's explicit permission
-// before it runs. When the agent is about to run a tool carrying it, it prompts
-// the operator at the terminal, showing the command and its arguments, and only
-// runs it on an affirmative answer; an "allow for the session" answer is
-// remembered in-process for that tool for the rest of the run (see ConfirmGate).
-// It is always on; operators can gate further commands by listing additional tags
-// under confirm_tags, which NeedsConfirm treats the same way.
+// confirmTag is the always-on confirm tag as it appears on a fisk command's tags.
+// It is toolkit.ConfirmTag, the single definition shared with every tool kind, named
+// here for readability. A command carrying it requires the operator's explicit
+// permission before it runs: the agent prompts at the terminal, showing the command
+// and its arguments, and only runs it on an affirmative answer; an "allow for the
+// session" answer is remembered in-process for that tool for the rest of the run (see
+// ConfirmGate). It is always on; operators gate further commands by listing
+// additional tags under confirm_tags, which NeedsConfirm treats the same way.
 //
-// Confirmation does not need a terminal, so confirm-tagged commands are exposed
-// over MCP: there a client that supports elicitation is asked to approve the run,
-// and a client that does not runs the command ungated (see the mcpserver package).
-// Use ai:deny to keep a command off MCP entirely.
-const confirmTag = "ai:confirm"
+// Confirmation does not need a terminal, so confirm-tagged commands are exposed over
+// MCP: there a client that supports elicitation is asked to approve the run, and a
+// client that does not runs the command ungated (see the mcpserver package). Use
+// ai:deny to keep a command off MCP entirely.
+const confirmTag = toolkit.ConfirmTag
 
 // maxToolOutputBytes caps the captured output so a chatty command cannot flood
 // the model's context. Output beyond this is truncated with a marker.
@@ -194,41 +195,27 @@ func (t *FiskCommandTool) Tags() []string {
 
 // NeedsConfirm reports whether the command must be approved by the operator
 // before it runs: it carries the always-on ai:confirm tag, or any of the extra
-// confirm tags the operator configured (extraTags, from confirm_tags). The
-// always-on ai:confirm tag is checked unconditionally, so omitting it from
+// confirm tags the operator configured (extraTags, from confirm_tags). The check is
+// shared with every tool kind through toolkit.NeedsConfirm, so the gate logic cannot
+// drift; the always-on ai:confirm tag is matched unconditionally, so omitting it from
 // extraTags can never weaken the guarantee. In the agent loop the approval is
 // enforced against a local operator; over MCP it is requested from the calling
 // client through elicitation when the client supports it, and the command runs
 // ungated otherwise (see the mcpserver package).
 func (t *FiskCommandTool) NeedsConfirm(extraTags []string) bool {
-	for _, tag := range t.Tags() {
-		if tag == confirmTag || slices.Contains(extraTags, tag) {
-			return true
-		}
-	}
-
-	return false
+	return toolkit.NeedsConfirm(t.Tags(), extraTags)
 }
 
 // ConfirmTrigger returns the tag that gates this command, named to the operator
-// in the approval prompt. The always-on ai:confirm tag takes precedence when
-// present, since it is the strongest, mode-independent signal; otherwise the
-// first of the command's tags that appears in extraTags, in the command's own tag
-// order, is returned so the message is deterministic. It returns an empty string
-// when the command is not gated, which NeedsConfirm reports first, so callers
-// consult it only for a gated command.
+// in the approval prompt. The choice is shared with every tool kind through
+// toolkit.ConfirmTrigger: the always-on ai:confirm tag takes precedence when present,
+// since it is the strongest, mode-independent signal; otherwise the first of the
+// command's tags that appears in extraTags, in the command's own tag order, is
+// returned so the message is deterministic. It returns an empty string when the
+// command is not gated, which NeedsConfirm reports first, so callers consult it only
+// for a gated command.
 func (t *FiskCommandTool) ConfirmTrigger(extraTags []string) string {
-	if slices.Contains(t.Tags(), confirmTag) {
-		return confirmTag
-	}
-
-	for _, tag := range t.Tags() {
-		if slices.Contains(extraTags, tag) {
-			return tag
-		}
-	}
-
-	return ""
+	return toolkit.ConfirmTrigger(t.Tags(), extraTags)
 }
 
 // InputSchema is the Anthropic-restricted JSON schema for the command, as

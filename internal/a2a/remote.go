@@ -7,16 +7,17 @@ package a2a
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
-	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
+	"github.com/choria-io/fisk-ai/internal/toolkit/functool"
 )
 
 // RemoteInvoker performs a single tool call against a remote agent. It is the
-// narrow surface a RemoteTool needs from the transport, kept as an interface so a
-// RemoteTool depends on the a2a message types rather than on the NATS binding,
-// which avoids an import cycle and lets tests drive a RemoteTool with a fake.
+// narrow surface a remote tool needs from the transport, kept as an interface so a
+// remote tool depends on the a2a message types rather than on the NATS binding,
+// which avoids an import cycle and lets tests drive a remote tool with a fake.
 type RemoteInvoker interface {
 	// InvokeTool calls tool on agent with the given input and returns its reply. A
 	// failed or denied call is reported in-band on the reply (IsError set); a Go
@@ -24,27 +25,21 @@ type RemoteInvoker interface {
 	InvokeTool(ctx context.Context, agent, tool string, input json.RawMessage) (*ToolReply, error)
 }
 
-// RemoteTool is a tool imported from a remote agent. It presents to the model
-// like a local tool but, when called, invokes the tool on the remote agent over
-// the transport rather than running a local command. The name presented to the
-// model (localName) is prefixed with the host alias so it stays distinct from
-// local tools and other hosts; the unprefixed remoteName and the agent identity
-// are what travel on the wire.
-type RemoteTool struct {
-	localName   string
-	remoteName  string
-	agent       string
-	description string
-	inputSchema map[string]any
-	invoker     RemoteInvoker
-}
-
-// NewRemoteTool builds a RemoteTool from a discovered descriptor. localName is the
-// alias-prefixed name presented to the model; the descriptor's own name is used on
-// the wire. The descriptor's input schema, which comes from an untrusted remote
-// agent, must be a JSON object; an absent or non-object schema is an error rather
-// than something forwarded to the model API.
-func NewRemoteTool(localName, agent string, desc ToolDescriptor, invoker RemoteInvoker) (*RemoteTool, error) {
+// NewRemoteTool builds a remote function tool from a discovered descriptor.
+// localName is the alias-prefixed name presented to the model; the descriptor's own
+// name is used on the wire. The descriptor's input schema, which comes from an
+// untrusted remote agent, must be a JSON object; an absent or non-object schema is an
+// error rather than something forwarded to the model API. A descriptor that
+// advertises no description is likewise rejected: a description-less tool gives the
+// model nothing to decide on and is never forwarded.
+//
+// The tool is presented to the model like a local one but, when called, invokes the
+// tool on the remote agent over the transport rather than running a local command.
+// Its handler maps the reply so the model sees a remote tool identically to a local
+// one: a transport failure or a remote harness failure becomes an error result, while
+// a command that ran (even one that exited non-zero) becomes a successful result
+// carrying the same CommandResult JSON a local command tool produces.
+func NewRemoteTool(localName, agent string, desc ToolDescriptor, invoker RemoteInvoker) (*functool.Tool, error) {
 	schema := map[string]any{"type": "object"}
 	if len(desc.InputSchema) > 0 {
 		if err := json.Unmarshal(desc.InputSchema, &schema); err != nil {
@@ -52,75 +47,36 @@ func NewRemoteTool(localName, agent string, desc ToolDescriptor, invoker RemoteI
 		}
 	}
 
-	return &RemoteTool{
-		localName:   localName,
-		remoteName:  desc.Name,
-		agent:       agent,
-		description: desc.Description,
-		inputSchema: schema,
-		invoker:     invoker,
-	}, nil
-}
-
-// Name is the tool name presented to the model: the alias-prefixed local name.
-func (r *RemoteTool) Name() string { return r.localName }
-
-// RemoteName is the tool name on the remote agent, used on the wire.
-func (r *RemoteTool) RemoteName() string { return r.remoteName }
-
-// Agent is the identity of the remote agent that exposes the tool.
-func (r *RemoteTool) Agent() string { return r.agent }
-
-// Description is the tool description presented to the model, as advertised by the
-// remote agent.
-func (r *RemoteTool) Description() string { return r.description }
-
-// InputSchema is the tool's JSON schema, as advertised by the remote agent.
-func (r *RemoteTool) InputSchema() map[string]any { return r.inputSchema }
-
-// Definition renders the remote tool as a neutral tool definition. Deferral is
-// decided the same way as for local tools (see BuildToolParams); a remote tool
-// carries no tags, so it is always eligible for deferral.
-func (r *RemoteTool) Definition(deferLoading bool) llm.ToolDef {
-	return llm.ToolDef{
-		Name:         r.localName,
-		Description:  r.description,
-		InputSchema:  r.inputSchema,
-		DeferLoading: deferLoading,
-	}
-}
-
-// A RemoteTool is a model-facing Tool. It is not Confirmable: it carries no local
-// tags, and the serving agent declines confirmation-gated tools at its own end.
-var _ toolkit.Tool = (*RemoteTool)(nil)
-
-// ExecuteUse invokes the remote tool for a model tool_use block and returns the
-// matching tool result. The result is mapped so the model sees a remote tool
-// identically to a local one: a transport failure or a remote harness failure
-// becomes an error result, while a command that ran (even one that exited
-// non-zero) becomes a successful result carrying the same CommandResult JSON a
-// local command tool produces. It takes no ExecDeps: a remote tool never prompts.
-func (r *RemoteTool) ExecuteUse(ctx context.Context, use llm.ToolUseBlock, _ toolkit.ExecDeps) llm.ToolResultBlock {
-	reply, err := r.invoker.InvokeTool(ctx, r.agent, r.remoteName, use.Input)
-	if err != nil {
-		return llm.ToolResultBlock{ToolUseID: use.ID, Content: fmt.Sprintf("calling tool %q on agent %q: %v", r.remoteName, r.agent, err), IsError: true}
+	if desc.Description == "" {
+		return nil, fmt.Errorf("tool %q from agent %q advertises no description", desc.Name, agent)
 	}
 
-	if reply.IsError {
-		return llm.ToolResultBlock{ToolUseID: use.ID, Content: reply.Output, IsError: true}
+	remoteName := desc.Name
+	handler := func(ctx context.Context, input json.RawMessage, _ *functool.CallContext) (string, error) {
+		reply, err := invoker.InvokeTool(ctx, agent, remoteName, input)
+		if err != nil {
+			return "", fmt.Errorf("calling tool %q on agent %q: %w", remoteName, agent, err)
+		}
+
+		if reply.IsError {
+			return "", errors.New(reply.Output)
+		}
+
+		result := toolkit.CommandResult{Output: reply.Output}
+		if reply.Exec != nil {
+			result.Command = reply.Exec.Command
+			result.ExitCode = reply.Exec.ExitCode
+			result.Truncated = reply.Exec.Truncated
+		}
+
+		return functool.Result(result)
 	}
 
-	result := toolkit.CommandResult{Output: reply.Output}
-	if reply.Exec != nil {
-		result.Command = reply.Exec.Command
-		result.ExitCode = reply.Exec.ExitCode
-		result.Truncated = reply.Exec.Truncated
-	}
-
-	data, err := json.Marshal(result)
-	if err != nil {
-		return llm.ToolResultBlock{ToolUseID: use.ID, Content: fmt.Sprintf("marshaling tool result: %v", err), IsError: true}
-	}
-
-	return llm.ToolResultBlock{ToolUseID: use.ID, Content: string(data)}
+	return functool.New(functool.Spec{
+		Name:        localName,
+		Description: desc.Description,
+		Schema:      schema,
+		Handler:     handler,
+		Remote:      &functool.RemoteSpec{Agent: agent},
+	})
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/memory"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
+	"github.com/choria-io/fisk-ai/internal/toolkit/functool"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
@@ -36,12 +37,12 @@ const maxIndexDescriptionRunes = 200
 // unlike the human-in-the-loop tools they are safe to reach without a terminal.
 // store may be nil to enumerate the tools for listing (info); a handler invoked
 // with a nil store returns an error rather than panicking.
-func MemoryTools(cfg *config.Config, store memory.Store) []*BuiltinTool {
+func MemoryTools(cfg *config.Config, store memory.Store) []*functool.Tool {
 	if !cfg.MemoryEnabled() {
 		return nil
 	}
 
-	return []*BuiltinTool{
+	return []*functool.Tool{
 		memoryListTool(store),
 		memoryReadTool(store),
 		memoryWriteTool(store),
@@ -90,20 +91,20 @@ func MemoryIndexBlock(entries []memory.Item) string {
 	return b.String()
 }
 
-func memoryListTool(store memory.Store) *BuiltinTool {
-	return &BuiltinTool{
-		name: memoryListName,
-		description: "List the keys and descriptions of everything currently in your persistent memory. " +
+func memoryListTool(store memory.Store) *functool.Tool {
+	return mustNew(functool.Spec{
+		Name: memoryListName,
+		Description: "List the keys and descriptions of everything currently in your persistent memory. " +
 			"This is the live view: it reflects memories you have written or deleted during this run, unlike the " +
 			"index captured in your instructions at the start of the run. Use it to find a memory to read, or to " +
 			"check what you have already saved before writing. It returns {\"memories\": [{\"key\": ..., \"description\": ...}]}.",
-		schema: map[string]any{
+		Schema: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		},
-		handler: memoryListHandler(store),
-		trace:   func(json.RawMessage) string { return memoryListName },
-	}
+		Handler: withPrompter(memoryListHandler(store)),
+		Trace:   func(json.RawMessage) string { return memoryListName },
+	})
 }
 
 // memoryKeyTrace renders the call trace for a memory tool that takes a key: the
@@ -128,14 +129,14 @@ func memoryKeyTrace(name string) func(json.RawMessage) string {
 	}
 }
 
-func memoryReadTool(store memory.Store) *BuiltinTool {
-	return &BuiltinTool{
-		name: memoryReadName,
-		description: "Read one memory by its key and return its description and body. " +
+func memoryReadTool(store memory.Store) *functool.Tool {
+	return mustNew(functool.Spec{
+		Name: memoryReadName,
+		Description: "Read one memory by its key and return its description and body. " +
 			"Use it to load a memory whose key (from the index or memory_list) looks relevant to your task. " +
 			"It returns {\"found\": true, \"key\": ..., \"description\": ..., \"content\": ...} when the key exists, " +
 			"or {\"found\": false, \"reason\": ...} when it does not (for example if it was deleted since the index was captured).",
-		schema: map[string]any{
+		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"key": map[string]any{
@@ -145,24 +146,22 @@ func memoryReadTool(store memory.Store) *BuiltinTool {
 			},
 			"required": []any{"key"},
 		},
-		handler: memoryReadHandler(store),
-		trace:   memoryKeyTrace(memoryReadName),
-	}
+		Handler: withPrompter(memoryReadHandler(store)),
+		Trace:   memoryKeyTrace(memoryReadName),
+	})
 }
 
-func memoryWriteTool(store memory.Store) *BuiltinTool {
-	return &BuiltinTool{
-		name: memoryWriteName,
-		description: "Save a memory so a future run can use it. Provide a short stable key, a one-line " +
+func memoryWriteTool(store memory.Store) *functool.Tool {
+	return mustNew(functool.Spec{
+		Name: memoryWriteName,
+		Description: "Save a memory so a future run can use it. Provide a short stable key, a one-line " +
 			"description summarizing the memory, and the body in content. Do not write YAML frontmatter yourself: " +
 			"give the summary as description and the body as content, and memory_read returns only the body you stored. " +
 			"A key uses letters, digits and '.', '_', '=' or '-' (no slashes or spaces), for example \"build.notes\". " +
 			"By default (overwrite false) this creates a new memory and fails with a message if the key already exists; " +
-			"to replace a memory that is already there, first read it with memory_read to see its current value, then " +
-			"call this again with overwrite true. An overwrite may be refused if you have not read the memory in this " +
-			"run or it changed since you read it; read it again and retry. " +
-			"It returns {\"written\": true} on success, or {\"written\": false, \"reason\": ...} when it is refused.",
-		schema: map[string]any{
+			"to deliberately replace a memory you know is there, set overwrite true. " +
+			"It returns {\"written\": true} on success, or {\"written\": false, \"reason\": ...} if the key already exists.",
+		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"key": map[string]any{
@@ -184,18 +183,18 @@ func memoryWriteTool(store memory.Store) *BuiltinTool {
 			},
 			"required": []any{"key", "description", "content"},
 		},
-		handler: memoryWriteHandler(store),
-		trace:   memoryKeyTrace(memoryWriteName),
-	}
+		Handler: withPrompter(memoryWriteHandler(store)),
+		Trace:   memoryKeyTrace(memoryWriteName),
+	})
 }
 
-func memoryDeleteTool(store memory.Store) *BuiltinTool {
-	return &BuiltinTool{
-		name: memoryDeleteName,
-		description: "Delete a memory by its key. Use it to remove a memory that is wrong or no longer useful. " +
+func memoryDeleteTool(store memory.Store) *functool.Tool {
+	return mustNew(functool.Spec{
+		Name: memoryDeleteName,
+		Description: "Delete a memory by its key. Use it to remove a memory that is wrong or no longer useful. " +
 			"It is idempotent: deleting a key that does not exist is not an error. " +
 			"It returns {\"deleted\": true} when a memory was removed, or {\"deleted\": false} when nothing was stored under that key.",
-		schema: map[string]any{
+		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"key": map[string]any{
@@ -205,9 +204,9 @@ func memoryDeleteTool(store memory.Store) *BuiltinTool {
 			},
 			"required": []any{"key"},
 		},
-		handler: memoryDeleteHandler(store),
-		trace:   memoryKeyTrace(memoryDeleteName),
-	}
+		Handler: withPrompter(memoryDeleteHandler(store)),
+		Trace:   memoryKeyTrace(memoryDeleteName),
+	})
 }
 
 // memoryListOutcome is the JSON result the memory_list tool returns.

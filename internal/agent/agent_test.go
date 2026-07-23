@@ -323,7 +323,7 @@ var _ = Describe("runner", func() {
 
 		It("dispatches a remote tool: flags it remote, counts it, and traces the agent", func() {
 			ev := &captureEvents{}
-			desc := a2a.ToolDescriptor{Name: "info", InputSchema: json.RawMessage(`{"type":"object"}`)}
+			desc := a2a.ToolDescriptor{Name: "info", Description: "reports info", InputSchema: json.RawMessage(`{"type":"object"}`)}
 			rt, err := a2a.NewRemoteTool("nats_info", "nats", desc, stubInvoker{reply: a2a.NewToolReply("ok", false)})
 			Expect(err).NotTo(HaveOccurred())
 

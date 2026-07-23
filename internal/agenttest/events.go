@@ -148,6 +148,15 @@ func (e *RecordingEvents) FinalMessage() (llm.Response, bool) {
 	return llm.Response{}, false
 }
 
+// ToolCalls returns a copy of the tool call traces recorded, in order.
+func (e *RecordingEvents) ToolCalls() []agent.ToolTrace {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]agent.ToolTrace, len(e.toolCalls))
+	copy(out, e.toolCalls)
+	return out
+}
+
 // ToolResults returns a copy of the tool result traces recorded, in order.
 func (e *RecordingEvents) ToolResults() []agent.ToolResultTrace {
 	e.mu.Lock()

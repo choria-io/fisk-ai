@@ -14,6 +14,8 @@ import (
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/memory"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
+	"github.com/choria-io/fisk-ai/internal/toolkit/functool"
 )
 
 // fakeStore is an in-memory Store for exercising the memory tool handlers without
@@ -69,11 +71,11 @@ var _ = Describe("Memory tools", func() {
 	enabled := &config.Config{Harness: config.HarnessConfig{Memory: &config.MemoryConfig{Enabled: true}}}
 
 	var store *fakeStore
-	var tools map[string]*BuiltinTool
+	var tools map[string]*functool.Tool
 
 	BeforeEach(func() {
 		store = newFakeStore()
-		tools = map[string]*BuiltinTool{}
+		tools = map[string]*functool.Tool{}
 		for _, t := range MemoryTools(enabled, store) {
 			tools[t.Name()] = t
 		}
@@ -81,7 +83,7 @@ var _ = Describe("Memory tools", func() {
 
 	call := func(name, input string) (map[string]any, error) {
 		GinkgoHelper()
-		out, err := tools[name].handler(ctx, json.RawMessage(input), nil)
+		out, err := tools[name].Call(ctx, json.RawMessage(input), nil)
 		if err != nil {
 			return nil, err
 		}
@@ -192,12 +194,12 @@ var _ = Describe("Memory tools", func() {
 	})
 
 	Describe("call tracing", func() {
-		It("Should mark memory tools as traced, unlike the self-rendering HITL tools", func() {
+		It("Should present memory tools as traced, unlike the self-rendering HITL tools", func() {
 			for _, t := range MemoryTools(enabled, store) {
-				Expect(t.Traced()).To(BeTrue(), "%s should be traced", t.Name())
+				Expect(t.Describe(json.RawMessage(`{}`)).Present).To(Equal(toolkit.PresentTraced), "%s should be traced", t.Name())
 			}
 			for _, t := range HITLTools(&config.Config{Harness: config.HarnessConfig{HumanInTheLoop: &config.HumanInTheLoopConfig{Enabled: true}}}) {
-				Expect(t.Traced()).To(BeFalse(), "%s should not be traced", t.Name())
+				Expect(t.Describe(json.RawMessage(`{}`)).Present).To(Equal(toolkit.PresentSelfRendered), "%s should be self-rendering", t.Name())
 			}
 		})
 
@@ -216,7 +218,7 @@ var _ = Describe("Memory tools", func() {
 	Describe("nil store guard", func() {
 		It("Should error rather than panic when a handler is invoked with no store", func() {
 			listWithoutStore := MemoryTools(enabled, nil)[0]
-			_, err := listWithoutStore.handler(ctx, json.RawMessage(`{}`), nil)
+			_, err := listWithoutStore.Call(ctx, json.RawMessage(`{}`), nil)
 			Expect(err).To(MatchError(ContainSubstring("not configured")))
 		})
 	})

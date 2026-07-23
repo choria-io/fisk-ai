@@ -21,8 +21,8 @@ import (
 	"time"
 
 	"github.com/choria-io/fisk-ai/internal/toolkit"
-	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
 	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
+	"github.com/choria-io/fisk-ai/internal/toolkit/functool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -106,7 +106,7 @@ type Options struct {
 	// their own schema and dispatched in-process; they carry no confirm tags and so
 	// skip the elicitation gate, and they are invoked with a default-deny prompter
 	// since there is no operator on the MCP path. Empty means none.
-	Builtins []*builtin.BuiltinTool
+	Builtins []*functool.Tool
 }
 
 func (o *Options) applyDefaults() {
@@ -212,7 +212,7 @@ func BuildServer(tools []*fisk.FiskCommandTool, opts Options) (*mcp.Server, []st
 // the silently skipped registration BuildServer falls back to. Serve calls it up
 // front; the skip in BuildServer remains the library-level backstop for callers
 // that do not.
-func checkBuiltinCollisions(tools []*fisk.FiskCommandTool, builtins []*builtin.BuiltinTool) error {
+func checkBuiltinCollisions(tools []*fisk.FiskCommandTool, builtins []*functool.Tool) error {
 	if len(builtins) == 0 {
 		return nil
 	}
@@ -379,7 +379,7 @@ func inputSchema(t *fisk.FiskCommandTool) json.RawMessage {
 // builtinInputSchema renders a built-in tool's JSON-schema input as raw JSON for
 // MCP, mirroring inputSchema for command tools: passed through verbatim, with an
 // empty object schema as the fallback.
-func builtinInputSchema(b *builtin.BuiltinTool) json.RawMessage {
+func builtinInputSchema(b *functool.Tool) json.RawMessage {
 	schema := b.InputSchema()
 	if schema == nil {
 		return json.RawMessage(`{"type":"object"}`)
@@ -401,7 +401,7 @@ func builtinInputSchema(b *builtin.BuiltinTool) json.RawMessage {
 // JSON result verbatim as text content: the string is already JSON, so it is not
 // re-encoded. A handler error becomes an IsError result rather than a Go error, so
 // the client can reason about it, matching the command-tool mapping.
-func builtinHandler(b *builtin.BuiltinTool, sem chan struct{}, timeout time.Duration, logOut io.Writer) mcp.ToolHandler {
+func builtinHandler(b *functool.Tool, sem chan struct{}, timeout time.Duration, logOut io.Writer) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		select {
 		case sem <- struct{}{}:

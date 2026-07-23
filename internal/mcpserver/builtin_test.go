@@ -14,6 +14,7 @@ import (
 
 	"github.com/choria-io/fisk"
 	"github.com/choria-io/fisk-ai/internal/toolkit/builtin"
+	"github.com/choria-io/fisk-ai/internal/toolkit/functool"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -23,7 +24,7 @@ import (
 
 // lexicalKnowledgeBuiltins builds a real lexical knowledge_search built-in backed
 // by a small on-disk index, so a dispatch exercises the actual tool end to end.
-func lexicalKnowledgeBuiltins(ctx context.Context) []*builtin.BuiltinTool {
+func lexicalKnowledgeBuiltins(ctx context.Context) []*functool.Tool {
 	GinkgoHelper()
 
 	storeDir := GinkgoT().TempDir()
