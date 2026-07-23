@@ -7,7 +7,7 @@ commands all read the same file; each uses the parts it needs and ignores the re
 The `--config` flag selects the file, defaulting to `agent.yaml` in the working directory:
 
 ```nohighlight
-$ fisk-ai run --config nats.yaml "report on the ORDERS stream"
+$ fisk run --config nats.yaml "report on the ORDERS stream"
 ```
 
 Each section below is a slice of that file: read it top to bottom and you have seen every
@@ -59,7 +59,7 @@ harness:
     enabled: true
 ```
 
-With no `application_path`, the identity defaults to `fisk-ai`; set an explicit `identity` to keep the
+With no `application_path`, the identity defaults to `fisk`; set an explicit `identity` to keep the
 `knowledge/<identity>` and `memory/<identity>` stores separate when you run more than one such agent in a directory.
 
 ## Identity and application
@@ -68,7 +68,7 @@ With no `application_path`, the identity defaults to `fisk-ai`; set an explicit 
 # The name of the agent. Used in discovery and reused as a NATS queue
 # group, so it must contain only letters, digits, "-" or "_". If you
 # leave it out it defaults to the application binary's base name, or to
-# "fisk-ai" when no application_path is set; set it explicitly when the
+# "fisk" when no application_path is set; set it explicitly when the
 # derived name carries a dot, a space, or other characters, which are
 # rejected, or to keep memory/knowledge stores separate between agents.
 identity: nats
@@ -132,7 +132,7 @@ A tool's name is its command path joined with underscores, so a nested command l
 used together: for example include `^stream_` but exclude `^stream_rm$`. Commands tagged `ai:deny` are dropped before
 any of this runs and can never be added back.
 
-Run `fisk-ai info` to preview the resulting tool set before a run.
+Run `fisk info` to preview the resulting tool set before a run.
 
 ## Model and run budget
 
@@ -280,7 +280,7 @@ trailing `Tags: ...` line, so a prompt can reference them.
 ## Serving over MCP
 
 To serve the same tools over the [Model Context Protocol](https://modelcontextprotocol.io/) instead of running the agent
-loop, add an `expose.agent.mcp` block. It is opt-in: without this block, `fisk-ai mcp` refuses to start. MCP mode uses
+loop, add an `expose.agent.mcp` block. It is opt-in: without this block, `fisk mcp` refuses to start. MCP mode uses
 only the fields that describe the application and the tool set; `system_prompt`, `llm.model`, and the `harness` settings
 are ignored.
 
@@ -288,7 +288,7 @@ are ignored.
 expose:
   agent:
     # The opt-in block that enables MCP serving. Must be present, even if
-    # empty ({}), for "fisk-ai mcp" to start.
+    # empty ({}), for "fisk mcp" to start.
     mcp:
       # Default listen port, used when neither --port nor the
       # FISK_AI_MCP_PORT environment variable is set. Default 8080.
@@ -359,13 +359,13 @@ Both sides use a named [NATS context](https://github.com/nats-io/jsm.go), given 
 ```yaml
 # Name of a NATS context (as managed by "nats context" and resolved by
 # jsm.go) used to connect to NATS. REQUIRED when remote_tools is set or
-# when running "fisk-ai a2a".
+# when running "fisk a2a".
 nats_context: ngs
 
 expose:
   agent:
-    # When true, "fisk-ai a2a" serves this agent's tools over NATS. Opt-in:
-    # without it, "fisk-ai a2a" refuses to start. Like MCP mode, serving
+    # When true, "fisk a2a" serves this agent's tools over NATS. Opt-in:
+    # without it, "fisk a2a" refuses to start. Like MCP mode, serving
     # needs only application_path, identity, nats_context, and the tool
     # selection. Confirmation-gated commands are never served, since there
     # is no operator to approve them.
@@ -383,7 +383,7 @@ expose:
       # the default 30s. Config-only, no flag or environment override.
       tool_timeout: 30s
 
-# Import tools from one or more remote fisk-ai agents over NATS and expose
+# Import tools from one or more remote fisk agents over NATS and expose
 # them to this agent alongside its local tools.
 remote_tools:
   - # The remote agent's identity (also the NATS subject key). REQUIRED.
@@ -405,13 +405,13 @@ remote_tools:
 ```
 
 Imported tools keep their own name where it is unambiguous, and take the `<alias>_<name>` form only when the bare name
-would collide. A `run` is strict: an unreachable or unimportable remote agent fails the run. `fisk-ai info` is lenient
+would collide. A `run` is strict: an unreachable or unimportable remote agent fails the run. `fisk info` is lenient
 and reports each remote host's reachability instead.
 
 ## Models
 
 Well-known Anthropic model identifiers are available as constants in the `config` package; any value the Anthropic API
-accepts may be used in `llm.model`, local LLMs will have their own convention. `fisk-ai` does not restrict what you enter here.
+accepts may be used in `llm.model`, local LLMs will have their own convention. `fisk` does not restrict what you enter here.
 
 | Constant              | Identifier                   | Notes                                                                                      |
 |-----------------------|------------------------------|--------------------------------------------------------------------------------------------|
@@ -437,20 +437,20 @@ directly.
 Some behavior is set per run on the command line rather than in the file. The flags override the file where they
 overlap, except for the hard off switches (`harness.no_tui`), which the command line cannot re-enable.
 
-| Flag           | Environment variable | Description                                                                       |
-|----------------|----------------------|-----------------------------------------------------------------------------------|
-| `--config`     |                      | Path to the configuration file. Default `agent.yaml`.                             |
-| `--api-key`    | `ANTHROPIC_API_KEY`  | Anthropic API key. Required.                                                       |
+| Flag           | Environment variable | Description                                                                                                                                                                |
+|----------------|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--config`     |                      | Path to the configuration file. Default `agent.yaml`.                                                                                                                      |
+| `--api-key`    | `ANTHROPIC_API_KEY`  | Anthropic API key. Required.                                                                                                                                               |
 | `--base-url`   | `ANTHROPIC_BASE_URL` | Anthropic API base URL to use, for example a local Anthropic-compatible runner. A non-loopback host must use `https`; plain `http` is allowed only for a loopback address. |
-| `--http-debug` | `HTTP_DEBUG`         | Dump Anthropic API request and response bodies to `http-debug.log`. The file holds the full conversation and is created mode 0600. |
-| `--no-color`   | `NO_COLOR`           | Disable markdown rendering of the final answer, emitting raw text.                |
-| `--no-tui`     | `NO_TUI`             | Disable the full-screen terminal UI for this run and use line-by-line output.     |
-| `--chat`       |                      | Keep the full-screen UI open for interactive follow-ups after each turn.          |
-| `--verbose`    | `VERBOSE`            | Show more verbose output.                                                          |
-| `--trace`      |                      | Write a JSON-lines trace of every LLM request and response to a file.             |
-| `--checkpoint` |                      | Journal the run to a session that can be suspended and resumed.                   |
-| `--resume`     |                      | Resume a checkpointed session by id instead of starting a new run.                |
-| `--state-dir`  |                      | Override where sessions are stored, default `$XDG_STATE_HOME/fisk-ai/runs`.        |
+| `--http-debug` | `HTTP_DEBUG`         | Dump Anthropic API request and response bodies to `http-debug.log`. The file holds the full conversation and is created mode 0600.                                         |
+| `--no-color`   | `NO_COLOR`           | Disable markdown rendering of the final answer, emitting raw text.                                                                                                         |
+| `--no-tui`     | `NO_TUI`             | Disable the full-screen terminal UI for this run and use line-by-line output.                                                                                              |
+| `--chat`       |                      | Keep the full-screen UI open for interactive follow-ups after each turn.                                                                                                   |
+| `--verbose`    | `VERBOSE`            | Show more verbose output.                                                                                                                                                  |
+| `--trace`      |                      | Write a JSON-lines trace of every LLM request and response to a file.                                                                                                      |
+| `--checkpoint` |                      | Journal the run to a session that can be suspended and resumed.                                                                                                            |
+| `--resume`     |                      | Resume a checkpointed session by id instead of starting a new run.                                                                                                         |
+| `--state-dir`  |                      | Override where sessions are stored, default `$XDG_STATE_HOME/fisk-ai/runs`.                                                                                                |
 
 The MCP server port also reads `FISK_AI_MCP_PORT`, which `--port` overrides and which in turn overrides
 `expose.agent.mcp.port`. Sessions, chat, and their durability semantics are covered in the [Agents guide](../agents/).

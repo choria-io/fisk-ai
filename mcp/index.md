@@ -9,7 +9,7 @@ changes: where the agent drives the tools with an LLM against a prompt, an MCP s
 client connects and lets it decide when to call them.
 
 > [!info] Note
-> Serving over MCP is opt-in. The configuration must carry an `expose.agent.mcp` block, otherwise `fisk-ai mcp` refuses
+> Serving over MCP is opt-in. The configuration must carry an `expose.agent.mcp` block, otherwise `fisk mcp` refuses
 > to start.
 
 ## Starting a server
@@ -30,16 +30,16 @@ expose:
 Start the server with the `mcp` command:
 
 ```nohighlight
-$ fisk-ai mcp --config nats.yaml --port 8080
+$ fisk mcp --config nats.yaml --port 8080
 ```
 
 The transport is HTTP, the streamable MCP transport. The port is taken from `--port` (or `FISK_AI_MCP_PORT`); if unset,
 from `expose.agent.mcp.port` in the config; otherwise it defaults to `8080`. All progress and logging go to stderr.
 
-Use `fisk-ai info` to preview which tools a configuration exposes before starting the server:
+Use `fisk info` to preview which tools a configuration exposes before starting the server:
 
 ```nohighlight
-$ fisk-ai info --config nats.yaml
+$ fisk info --config nats.yaml
 ```
 
 ## Connecting a client
@@ -66,22 +66,22 @@ A client that takes a JSON server map uses:
 ## Configuration
 
 MCP mode uses only the parts of the [configuration](../reference/) that describe the application and the tool set. An
-`identity` becomes the MCP server name, defaulting to `fisk-ai` when unset; `system_prompt`, `llm.model`, and the
+`identity` becomes the MCP server name, defaulting to `fisk` when unset; `system_prompt`, `llm.model`, and the
 agent-only harness settings are ignored.
 
-| Field                                | Description                                                                          |
-|--------------------------------------|--------------------------------------------------------------------------------------|
-| `application_path`                   | path to the Fisk application binary to introspect and serve; optional, omit it to serve only allowlisted built-ins such as `knowledge_search` |
-| `expose.agent.mcp`                   | the opt-in block that enables MCP serving; must be present                           |
-| `expose.agent.mcp.port`              | default listen port when `--port` and `FISK_AI_MCP_PORT` are unset, default `8080`   |
-| `expose.agent.mcp.address`           | host or IP to bind when `--address` and `FISK_AI_MCP_ADDRESS` are unset, default `127.0.0.1` (loopback); use `0.0.0.0` to listen on all interfaces |
-| `expose.agent.mcp.instructions`      | free-text guidance sent to clients on connect                                        |
-| `expose.agent.mcp.confirm_over_mcp` | how confirmation-gated commands behave when a client cannot be asked                 |
-| `expose.agent.mcp.max_concurrent_tools` | maximum tool calls run at once; `0` or unset uses the default `2`, negative is rejected, capped at `1024` |
-| `expose.agent.mcp.tool_timeout`      | duration bounding a single served tool call, for example `60s`; unset uses the default `30s` |
-| `include` / `exclude`                | select which commands become tools, matched on tool name (regex) or tag              |
-| `expose.agent.tools`                 | narrow the exposed set further within the `include`/`exclude` selection              |
-| `identity`                           | the MCP server name; optional                                                        |
+| Field                                   | Description                                                                                                                                        |
+|-----------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
+| `application_path`                      | path to the Fisk application binary to introspect and serve; optional, omit it to serve only allowlisted built-ins such as `knowledge_search`      |
+| `expose.agent.mcp`                      | the opt-in block that enables MCP serving; must be present                                                                                         |
+| `expose.agent.mcp.port`                 | default listen port when `--port` and `FISK_AI_MCP_PORT` are unset, default `8080`                                                                 |
+| `expose.agent.mcp.address`              | host or IP to bind when `--address` and `FISK_AI_MCP_ADDRESS` are unset, default `127.0.0.1` (loopback); use `0.0.0.0` to listen on all interfaces |
+| `expose.agent.mcp.instructions`         | free-text guidance sent to clients on connect                                                                                                      |
+| `expose.agent.mcp.confirm_over_mcp`     | how confirmation-gated commands behave when a client cannot be asked                                                                               |
+| `expose.agent.mcp.max_concurrent_tools` | maximum tool calls run at once; `0` or unset uses the default `2`, negative is rejected, capped at `1024`                                          |
+| `expose.agent.mcp.tool_timeout`         | duration bounding a single served tool call, for example `60s`; unset uses the default `30s`                                                       |
+| `include` / `exclude`                   | select which commands become tools, matched on tool name (regex) or tag                                                                            |
+| `expose.agent.tools`                    | narrow the exposed set further within the `include`/`exclude` selection                                                                            |
+| `identity`                              | the MCP server name; optional                                                                                                                      |
 
 ### Instructions
 
