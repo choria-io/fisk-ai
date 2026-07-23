@@ -46,8 +46,11 @@ const maxSelectOptions = 25
 // complete and correct by construction, so functool.New cannot fail at runtime; a
 // failure would be a programming error in this package, surfaced as a panic rather
 // than threaded through every factory's signature, in the manner of the standard
-// library's regexp.MustCompile.
+// library's regexp.MustCompile. Every tool built here is a harness built-in, so it is
+// accounted under toolkit.KindBuiltin regardless of what its presentation is; setting
+// the kind at this one chokepoint keeps each factory from having to remember it.
 func mustNew(spec functool.Spec) *functool.Tool {
+	spec.Kind = toolkit.KindBuiltin
 	t, err := functool.New(spec)
 	if err != nil {
 		panic(fmt.Sprintf("invalid built-in tool %q: %v", spec.Name, err))

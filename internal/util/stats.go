@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"time"
+
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 )
 
 // RunStats accumulates per-run counters for the summary line.
@@ -28,6 +30,13 @@ type RunStats struct {
 	// RemoteToolCalls is the number of tool invocations dispatched to a remote
 	// agent over a2a, a subset of ToolCalls.
 	RemoteToolCalls int64
+	// ToolCallsByKind counts dispatched calls by the provider that supplied the tool.
+	// Every call counted in ToolCalls is counted here too, including the ones rejected
+	// before execution, so on a fresh run the buckets partition ToolCalls. It is
+	// live-only: a resumed run seeds only the coarse totals, so a resume leaves this
+	// nil and reflects at most the calls made since the resume. It is nil until the
+	// first call is counted.
+	ToolCallsByKind map[toolkit.Kind]int64
 	InTokens        int64
 	OutTokens       int64
 	// CacheReadTokens is the input tokens served from the prompt cache (billed at
@@ -38,6 +47,18 @@ type RunStats struct {
 	// CacheReadTokens stuck at zero against a large InTokens.
 	CacheReadTokens   int64
 	CacheCreateTokens int64
+}
+
+// CountToolKind records one dispatched tool call against its provider kind,
+// allocating the map on first use. It is called for every call ToolCalls counts,
+// the rejected ones included, so the buckets partition ToolCalls on a fresh run. A
+// RunStats is driven only from its own single run goroutine, so this needs no lock.
+func (s *RunStats) CountToolKind(kind toolkit.Kind) {
+	if s.ToolCallsByKind == nil {
+		s.ToolCallsByKind = make(map[toolkit.Kind]int64)
+	}
+
+	s.ToolCallsByKind[kind]++
 }
 
 // Print writes the run summary to stderr. It is deferred so every exit path,

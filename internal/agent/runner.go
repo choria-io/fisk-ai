@@ -6,6 +6,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/choria-io/fisk-ai/internal/toolkit"
@@ -540,9 +541,19 @@ func (r *runner) executeTool(ctx context.Context, use llm.ToolUseBlock) (llm.Too
 
 	tool, ok := r.tools[use.Name]
 	if !ok {
+		r.stats.CountToolKind(toolkit.KindUnknown)
 		r.events.Warn(Warning{Kind: WarnUnknownTool, Name: use.Name})
 		return llm.ToolResultBlock{ToolUseID: use.ID, Content: fmt.Sprintf("unknown tool %q", use.Name), IsError: true}, false
 	}
+
+	// The tool describes its own call once, up front. Its Kind partitions the by-kind
+	// tool accounting across every exit path below, including the rejections that
+	// return before the tool runs, so the buckets sum to tool_calls on a fresh run;
+	// the rest of the CallInfo drives the call trace on the path that does run the
+	// tool. Describe must not run the tool or mutate state, so calling it before the
+	// argument and confirm gates is safe.
+	info := describeCall(tool, use.Input)
+	r.stats.CountToolKind(info.Kind)
 
 	// fisk does not enforce a command's required flags or arguments: a missing one
 	// is silently dropped or skipped, so the command runs incomplete and fails only
@@ -579,43 +590,48 @@ func (r *runner) executeTool(ctx context.Context, use llm.ToolUseBlock) (llm.Too
 	// result trace and the ExecuteUse call are uniform. A call line is emitted for
 	// every tool that runs, including an approved confirm-gated one whose approval
 	// modal has since closed, so its result always has a visible command above it.
-	kind, deps, remote := r.traceCall(use)
+	deps, remote := r.traceCall(use, info)
 	if remote {
 		r.stats.RemoteToolCalls++
 	}
 
 	result := tool.ExecuteUse(ctx, use, deps)
-	r.events.ToolResult(toolResultTrace(kind, result))
+	r.events.ToolResult(toolResultTrace(info.Present, info.Kind, result))
 	return result, remote
 }
 
-// traceCall emits the ToolCall trace for a dispatched call and returns the kind
-// (for the matching result trace), the execution dependencies the kind needs, and
-// whether it is a remote call. It asks the tool to describe its own call rather than
-// switching on its concrete type, so the presentation and dependency needs travel
-// with the tool: a built-in shows its own call line (a human-in-the-loop tool is
-// distracting to name and is shown only under verbose downstream, a memory tool is
-// traced like a command); a remote tool names the agent it runs on; a local command
-// tool carries the full call line and a short form with long argument values elided,
-// so a width-aware surface can fall back to the short one only when the full line
-// would overflow. A tool that does not describe itself is traced by name alone, with
-// no dependencies and not as a remote call.
-func (r *runner) traceCall(use llm.ToolUseBlock) (ToolKind, toolkit.ExecDeps, bool) {
-	d, ok := r.tools[use.Name].(toolkit.Describer)
+// describeCall asks a tool to describe one call, from the CallInfo the runner uses
+// for both accounting and tracing. A tool that does not implement toolkit.Describer
+// yields the zero CallInfo, so it is accounted under toolkit.KindUnknown and traced
+// by name alone, with no dependencies and not as a remote call: the safe default for
+// a tool of an unforeseen kind.
+func describeCall(tool toolkit.Tool, input json.RawMessage) toolkit.CallInfo {
+	d, ok := tool.(toolkit.Describer)
 	if !ok {
-		r.events.ToolCall(ToolTrace{Name: use.Name, Kind: ToolLocal})
-		return ToolLocal, toolkit.ExecDeps{}, false
+		return toolkit.CallInfo{}
 	}
 
-	info := d.Describe(use.Input)
-	kind := toolKind(info.Present)
+	return d.Describe(input)
+}
 
+// traceCall emits the ToolCall trace for a dispatched call from the CallInfo the
+// runner already obtained, and returns the execution dependencies the call's kind
+// needs and whether it is a remote call. The tool described its own call rather than
+// the runner switching on its concrete type, so the presentation and dependency needs
+// travel with the tool on info.Present: a built-in shows its own call line (a
+// human-in-the-loop tool is distracting to name and is shown only under verbose
+// downstream, a memory or knowledge tool is traced like a command); a remote tool
+// names the agent it runs on; a command tool carries the full call line and a short
+// form with long argument values elided, so a width-aware surface can fall back to
+// the short one only when the full line would overflow.
+func (r *runner) traceCall(use llm.ToolUseBlock, info toolkit.CallInfo) (toolkit.ExecDeps, bool) {
 	r.events.ToolCall(ToolTrace{
 		Name:         use.Name,
 		Display:      info.Display,
 		DisplayShort: info.DisplayShort,
 		Agent:        info.Agent,
-		Kind:         kind,
+		Present:      info.Present,
+		ProviderKind: info.Kind,
 	})
 
 	// A kind receives only the dependencies it asked for: a command tool the per-run
@@ -631,30 +647,13 @@ func (r *runner) traceCall(use llm.ToolUseBlock) (ToolKind, toolkit.ExecDeps, bo
 		deps.WorkDir = r.toolWorkDir
 	}
 
-	return kind, deps, info.Present == toolkit.PresentRemote
+	return deps, info.Present == toolkit.PresentRemote
 }
 
-// toolKind maps a tool's declared presentation to the trace ToolKind the runner and
-// its downstream consumers switch on for output suppression and the machine-readable
-// slog tokens. An unrecognized presentation is traced as a local call, the safe
-// default for a tool of an unforeseen kind.
-func toolKind(p toolkit.Presentation) ToolKind {
-	switch p {
-	case toolkit.PresentRemote:
-		return ToolRemote
-	case toolkit.PresentSelfRendered:
-		return ToolBuiltin
-	case toolkit.PresentTraced:
-		return ToolMemory
-	case toolkit.PresentCommand:
-		return ToolLocal
-	default:
-		return ToolLocal
-	}
-}
-
-// toolResultTrace extracts the display fields from a tool result: its text content
-// and whether the tool reported a failure.
-func toolResultTrace(kind ToolKind, result llm.ToolResultBlock) ToolResultTrace {
-	return ToolResultTrace{Kind: kind, IsError: result.IsError, Output: result.Content}
+// toolResultTrace extracts the display fields from a tool result: its presentation
+// (carried through so the result renderer suppresses it by the same rule as its
+// call), its provider kind for the log token, its text content, and whether the tool
+// reported a failure.
+func toolResultTrace(present toolkit.Presentation, provider toolkit.Kind, result llm.ToolResultBlock) ToolResultTrace {
+	return ToolResultTrace{Present: present, ProviderKind: provider, IsError: result.IsError, Output: result.Content}
 }

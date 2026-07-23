@@ -790,7 +790,7 @@ There are some caveats. To support a large number of tools, Fisk AI uses the
 [Tool Search Tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool), which these local
 runners do not support. When targeting a locally hosted model, the total tool count may need to stay around 15.
 
-I set these environment variables before invoking `fisk-ai` to access my local Anthropic API instead of reaching to the internet.
+I set these environment variables before invoking `fisk` to access my local Anthropic API instead of reaching to the internet.
 
 ```nohighlight
 $ export ANTHROPIC_BASE_URL=http://localhost:1234

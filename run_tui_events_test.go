@@ -50,8 +50,8 @@ var _ = Describe("tcellEvents mapping", func() {
 	})
 
 	Describe("toolTraceLine", func() {
-		It("Should show a local tool's resolved command line", func() {
-			line, ok := toolTraceLine(agent.ToolTrace{Kind: agent.ToolLocal, Display: "stream rm ORDERS", DisplayShort: "stream rm ORD...RS"}, false)
+		It("Should show a command tool's resolved command line", func() {
+			line, ok := toolTraceLine(agent.ToolTrace{Present: toolkit.PresentCommand, Display: "stream rm ORDERS", DisplayShort: "stream rm ORD...RS"}, false)
 			Expect(ok).To(BeTrue())
 			Expect(line.Kind).To(Equal(tui.LineToolCall))
 			Expect(line.Text).To(Equal("stream rm ORDERS"))
@@ -59,22 +59,22 @@ var _ = Describe("tcellEvents mapping", func() {
 		})
 
 		It("Should name a remote tool's agent", func() {
-			line, ok := toolTraceLine(agent.ToolTrace{Kind: agent.ToolRemote, Name: "deploy", Agent: "ops"}, false)
+			line, ok := toolTraceLine(agent.ToolTrace{Present: toolkit.PresentRemote, Name: "deploy", Agent: "ops"}, false)
 			Expect(ok).To(BeTrue())
 			Expect(line.Text).To(Equal("deploy (remote ops)"))
 		})
 
-		It("Should hide a built-in tool unless verbose", func() {
-			_, ok := toolTraceLine(agent.ToolTrace{Kind: agent.ToolBuiltin, Name: "ask_human_confirm"}, false)
+		It("Should hide a self-rendering built-in tool unless verbose", func() {
+			_, ok := toolTraceLine(agent.ToolTrace{Present: toolkit.PresentSelfRendered, Name: "ask_human_confirm"}, false)
 			Expect(ok).To(BeFalse())
 
-			line, ok := toolTraceLine(agent.ToolTrace{Kind: agent.ToolBuiltin, Name: "ask_human_confirm"}, true)
+			line, ok := toolTraceLine(agent.ToolTrace{Present: toolkit.PresentSelfRendered, Name: "ask_human_confirm"}, true)
 			Expect(ok).To(BeTrue())
 			Expect(line.Text).To(Equal("ask_human_confirm"))
 		})
 
-		It("Should show a memory tool's call line even without verbose", func() {
-			line, ok := toolTraceLine(agent.ToolTrace{Kind: agent.ToolMemory, Name: "memory_write", Display: "memory_write build.notes"}, false)
+		It("Should show a traced built-in's call line even without verbose", func() {
+			line, ok := toolTraceLine(agent.ToolTrace{Present: toolkit.PresentTraced, Name: "memory_write", Display: "memory_write build.notes"}, false)
 			Expect(ok).To(BeTrue())
 			Expect(line.Kind).To(Equal(tui.LineToolCall))
 			Expect(line.Text).To(Equal("memory_write build.notes"))

@@ -124,7 +124,7 @@ func (s *SlogEvents) LLMRequest(summary string) {
 }
 
 func (s *SlogEvents) ToolCall(t ToolTrace) {
-	attrs := []any{"tool", t.Name, "kind", toolKindName(t.Kind)}
+	attrs := []any{"tool", t.Name, "kind", t.ProviderKind.String()}
 	if t.Agent != "" {
 		attrs = append(attrs, "agent", t.Agent)
 	}
@@ -139,7 +139,7 @@ func (s *SlogEvents) ToolResult(t ToolResultTrace) {
 	output, truncated := capForLog(t.Output)
 
 	s.log.Info("tool result",
-		"kind", toolKindName(t.Kind),
+		"kind", t.ProviderKind.String(),
 		"is_error", t.IsError,
 		"truncated", truncated,
 		"output", output,
@@ -180,23 +180,6 @@ func capForLog(output string) (string, bool) {
 	}
 
 	return output[:slogMaxOutputBytes], true
-}
-
-// toolKindName is the stable machine-readable token for a ToolKind, so a log
-// pipeline can filter on it rather than on presentation prose.
-func toolKindName(k ToolKind) string {
-	switch k {
-	case ToolLocal:
-		return "local"
-	case ToolRemote:
-		return "remote"
-	case ToolBuiltin:
-		return "builtin"
-	case ToolMemory:
-		return "memory"
-	default:
-		return "unknown"
-	}
 }
 
 // warningKindName is the stable machine-readable token for a WarningKind. It is

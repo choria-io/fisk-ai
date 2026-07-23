@@ -88,6 +88,11 @@ type Spec struct {
 	NoDefer bool
 	// Remote, when set, marks the tool as served by another agent.
 	Remote *RemoteSpec
+	// Kind is the provider the tool is accounted under. It is left unset by a caller's
+	// own tool, which is accounted as toolkit.KindCustom; a remote tool is always
+	// accounted remote regardless of this field; the harness sets toolkit.KindBuiltin
+	// for its own built-in tools.
+	Kind toolkit.Kind
 }
 
 // Tool is a function tool built from a Spec: a name, description, schema and Go
@@ -115,6 +120,7 @@ type Tool struct {
 	trace            func(input json.RawMessage) string
 	noDefer          bool
 	remote           *RemoteSpec
+	kind             toolkit.Kind
 }
 
 // A function tool is a model-facing Tool that describes its own presentation, and
@@ -163,6 +169,7 @@ func New(spec Spec) (*Tool, error) {
 		trace:            spec.Trace,
 		noDefer:          spec.NoDefer,
 		remote:           spec.Remote,
+		kind:             spec.Kind,
 	}, nil
 }
 
@@ -227,19 +234,28 @@ func (t *Tool) TraceLine(input json.RawMessage) string {
 	}
 }
 
-// Describe reports how a call is presented and what per-run dependencies it needs. A
-// remote tool is presented as remote and named by its agent; an in-process tool with
-// a Trace renderer is traced like a command; an in-process tool without one is
-// treated as rendering its own operator interaction. Every in-process tool is
-// offered the operator Prompter and the per-run working directory, which a handler
-// that needs neither ignores.
+// Describe reports how a call is presented, which provider it is accounted under, and
+// what per-run dependencies it needs. A remote tool is presented as remote, named by
+// its agent, and accounted remote; an in-process tool with a Trace renderer is traced
+// like a command; an in-process tool without one is treated as rendering its own
+// operator interaction. Its provider is the explicit Spec.Kind when set (the harness
+// tags its built-ins), and toolkit.KindCustom otherwise, so a caller's own function
+// tool is accounted custom with no extra effort. Every in-process tool is offered the
+// operator Prompter and the per-run working directory, which a handler that needs
+// neither ignores.
 func (t *Tool) Describe(input json.RawMessage) toolkit.CallInfo {
 	if t.remote != nil {
-		return toolkit.CallInfo{Present: toolkit.PresentRemote, Agent: t.remote.Agent}
+		return toolkit.CallInfo{Present: toolkit.PresentRemote, Kind: toolkit.KindRemote, Agent: t.remote.Agent}
+	}
+
+	kind := t.kind
+	if kind == toolkit.KindUnknown {
+		kind = toolkit.KindCustom
 	}
 
 	info := toolkit.CallInfo{
 		Present:       toolkit.PresentSelfRendered,
+		Kind:          kind,
 		NeedsPrompter: true,
 		NeedsWorkDir:  true,
 	}

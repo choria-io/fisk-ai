@@ -19,6 +19,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/choria-io/fisk-ai/internal/toolkit"
+
 	"github.com/choria-io/fisk-ai/internal/llm"
 )
 
@@ -205,6 +207,41 @@ var _ = Describe("Tracer", func() {
 		Expect(events[1].InTokens).To(Equal(int64(10)))
 		Expect(events[1].Session).To(Equal("sess1"))
 		Expect(events[1].Suspended).To(BeTrue())
+	})
+
+	It("Should partition tool_calls into per-kind tokens in the summary", func() {
+		tr, err := NewTracer(path, nil)
+		Expect(err).ToNot(HaveOccurred())
+
+		stats := &RunStats{ToolCalls: 3, RemoteToolCalls: 1, Start: time.Now()}
+		stats.CountToolKind(toolkit.KindApplication)
+		stats.CountToolKind(toolkit.KindApplication)
+		stats.CountToolKind(toolkit.KindRemote)
+		tr.RecordSummary(stats)
+		Expect(tr.Close()).To(Succeed())
+
+		events := readTrace(path)
+		Expect(events).To(HaveLen(1))
+		Expect(events[0].ToolCallsByKind).To(Equal(map[string]int64{"application": 2, "remote": 1}))
+
+		var summed int64
+		for _, n := range events[0].ToolCallsByKind {
+			summed += n
+		}
+		Expect(summed).To(Equal(events[0].ToolCalls), "per-kind map must partition tool_calls")
+	})
+
+	It("Should omit the per-kind map when there were no live per-kind counts", func() {
+		tr, err := NewTracer(path, nil)
+		Expect(err).ToNot(HaveOccurred())
+
+		// A resumed run seeds only the coarse totals, so it has no live per-kind counts.
+		tr.RecordSummary(&RunStats{ToolCalls: 5, Start: time.Now()})
+		Expect(tr.Close()).To(Succeed())
+
+		events := readTrace(path)
+		Expect(events).To(HaveLen(1))
+		Expect(events[0].ToolCallsByKind).To(BeNil())
 	})
 
 	It("Should error when the trace file already exists", func() {

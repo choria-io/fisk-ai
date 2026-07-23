@@ -7,6 +7,8 @@ package util
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 )
 
 var _ = Describe("RunStats", func() {
@@ -41,6 +43,33 @@ var _ = Describe("RunStats", func() {
 			s := &RunStats{CacheCreateTokens: 8192}
 			Expect(s.summaryLine(false)).NotTo(ContainSubstring("cache_write"))
 			Expect(s.summaryLine(true)).To(ContainSubstring("cache_write=8192"))
+		})
+
+		It("keeps the line coarse, with no per-kind breakdown", func() {
+			s := &RunStats{ToolCalls: 2, RemoteToolCalls: 1}
+			s.CountToolKind(toolkit.KindApplication)
+			s.CountToolKind(toolkit.KindRemote)
+			line := s.summaryLine(false)
+			Expect(line).To(ContainSubstring("tool_calls=2"))
+			Expect(line).To(ContainSubstring("remote_tool_calls=1"))
+			Expect(line).NotTo(ContainSubstring("application"))
+			Expect(line).NotTo(ContainSubstring("builtin"))
+		})
+	})
+
+	Describe("CountToolKind", func() {
+		It("allocates on first use and accumulates per kind", func() {
+			s := &RunStats{}
+			Expect(s.ToolCallsByKind).To(BeNil())
+
+			s.CountToolKind(toolkit.KindApplication)
+			s.CountToolKind(toolkit.KindApplication)
+			s.CountToolKind(toolkit.KindBuiltin)
+
+			Expect(s.ToolCallsByKind).To(Equal(map[toolkit.Kind]int64{
+				toolkit.KindApplication: 2,
+				toolkit.KindBuiltin:     1,
+			}))
 		})
 	})
 })
