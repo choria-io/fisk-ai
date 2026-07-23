@@ -140,10 +140,6 @@ func infoAction(_ *fisk.ParseContext) error {
 		c.Embed(tbl)
 	})
 
-	if cfg.ApplicationPath == "" {
-		c.Print("No wrapped application configured (application_path unset); built-in and remote tools only.")
-	}
-
 	printRemoteToolStatus(c, cfg, imports)
 
 	// List the application's exposable global flags so an operator can see which

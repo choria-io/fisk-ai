@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/choria-io/fisk-ai/internal/llm"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 )
 
 // traceCtxKey is the context key under which the agent loop stashes the current
@@ -77,15 +78,19 @@ type traceEvent struct {
 	Version string `json:"version,omitempty"`
 
 	// Summary footer fields.
-	Session           string `json:"session,omitempty"`
-	Suspended         bool   `json:"suspended,omitempty"`
-	LLMCalls          int64  `json:"llm_calls,omitempty"`
-	ToolCalls         int64  `json:"tool_calls,omitempty"`
-	RemoteToolCalls   int64  `json:"remote_tool_calls,omitempty"`
-	InTokens          int64  `json:"input_tokens,omitempty"`
-	OutTokens         int64  `json:"output_tokens,omitempty"`
-	CacheReadTokens   int64  `json:"cache_read_tokens,omitempty"`
-	CacheCreateTokens int64  `json:"cache_create_tokens,omitempty"`
+	Session         string `json:"session,omitempty"`
+	Suspended       bool   `json:"suspended,omitempty"`
+	LLMCalls        int64  `json:"llm_calls,omitempty"`
+	ToolCalls       int64  `json:"tool_calls,omitempty"`
+	RemoteToolCalls int64  `json:"remote_tool_calls,omitempty"`
+	// ToolCallsByKind partitions tool_calls by provider kind, keyed by the stable
+	// toolkit.Kind token. It is live-only and omitted when empty, so a resumed run
+	// (which seeds only the coarse totals) does not emit a map that could not sum.
+	ToolCallsByKind   map[string]int64 `json:"tool_calls_by_kind,omitempty"`
+	InTokens          int64            `json:"input_tokens,omitempty"`
+	OutTokens         int64            `json:"output_tokens,omitempty"`
+	CacheReadTokens   int64            `json:"cache_read_tokens,omitempty"`
+	CacheCreateTokens int64            `json:"cache_create_tokens,omitempty"`
 }
 
 // NewTracer creates a trace file at path and returns a Tracer writing to it. The
@@ -222,12 +227,29 @@ func (t *Tracer) RecordSummary(stats *RunStats) {
 		LLMCalls:          stats.LlmCalls,
 		ToolCalls:         stats.ToolCalls,
 		RemoteToolCalls:   stats.RemoteToolCalls,
+		ToolCallsByKind:   toolCallsByKindTokens(stats.ToolCallsByKind),
 		InTokens:          stats.InTokens,
 		OutTokens:         stats.OutTokens,
 		CacheReadTokens:   stats.CacheReadTokens,
 		CacheCreateTokens: stats.CacheCreateTokens,
 		DurationMS:        time.Since(stats.Start).Milliseconds(),
 	})
+}
+
+// toolCallsByKindTokens re-keys the live per-kind counters onto their stable string
+// tokens for the JSON trace. It returns nil for an empty input so the map is omitted
+// rather than emitted empty (a resumed run has no live per-kind counts).
+func toolCallsByKindTokens(counts map[toolkit.Kind]int64) map[string]int64 {
+	if len(counts) == 0 {
+		return nil
+	}
+
+	out := make(map[string]int64, len(counts))
+	for kind, n := range counts {
+		out[kind.String()] = n
+	}
+
+	return out
 }
 
 // Close closes the trace file. After Close, further events are dropped.

@@ -16,6 +16,7 @@ import (
 
 	"github.com/choria-io/fisk-ai/internal/agent"
 	"github.com/choria-io/fisk-ai/internal/llm"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 )
 
 // newSlogCapture returns a SlogEvents writing JSON to buf and the buf to read back.
@@ -94,11 +95,11 @@ func TestSlogEvents_ToolResultTruncates(t *testing.T) {
 	ev, buf := newSlogCapture(false)
 
 	big := strings.Repeat("x", 5000)
-	ev.ToolResult(agent.ToolResultTrace{Kind: agent.ToolLocal, Output: big, IsError: true})
+	ev.ToolResult(agent.ToolResultTrace{ProviderKind: toolkit.KindApplication, Output: big, IsError: true})
 
 	recs := records(t, buf)
 	g.Expect(recs).To(gomega.HaveLen(1))
-	g.Expect(recs[0]["kind"]).To(gomega.Equal("local"))
+	g.Expect(recs[0]["kind"]).To(gomega.Equal("application"))
 	g.Expect(recs[0]["is_error"]).To(gomega.Equal(true))
 	g.Expect(recs[0]["truncated"]).To(gomega.Equal(true))
 	g.Expect(recs[0]["output"]).To(gomega.HaveLen(2048))
@@ -143,7 +144,7 @@ func TestSlogEvents_ConcurrentUse(t *testing.T) {
 	for i := 0; i < runs; i++ {
 		go func() {
 			defer wg.Done()
-			ev.ToolCall(agent.ToolTrace{Name: "t", Kind: agent.ToolLocal})
+			ev.ToolCall(agent.ToolTrace{Name: "t"})
 		}()
 	}
 	wg.Wait()

@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 	"golang.org/x/term"
 
@@ -135,16 +136,16 @@ func (c *cliEvents) LLMRequest(summary string) {
 }
 
 func (c *cliEvents) ToolCall(t agent.ToolTrace) {
-	switch t.Kind {
-	case agent.ToolBuiltin:
+	switch t.Present {
+	case toolkit.PresentSelfRendered: // renders its own prompt (HITL, or a custom tool with no trace)
 		if c.verbose {
 			fmt.Fprintf(os.Stderr, "-> %s\n", t.Name)
 		}
-	case agent.ToolMemory:
+	case toolkit.PresentTraced: // memory / knowledge tools
 		fmt.Fprintf(os.Stderr, "-> %s\n", t.Display)
-	case agent.ToolRemote:
+	case toolkit.PresentRemote:
 		fmt.Fprintf(os.Stderr, "-> %s (remote %s)\n", t.Name, t.Agent)
-	case agent.ToolLocal:
+	default: // command tool, and the safe default for an unforeseen presentation
 		fmt.Fprintf(os.Stderr, "-> %s\n", lineToolCallText(t.Display, t.DisplayShort))
 	}
 }
@@ -153,14 +154,14 @@ func (c *cliEvents) ToolCall(t agent.ToolTrace) {
 // keeps the stderr trace to the calls and a piped stdout to the final answer. A
 // self-rendering built-in tool's call is shown only under verbose, so its result is
 // suppressed the same way to keep call and result paired rather than leaving an
-// orphaned result line. A memory tool's result is the stored note itself, which is
-// noisy and not useful in the live trace, so it is omitted too; the call line alone
-// records that memory was used.
+// orphaned result line. A traced built-in's result (a memory or knowledge tool) is
+// the stored note itself, which is noisy and not useful in the live trace, so it is
+// omitted too; the call line alone records that the tool was used.
 func (c *cliEvents) ToolResult(t agent.ToolResultTrace) {
 	if !c.showToolOutput {
 		return
 	}
-	if t.Kind == agent.ToolMemory || (t.Kind == agent.ToolBuiltin && !c.verbose) {
+	if t.Present == toolkit.PresentTraced || (t.Present == toolkit.PresentSelfRendered && !c.verbose) {
 		return
 	}
 

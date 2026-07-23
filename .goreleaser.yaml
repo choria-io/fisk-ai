@@ -13,7 +13,7 @@ changelog:
 
 builds:
   - id: fisk-ai
-    binary: fisk-ai
+    binary: fisk
     goos:
       - darwin
       - linux
@@ -27,7 +27,7 @@ builds:
       - "7"
 
 archives:
-  - name_template: "fisk-ai-{{.Version}}-{{.Os}}-{{.Arch}}{{if .Arm}}{{.Arm}}{{end}}"
+  - name_template: "fisk-{{.Version}}-{{.Os}}-{{.Arch}}{{if .Arm}}{{.Arm}}{{end}}"
     wrap_in_directory: true
     formats: [tar.gz]
     format_overrides:
@@ -36,11 +36,12 @@ archives:
     files:
       - README.md
       - LICENSE
+      - NOTICE
 
 homebrew_casks:
   - name: fisk-ai
     binaries:
-      - fisk-ai
+      - fisk
     directory: Casks
     repository:
       owner: choria-io

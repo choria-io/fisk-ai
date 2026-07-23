@@ -34,8 +34,14 @@ const (
 // switching on the concrete tool type, so a new tool kind carries its own
 // presentation and dependency needs rather than teaching the runner about itself.
 type CallInfo struct {
-	// Present is how the call is shown and accounted.
+	// Present is how the call is shown and accounted for visibility (renderer
+	// suppression and call-text).
 	Present Presentation
+	// Kind is the provider of the tool, the accounting axis and the value behind the
+	// kind= log token. It is independent of Present: a built-in may present as
+	// self-rendered or traced yet is one Kind. The zero value KindUnknown is the safe
+	// sentinel for a tool that does not declare a provider.
+	Kind Kind
 	// Display is the full one-line call trace, already sanitized for terminal
 	// display; an empty string suppresses the line.
 	Display string

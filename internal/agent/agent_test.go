@@ -315,10 +315,10 @@ var _ = Describe("runner", func() {
 			Expect(block.IsError).To(BeFalse())
 
 			Expect(ev.calls).To(HaveLen(1))
-			Expect(ev.calls[0].Kind).To(Equal(ToolLocal))
+			Expect(ev.calls[0].Present).To(Equal(toolkit.PresentCommand))
 			Expect(ev.calls[0].Display).NotTo(BeEmpty())
 			Expect(ev.results).To(HaveLen(1))
-			Expect(ev.results[0].Kind).To(Equal(ToolLocal))
+			Expect(ev.results[0].Present).To(Equal(toolkit.PresentCommand))
 		})
 
 		It("dispatches a remote tool: flags it remote, counts it, and traces the agent", func() {
@@ -336,10 +336,10 @@ var _ = Describe("runner", func() {
 			Expect(block.IsError).To(BeFalse())
 
 			Expect(ev.calls).To(HaveLen(1))
-			Expect(ev.calls[0].Kind).To(Equal(ToolRemote))
+			Expect(ev.calls[0].Present).To(Equal(toolkit.PresentRemote))
 			Expect(ev.calls[0].Agent).To(Equal("nats"))
 			Expect(ev.results).To(HaveLen(1))
-			Expect(ev.results[0].Kind).To(Equal(ToolRemote))
+			Expect(ev.results[0].Present).To(Equal(toolkit.PresentRemote))
 		})
 
 		It("gates a confirm-tagged local tool and denies it without running when no operator can approve", func() {

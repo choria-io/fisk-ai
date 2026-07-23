@@ -15,7 +15,7 @@ commands:
           aliases: [bin]
           banner: |
             >>>
-            >>> Building 'fisk-ia' locally
+            >>> Building 'fisk' locally
             >>>
             >>>               Target: {{ if .Flags.target }}{{ .Flags.target }}{{else}}host{{end}}
             >>>
@@ -51,7 +51,7 @@ commands:
             {{ if .Flags.output }}
                 _output="{{ .Flags.output }}"
             {{ else }}
-                _output="fisk-ai"
+                _output="fisk"
             {{ end }}
 
             {{ if .Flags.verbose }}

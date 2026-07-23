@@ -32,6 +32,7 @@ var (
 func (t *FiskCommandTool) Describe(input json.RawMessage) toolkit.CallInfo {
 	return toolkit.CallInfo{
 		Present:      toolkit.PresentCommand,
+		Kind:         toolkit.KindApplication,
 		Display:      t.TraceLine(input),
 		DisplayShort: t.TraceLineShort(input),
 		NeedsWorkDir: true,

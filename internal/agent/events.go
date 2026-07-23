@@ -6,6 +6,7 @@ package agent
 
 import (
 	"github.com/choria-io/fisk-ai/internal/llm"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/choria-io/fisk-ai/internal/toolkit/fisk"
 
 	"github.com/choria-io/fisk-ai/internal/remotetools"
@@ -166,44 +167,37 @@ type RunInfo struct {
 	NoApplication bool
 }
 
-// ToolKind distinguishes how a traced tool call is dispatched.
-type ToolKind int
-
-const (
-	// ToolLocal is an application tool; Display holds its resolved command line.
-	ToolLocal ToolKind = iota
-	// ToolRemote is a tool served by another agent; Agent names that agent.
-	ToolRemote
-	// ToolBuiltin is an in-process built-in tool that renders its own operator
-	// interaction (the human-in-the-loop tools), so its call and result are not
-	// traced except under verbose, to avoid duplicating what the tool itself shows.
-	ToolBuiltin
-	// ToolMemory is an in-process built-in tool that has no operator interaction of
-	// its own (the memory tools), so it is traced like an application tool: Display
-	// holds its call line and its result is shown.
-	ToolMemory
-)
-
 // ToolTrace describes one tool invocation for display. Display is the full,
 // un-elided command line; DisplayShort is the same line with long argument values
 // middle-elided. A width-aware surface (the TUI viewport) shows Display when it fits
 // a row and falls back to DisplayShort otherwise, while a plain stream that cannot
-// measure a screen uses DisplayShort. Both are empty for non-local tools.
+// measure a screen uses DisplayShort. Both are empty for non-command tools.
 type ToolTrace struct {
 	Name         string
 	Display      string
 	DisplayShort string
-	Kind         ToolKind
+	// Present is the visibility axis: how a renderer shows and suppresses the call.
+	// A renderer keys its suppression off this, never off ProviderKind, so a built-in
+	// self-renders (the human-in-the-loop tools) or is traced (memory and knowledge)
+	// by the same rules regardless of which provider supplied it.
+	Present toolkit.Presentation
+	// ProviderKind is the accounting axis: the provider the tool is accounted under
+	// (the kind= log token). It is distinct from Present above; a built-in traces one
+	// ProviderKind whether it self-renders or is traced.
+	ProviderKind toolkit.Kind
 	Agent        string
 }
 
-// ToolResultTrace describes one tool's returned output for display. Kind mirrors
-// the ToolTrace it answers, so a caller can apply the same per-kind rules to the
-// result as to the call (for example showing a built-in tool's result only when
-// verbose). Output is the raw result text, untrusted and unsanitized; IsError
+// ToolResultTrace describes one tool's returned output for display. Present mirrors
+// the ToolTrace it answers, so a caller can apply the same visibility rules to the
+// result as to the call (for example suppressing a self-rendering built-in's result
+// unless verbose). Output is the raw result text, untrusted and unsanitized; IsError
 // reports whether the tool reported a failure.
 type ToolResultTrace struct {
-	Kind    ToolKind
-	Output  string
-	IsError bool
+	Present toolkit.Presentation
+	// ProviderKind mirrors the ToolTrace it answers, so the result's kind= log token
+	// matches the call's.
+	ProviderKind toolkit.Kind
+	Output       string
+	IsError      bool
 }

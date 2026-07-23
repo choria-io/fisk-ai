@@ -50,13 +50,13 @@ func findBuiltin(tools []*functool.Tool, name string) *functool.Tool {
 	return nil
 }
 
-// These tests pin the observable output of traceCall per tool kind: the ToolKind
-// carried on the emitted call trace (which drives output suppression and the
-// machine-readable slog tokens downstream), the trace's Display/DisplayShort/Agent,
-// the per-run ExecDeps the kind receives, and the remote flag (which drives the
-// remote-call stat and the journaled Remote flag). They assert today's behavior so a
-// later refactor of how the kind is derived cannot silently change what the operator
-// or the journal sees.
+// These tests pin the observable output of traceCall per tool kind: the Presentation
+// carried on the emitted call trace (which drives output suppression), the provider
+// ProviderKind (the accounting axis and slog token), the trace's
+// Display/DisplayShort/Agent, the per-run ExecDeps the kind receives, and the remote
+// flag (which drives the remote-call stat and the journaled Remote flag). They assert
+// today's behavior so a later refactor cannot silently change what the operator or the
+// journal sees.
 var _ = Describe("runner.traceCall parity", func() {
 	const workDir = "/run/work-42"
 
@@ -70,26 +70,27 @@ var _ = Describe("runner.traceCall parity", func() {
 		}
 	}
 
-	It("Should trace a local command tool as ToolLocal with the full and short call lines, given the work dir", func() {
+	It("Should present a command tool as PresentCommand with the full and short call lines, given the work dir", func() {
 		ev := &captureEvents{}
 		tool := &fisk2.FiskCommandTool{Path: []string{"stream", "info"}, Model: &fisk.CmdModel{}}
 		r := newRunner(ev, map[string]toolkit.Tool{"stream_info": tool})
 		use := llm.ToolUseBlock{ID: "t1", Name: "stream_info", Input: json.RawMessage(`{}`)}
 
-		kind, deps, remote := r.traceCall(use)
-		Expect(kind).To(Equal(ToolLocal))
+		info := describeCall(r.tools[use.Name], use.Input)
+		deps, remote := r.traceCall(use, info)
 		Expect(remote).To(BeFalse())
 		Expect(deps.WorkDir).To(Equal(workDir))
 		Expect(deps.Prompter).To(BeNil())
 
 		Expect(ev.calls).To(HaveLen(1))
-		Expect(ev.calls[0].Kind).To(Equal(ToolLocal))
+		Expect(ev.calls[0].Present).To(Equal(toolkit.PresentCommand))
+		Expect(ev.calls[0].ProviderKind).To(Equal(toolkit.KindApplication))
 		Expect(ev.calls[0].Display).To(Equal(tool.TraceLine(use.Input)))
 		Expect(ev.calls[0].DisplayShort).To(Equal(tool.TraceLineShort(use.Input)))
 		Expect(ev.calls[0].Display).NotTo(BeEmpty())
 	})
 
-	It("Should trace a remote tool as ToolRemote naming its agent, flag it remote, and pass no dependencies", func() {
+	It("Should present a remote tool as PresentRemote naming its agent, flag it remote, and pass no dependencies", func() {
 		ev := &captureEvents{}
 		desc := a2a.ToolDescriptor{Name: "info", Description: "reports info", InputSchema: json.RawMessage(`{"type":"object"}`)}
 		rt, err := a2a.NewRemoteTool("nats_info", "nats", desc, stubInvoker{reply: a2a.NewToolReply("ok", false)})
@@ -97,66 +98,70 @@ var _ = Describe("runner.traceCall parity", func() {
 		r := newRunner(ev, map[string]toolkit.Tool{"nats_info": rt})
 		use := llm.ToolUseBlock{ID: "t1", Name: "nats_info"}
 
-		kind, deps, remote := r.traceCall(use)
-		Expect(kind).To(Equal(ToolRemote))
+		info := describeCall(r.tools[use.Name], use.Input)
+		deps, remote := r.traceCall(use, info)
 		Expect(remote).To(BeTrue())
 		Expect(deps.Prompter).To(BeNil())
 		Expect(deps.WorkDir).To(Equal(""))
 
 		Expect(ev.calls).To(HaveLen(1))
-		Expect(ev.calls[0].Kind).To(Equal(ToolRemote))
+		Expect(ev.calls[0].Present).To(Equal(toolkit.PresentRemote))
+		Expect(ev.calls[0].ProviderKind).To(Equal(toolkit.KindRemote))
 		Expect(ev.calls[0].Agent).To(Equal("nats"))
 	})
 
-	It("Should trace a memory built-in as ToolMemory with its call line and pass the operator prompter", func() {
+	It("Should present a memory built-in as PresentTraced with its call line and pass the operator prompter", func() {
 		ev := &captureEvents{}
 		memCfg := &config.Config{Harness: config.HarnessConfig{Memory: &config.MemoryConfig{Enabled: true}}}
 		tool := findBuiltin(builtin.MemoryTools(memCfg, nil), "memory_list")
 		r := newRunner(ev, map[string]toolkit.Tool{"memory_list": tool})
 		use := llm.ToolUseBlock{ID: "t1", Name: "memory_list", Input: json.RawMessage(`{}`)}
 
-		kind, deps, remote := r.traceCall(use)
-		Expect(kind).To(Equal(ToolMemory))
+		info := describeCall(r.tools[use.Name], use.Input)
+		deps, remote := r.traceCall(use, info)
 		Expect(remote).To(BeFalse())
 		Expect(deps.Prompter).NotTo(BeNil())
 
 		Expect(ev.calls).To(HaveLen(1))
-		Expect(ev.calls[0].Kind).To(Equal(ToolMemory))
+		Expect(ev.calls[0].Present).To(Equal(toolkit.PresentTraced))
+		Expect(ev.calls[0].ProviderKind).To(Equal(toolkit.KindBuiltin))
 		Expect(ev.calls[0].Display).To(Equal(tool.TraceLine(use.Input)))
 		Expect(ev.calls[0].Display).NotTo(BeEmpty())
 	})
 
-	It("Should trace a human-in-the-loop built-in as ToolBuiltin with no call line and pass the operator prompter", func() {
+	It("Should present a human-in-the-loop built-in as PresentSelfRendered with no call line and pass the operator prompter", func() {
 		ev := &captureEvents{}
 		hitlCfg := &config.Config{Harness: config.HarnessConfig{HumanInTheLoop: &config.HumanInTheLoopConfig{Enabled: true}}}
 		tool := findBuiltin(builtin.HITLTools(hitlCfg), "ask_human_confirm")
 		r := newRunner(ev, map[string]toolkit.Tool{"ask_human_confirm": tool})
 		use := llm.ToolUseBlock{ID: "t1", Name: "ask_human_confirm", Input: json.RawMessage(`{"question":"go?"}`)}
 
-		kind, deps, remote := r.traceCall(use)
-		Expect(kind).To(Equal(ToolBuiltin))
+		info := describeCall(r.tools[use.Name], use.Input)
+		deps, remote := r.traceCall(use, info)
 		Expect(remote).To(BeFalse())
 		Expect(deps.Prompter).NotTo(BeNil())
 
 		Expect(ev.calls).To(HaveLen(1))
-		Expect(ev.calls[0].Kind).To(Equal(ToolBuiltin))
+		Expect(ev.calls[0].Present).To(Equal(toolkit.PresentSelfRendered))
+		Expect(ev.calls[0].ProviderKind).To(Equal(toolkit.KindBuiltin))
 		// A self-rendering tool shows its own prompt, so its call line is suppressed.
 		Expect(ev.calls[0].Display).To(Equal(""))
 	})
 
-	It("Should trace a tool that does not describe itself as ToolLocal by name, with no dependencies", func() {
+	It("Should present a tool that does not describe itself as PresentCommand by name, with no dependencies", func() {
 		ev := &captureEvents{}
 		r := newRunner(ev, map[string]toolkit.Tool{"mystery": describelessTool{}})
 		use := llm.ToolUseBlock{ID: "t1", Name: "mystery", Input: json.RawMessage(`{}`)}
 
-		kind, deps, remote := r.traceCall(use)
-		Expect(kind).To(Equal(ToolLocal))
+		info := describeCall(r.tools[use.Name], use.Input)
+		deps, remote := r.traceCall(use, info)
 		Expect(remote).To(BeFalse())
 		Expect(deps.Prompter).To(BeNil())
 		Expect(deps.WorkDir).To(Equal(""))
 
 		Expect(ev.calls).To(HaveLen(1))
-		Expect(ev.calls[0].Kind).To(Equal(ToolLocal))
+		Expect(ev.calls[0].Present).To(Equal(toolkit.PresentCommand))
+		Expect(ev.calls[0].ProviderKind).To(Equal(toolkit.KindUnknown))
 		Expect(ev.calls[0].Name).To(Equal("mystery"))
 		Expect(ev.calls[0].Display).To(Equal(""))
 	})

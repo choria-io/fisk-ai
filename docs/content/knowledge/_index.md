@@ -14,7 +14,7 @@ In AI terms this is a RAG (retrieval-augmented generation) system contained enti
 process. It is aimed at keeping source data local and handles markdown files. It runs with or without a local embedding
 model; without one it uses full-text search alone.
 
-Everything ships in the one `fisk-ai` binary. The index is a single SQLite file built and queried in-process, with no
+Everything ships in the one `fisk` binary. The index is a single SQLite file built and queried in-process, with no
 CGo and no external database. The orchestrating LLM stays remote at Anthropic or a local compatible model; only storage
 and retrieval are local. A local embeddings server is the only optional external process, and only when semantic search
 is turned on.
@@ -38,9 +38,9 @@ harness:
 Build the index and search it from the command line, then run the agent, which now has the `knowledge_search` tool:
 
 ```nohighlight
-$ fisk-ai knowledge index docs/    # build the index, incremental, no embeddings needed
-$ fisk-ai knowledge search "backpressure"
-$ fisk-ai run "how does backpressure work?"
+$ fisk knowledge index docs/    # build the index, incremental, no embeddings needed
+$ fisk knowledge search "backpressure"
+$ fisk run "how does backpressure work?"
 ```
 
 The index is incremental. A second `knowledge index` re-reads only files whose content changed, detected by hash, and
@@ -101,14 +101,14 @@ supported by the local runtimes this feature talks to, such as Ollama and LM Stu
 truncation if you want smaller, faster vectors. The feature stays model-agnostic - any OpenAI-compatible endpoint works -
 but if you have no specific reason to prefer another model, this is a sound choice.
 
-The embedding model is user-chosen, so nothing about it is assumed. `fisk-ai knowledge doctor` probes the configured
+The embedding model is user-chosen, so nothing about it is assumed. `fisk knowledge doctor` probes the configured
 server and reports the model, its vector dimension, and whether its output is normalized. After turning embeddings on,
 rebuild the index so the vectors are populated:
 
 ```nohighlight
-$ fisk-ai knowledge doctor
-$ fisk-ai knowledge index --reindex
-$ fisk-ai knowledge stats
+$ fisk knowledge doctor
+$ fisk knowledge index --reindex
+$ fisk knowledge stats
 ```
 
 Changing the model, its dimension, or a prefix changes the vector identity and forces a `--reindex`. The index refuses a
@@ -189,7 +189,7 @@ needs neither, and is the surest way to keep them pointed at the same index.
 ### Embeddings
 
 The `embeddings` block is only read when the vector tier is on. It describes a local OpenAI-compatible endpoint that
-`fisk-ai` POSTs to at `<base_url>/embeddings`.
+`fisk` POSTs to at `<base_url>/embeddings`.
 
 | Field                       | Description                                                                                |
 |-----------------------------|--------------------------------------------------------------------------------------------|
@@ -235,7 +235,7 @@ mismatched prefix upfront rather than mixing vectors embedded under different pr
 
 > [!info] Note
 > Some GGUF builds of EmbeddingGemma log `'tokenizer.ggml.add_eos_token' should be set to 'true' in the GGUF header` on
-> every embedded string. This comes from the embeddings server, not `fisk-ai`: the OpenAI embeddings API exposes no
+> every embedded string. This comes from the embeddings server, not `fisk`: the OpenAI embeddings API exposes no
 > control over tokenization, so it cannot be silenced from the client. It is harmless but means the model embeds without
 > the end-of-sequence token it was trained with; a GGUF whose header sets `tokenizer.ggml.add_eos_token = true` resolves
 > it.
@@ -262,7 +262,7 @@ than failing the run, so a missing index never bricks agent startup.
 
 ## CLI commands
 
-The `fisk-ai knowledge` command builds and inspects the index. It is separate from the agent's `knowledge_search` tool;
+The `fisk knowledge` command builds and inspects the index. It is separate from the agent's `knowledge_search` tool;
 the CLI never runs the agent. Every command reads `--config` (default `agent.yaml`) and prints the tier line.
 
 | Command                              | Description                                                                        |
@@ -277,7 +277,7 @@ the CLI never runs the agent. Every command reads `--config` (default `agent.yam
 | `knowledge rm <source...>`           | remove specific sources' chunks by path                                            |
 | `knowledge reset`                    | wipe the index; the bare form refuses and names `--force`                          |
 
-The command is also available as `fisk-ai rag`.
+The command is also available as `fisk rag`.
 
 `knowledge index` is incremental and per-file: a file whose hash is unchanged is skipped, a changed file is re-chunked,
 and a walk of a full configured root reconciles deletions. `--dry-run` lists the files and an embedding-call estimate

@@ -14,6 +14,7 @@ import (
 	"github.com/choria-io/fisk-ai/internal/llm"
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"
+	"github.com/choria-io/fisk-ai/internal/toolkit"
 	"github.com/choria-io/fisk-ai/internal/tui"
 )
 
@@ -129,9 +130,10 @@ func (e *tcellEvents) ToolResult(t agent.ToolResultTrace) {
 	// A self-rendering built-in tool's call is shown only under verbose (its own
 	// prompt follows on the next line), so its result is suppressed the same way,
 	// keeping call and result paired rather than leaving an orphaned result line. A
-	// memory tool's result is the stored note itself, which is noisy and not useful in
-	// the live trace, so it is omitted too; the call line alone records the access.
-	if t.Kind == agent.ToolMemory || (t.Kind == agent.ToolBuiltin && !e.verbose) {
+	// traced built-in's result (a memory or knowledge tool) is the stored note itself,
+	// which is noisy and not useful in the live trace, so it is omitted too; the call
+	// line alone records the access.
+	if t.Present == toolkit.PresentTraced || (t.Present == toolkit.PresentSelfRendered && !e.verbose) {
 		return
 	}
 
@@ -164,21 +166,21 @@ func (e *tcellEvents) SessionRotated(prevID string) {
 }
 
 // toolTraceLine maps a tool trace to a viewport line, mirroring cliEvents.ToolCall:
-// a built-in tool is shown only when verbose (its own prompt follows), a remote tool
-// names its agent, and a local tool shows its resolved command line. The bool is
-// false when nothing should be shown.
+// a self-rendering built-in is shown only when verbose (its own prompt follows), a
+// remote tool names its agent, and a command tool shows its resolved command line.
+// The bool is false when nothing should be shown.
 func toolTraceLine(t agent.ToolTrace, verbose bool) (tui.Line, bool) {
-	switch t.Kind {
-	case agent.ToolBuiltin:
+	switch t.Present {
+	case toolkit.PresentSelfRendered: // renders its own prompt (HITL, or a custom tool with no trace)
 		if !verbose {
 			return tui.Line{}, false
 		}
 		return tui.Line{Kind: tui.LineToolCall, Text: t.Name}, true
-	case agent.ToolMemory:
+	case toolkit.PresentTraced: // memory / knowledge tools
 		return tui.Line{Kind: tui.LineToolCall, Text: t.Display}, true
-	case agent.ToolRemote:
+	case toolkit.PresentRemote:
 		return tui.Line{Kind: tui.LineToolCall, Text: fmt.Sprintf("%s (remote %s)", t.Name, t.Agent)}, true
-	default:
+	default: // command tool, and the safe default for an unforeseen presentation
 		return tui.Line{Kind: tui.LineToolCall, Text: t.Display, Short: t.DisplayShort}, true
 	}
 }
