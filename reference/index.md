@@ -248,6 +248,21 @@ harness:
     # directory is used as-is.
     options:
       directory: memory
+
+  # Where checkpointed run journals are stored (the --checkpoint and
+  # --resume sessions). Optional; absent it uses the "file" backend under
+  # the XDG state directory. Sessions cannot be disabled.
+  sessions:
+    # The store implementation. "file" (the default) keeps each session as a
+    # JSON-lines journal under a directory. "jetstream" keeps them on a NATS
+    # JetStream stream shared over a broker, using the nats_context above.
+    backend: file
+    # Backend-specific settings. For "file": "directory", the path journals
+    # live under, defaulting to the XDG state directory; --state-dir
+    # overrides it. For "jetstream": "stream", the name of an
+    # operator-created stream to bind, for which --state-dir does not apply.
+    options:
+      directory: /var/lib/fisk-ai/runs
 ```
 
 `human_in_the_loop` lets the model decide when to ask; the `ai:confirm` tag and `confirm_tags` gate a command the model

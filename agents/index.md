@@ -136,7 +136,7 @@ Run the agent after setting the API key:
 
 ```nohighlight
 $ export ANTHROPIC_API_KEY="....."
-$ fisk-ai run --tool-output --no-tui 'tell me a joke '
+$ fisk run --tool-output --no-tui 'tell me a joke '
 -> say -- Why did th...space?
 <-  
  ______________________________
@@ -171,7 +171,7 @@ output with `--tool-output`.
 Now ask about a cat joke:
 
 ```nohighlight
-$ fisk-ai run 'tell me a joke about a cat'
+$ fisk run 'tell me a joke about a cat'
 
   I appreciate the request, but I only tell jokes about cows! I'm strictly a cow joke specialist.
 
@@ -305,10 +305,10 @@ Both are negative switches and have no effect in the line UI.
 
 ## Tool selection
 
-Run the `fisk-ai info` command to verify what tools the agent has access to:
+Run the `fisk info` command to verify what tools the agent has access to:
 
 ```nohighlight
-$ fisk-ai info
+$ fisk info
 ╭───────────────────┬────────┬───────────────────────────────────────────────────────┬──────╮
 │ TOOL              │ SOURCE │ DESCRIPTION                                           │ TAGS │
 ├───────────────────┼────────┼───────────────────────────────────────────────────────┼──────┤
@@ -326,7 +326,7 @@ Prompt:
 ```
 
 The output shows the `say` and `think` tools and some Human in the Loop tools. When the configuration sets a model,
-`fisk-ai info` also prints a Model section first, listing the resolved model and provider, whether thinking is enabled,
+`fisk info` also prints a Model section first, listing the resolved model and provider, whether thinking is enabled,
 and how tool search will behave, so you can confirm the backend and feature gates without starting a run.
 
 There are a few ways to control what tools are visible.
@@ -343,7 +343,7 @@ The application can declare that the LLM never gets the `think` tool:
     # ...
 ```
 
-Adding the `ai:deny` tag to a command means Fisk AI never exposes that tool to the LLM. `fisk-ai info` confirms the LLM
+Adding the `ai:deny` tag to a command means Fisk AI never exposes that tool to the LLM. `fisk info` confirms the LLM
 only gets the `say` tool now.
 
 ### Agent configuration
@@ -399,7 +399,7 @@ against the binary's real global flags at load; a name matching none is an error
 A global the application marks required is always exposed, whether or not it is listed, since the command cannot run
 without it.
 
-Run `fisk-ai info` to see which globals a binary exposes; it lists the application's global flags and marks the ones you
+Run `fisk info` to see which globals a binary exposes; it lists the application's global flags and marks the ones you
 have allowlisted.
 
 ### Session snapshots and resumption
@@ -411,21 +411,21 @@ instead journals the run to a session on disk so it can be suspended and resumed
 machine. Sessions are the foundation for longer-running work where the agent may need to pause, for example while a slow
 external step completes.
 
-Start a checkpointed run. fisk-ai prints the session id at startup; it is generated unless `--name` sets it:
+Start a checkpointed run. fisk prints the session id at startup; it is generated unless `--name` sets it:
 
 ```nohighlight
-$ fisk-ai run --checkpoint "report on the ORDERS stream"
-$ fisk-ai run --checkpoint --name orders-report "report on the ORDERS stream"
+$ fisk run --checkpoint "report on the ORDERS stream"
+$ fisk run --checkpoint --name orders-report "report on the ORDERS stream"
 ```
 
 Resume a session by id. No prompt is given, since the original prompt is restored from the session; passing one is an
 error:
 
 ```nohighlight
-$ fisk-ai run --resume orders-report
+$ fisk run --resume orders-report
 ```
 
-On resume fisk-ai replays the conversation so far to stderr, so the run continues in context rather than from a blank
+On resume fisk replays the conversation so far to stderr, so the run continues in context rather than from a blank
 screen, then carries on from where it left off.
 
 #### Chat sessions
@@ -434,11 +434,11 @@ screen, then carries on from where it left off.
 
 Each follow-up is journaled, so the whole conversation survives a suspend or a crash. Leaving the input bar with
 `Ctrl-D` suspends the session rather than ending it (the status bar reads `ctrl-d suspend`): it stays resumable, and
-fisk-ai prints how to resume it on exit. `Ctrl-C` aborts; the journal is kept, so an aborted chat is still resumable
+fisk prints how to resume it on exit. `Ctrl-C` aborts; the journal is kept, so an aborted chat is still resumable
 from its last completed turn.
 
 Resuming a chat session reopens the input bar automatically; re-passing `--chat` is not needed (it is ignored on resume,
-since the session already knows what it is), and fisk-ai first replays the conversation into the viewport. Because the
+since the session already knows what it is), and fisk first replays the conversation into the viewport. Because the
 input bar needs a real terminal, a chat session can only be resumed in the full-screen UI, not with `--no-tui` or over a
 pipe. A checkpointed chat has no "completed" state; remove it with `session rm` once it is no longer needed.
 
@@ -456,12 +456,12 @@ happens.
 * A clean suspend is exactly-once. Nothing runs after the last recorded event, so a resume never repeats a tool call or
   an LLM call.
 * A crash resumes from the last recorded event, so at most one tool call is repeated. A tool whose side effect completed
-  but whose result was not yet recorded runs again on resume, since fisk-ai cannot make an external side effect
+  but whose result was not yet recorded runs again on resume, since fisk cannot make an external side effect
   idempotent. Already-recorded turns and results are never replayed.
 
 Resume a session against the same agent configuration it started with. A session can be resumed from anywhere, including
 a machine that no longer has the original `agent.yaml`, so care is required: continuing a conversation against a
-different model, tool set, or system prompt can make the replayed transcript incoherent. fisk-ai guards this by
+different model, tool set, or system prompt can make the replayed transcript incoherent. fisk guards this by
 fingerprinting the configuration (provider, model, prompt, tool set, budget) at checkpoint time and refusing a resume
 when it no longer matches; the refusal names what changed. `--force` overrides the check, accepting that the restored
 conversation may not fit the current configuration. The provider is the one exception: a session started against one
@@ -475,10 +475,10 @@ Sessions are stored under the `XDG` state directory, `$XDG_STATE_HOME/fisk-ai/ru
 is removed.
 
 ```nohighlight
-fisk-ai session ls
-fisk-ai session show <id>
-fisk-ai session show <id> --transcript
-fisk-ai session rm <id>
+fisk session ls
+fisk session show <id>
+fisk session show <id> --transcript
+fisk session rm <id>
 ```
 
 `session ls` lists each session with its status, model, and prompt. `session show` prints a session's counters and
@@ -486,9 +486,74 @@ status; `--transcript` shows the full conversation (prompt, thinking, narration,
 interactive terminal `--transcript` opens the full-screen viewer with thinking and tool output folded, which `z` and `Z`
 expand; `--no-tui`/`NO_TUI` prints it as line output instead. `session rm` deletes a session.
 
+#### Storage backends
+
+Where a session is journaled is configurable through `harness.sessions`, which mirrors the shape of `harness.memory`.
+Two backends ship: `file` (the default) and `jetstream` {{% badge style="primary" title="Version" %}}0.0.3{{% /badge %}}.
+The block is optional; leaving it out keeps the `file` backend under the `XDG` state directory described above.
+
+The `file` backend keeps each session as a JSON-lines journal under a directory. Set `options.directory` to move it off
+the default `XDG` path:
+
+```yaml
+harness:
+  sessions:
+    backend: file
+    options:
+      directory: /var/lib/fisk-ai/runs
+```
+
+`--state-dir` overrides `options.directory` for a single `run` or `session` command, so the flag always wins over the
+configured path. It applies only to the `file` backend: combining it with a non-file backend is an error rather than a
+silently ignored flag.
+
+The `jetstream` backend keeps sessions as messages on a NATS JetStream stream instead of on disk, so a run suspended on
+one machine resumes on another over a broker. It uses the connection from the configured `nats_context`, the same one
+memory and remote tools use, and binds to a stream that must already exist: the agent never creates it, so you own the
+stream's retention policy.
+
+```yaml
+nats_context: production
+
+harness:
+  sessions:
+    backend: jetstream
+    options:
+      stream: FISK_SESSIONS
+```
+
+Create the stream first, subscribed to one wildcard subject and keeping a single message per subject so each run record
+is write-once:
+
+```nohighlight
+nats --context production stream add FISK_SESSIONS \
+  --subjects 'fisk.sessions.>' --max-msgs-per-subject=1 \
+  --discard=new --discard-per-subject
+```
+
+The stream keeps messages forever by default, which is what sessions want; do not set a max age or they would silently
+expire. The subject prefix (`fisk.sessions` above) is yours to choose; the backend derives it from the stream's single
+wildcard subject when it binds, so it is not set in the config. The backend fails at run start, rather than degrading silently, if
+the stream does not exist or its configuration does not match this shape. Sessions are never namespaced by identity, so a
+run started by one agent is found by another reading the same stream; keep separate environments in separate streams.
+
+#### Inspecting a configured backend
+
+`session ls`, `session show`, and `session rm` read the `file` backend under `--state-dir` by default. To inspect
+sessions in a configured backend, a jetstream stream or a file directory named in the config, pass that config with
+`--config`:
+
+```nohighlight
+fisk session ls --config agent.yaml
+fisk session show <id> --config agent.yaml
+```
+
+To confirm which backend a config resolves to without starting a run, `fisk info` shows a `Sessions` section with the
+resolved backend and, for the jetstream backend, the stream and NATS context.
+
 ## Human in the loop (HITL)
 
-When enabled, fisk-ai gives the model built-in tools to ask the operator a question at the terminal and wait for the
+When enabled, fisk gives the model built-in tools to ask the operator a question at the terminal and wait for the
 answer. They are off by default and only available when running the agent:
 
 ```yaml
@@ -520,7 +585,7 @@ operator. Tool calls within a turn run one at a time, so a prompt has the termin
 
 Two mechanisms put a human in the loop:
 
-* `human_in_the_loop` (a configuration flag) lets the model ask its own question through a fisk-ai-provided
+* `human_in_the_loop` (a configuration flag) lets the model ask its own question through a fisk-provided
   `ask_human_*` tool, with no application command involved. The human answers a question the model chose to ask.
 * `ai:confirm` (a command tag) lets the application author gate an ordinary, non-interactive command so the operator
   must approve it before it runs. The human is a checkpoint on a command the model wanted to run anyway; nothing about
@@ -534,7 +599,7 @@ command should run only with the operator's say-so, typically something destruct
 Fisk commands can carry tags, set in their fisk definition (or, for App Builder
 applications, in YAML). Tags can be referenced by the `include`/`exclude` rules
 to select commands by group, and a few tags are reserved and interpreted by
-fisk-ai itself to control how a command is exposed to the model:
+fisk itself to control how a command is exposed to the model:
 
 | Tag           | Description                                                                                                                                                           |
 |---------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -548,7 +613,7 @@ handful of commands the model needs on most requests immediately available rathe
 than discoverable only through tool search.
 
 `ai:confirm` gates a command behind the operator's explicit permission. When the
-model calls a command tagged `ai:confirm`, fisk-ai pauses before running it and
+model calls a command tagged `ai:confirm`, fisk pauses before running it and
 prompts the operator at the terminal, showing the resolved command line with its
 arguments, and offers three choices: run it once, run it and stop asking for that
 command for the rest of the session, or decline. Declining returns an
@@ -573,18 +638,18 @@ always-on `ai:confirm` tag and matching is exact rather than a regex. A
 `confirm_tags` entry that matches no loaded command is reported as a warning at
 startup, since a typo would otherwise leave a command ungated. The approval prompt
 names the tag that gated the command, so you can tell why you are being asked. Run
-`fisk-ai info` to see each command's tags and which commands a run would gate. Like
+`fisk info` to see each command's tags and which commands a run would gate. Like
 `ai:confirm`, a `confirm_tags` tag gates both the agent loop and MCP, where it is
 requested through elicitation.
 
-Any other tags are free-form: they have no built-in meaning to fisk-ai but can be
+Any other tags are free-form: they have no built-in meaning to fisk but can be
 matched by the `tags` field of an `include` or `exclude` rule.
 
 All of a command's tags, reserved and free-form alike, are also included in the
-tool description fisk-ai sends the model, as a trailing `Tags: ...` line, in both
+tool description fisk sends the model, as a trailing `Tags: ...` line, in both
 the agent and over MCP. This lets your prompt reference them, for example "always
 use `ask_human_confirm` before running any command
-tagged `impact:rw`". The human-facing `fisk-ai info` listing keeps the plain
+tagged `impact:rw`". The human-facing `fisk info` listing keeps the plain
 description.
 
 ## Memory
@@ -625,7 +690,7 @@ limits are shared by every backend, and a write that would exceed them fails
 cleanly. The on-disk format is shared too, so a value written by one backend
 migrates to another unchanged.
 
-`fisk-ai info` shows a `Memory` section with the resolved backend and, for the
+`fisk info` shows a `Memory` section with the resolved backend and, for the
 jetstream backend, the bucket, NATS context and key prefix, so you can confirm
 where memory is stored without starting a run.
 
