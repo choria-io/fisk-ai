@@ -357,3 +357,34 @@ var _ = Describe("Result", func() {
 		Expect(err).To(MatchError(ContainSubstring("marshaling tool result")))
 	})
 })
+
+var _ = Describe("Prompter fail-closed", func() {
+	// promptingTool consults the operator through the CallContext prompter and surfaces
+	// whatever it returns, so a spec can observe the fail-closed path when no operator
+	// is reachable. This is the guarantee a custom tool that elicits relies on: with no
+	// live operator the call is denied, never left to prompt into the void or panic.
+	promptingTool := func() *Tool {
+		return mustNew(Spec{
+			Name:        "escalate",
+			Description: "asks the operator",
+			Schema:      objectSchema(),
+			Handler: func(ctx context.Context, _ json.RawMessage, tc *CallContext) (string, error) {
+				ok, err := tc.Prompter().Confirm(ctx, "escalate?")
+				if err != nil {
+					return "", err
+				}
+				return Result(map[string]any{"escalated": ok})
+			},
+		})
+	}
+
+	It("Should deny, not panic, when dispatched with the default-deny prompter", func() {
+		_, err := promptingTool().Call(context.Background(), json.RawMessage(`{}`), toolkit.DefaultDenyPrompter())
+		Expect(err).To(MatchError(ContainSubstring("no operator is available")))
+	})
+
+	It("Should default a nil prompter to deny rather than dereferencing it", func() {
+		_, err := promptingTool().Call(context.Background(), json.RawMessage(`{}`), nil)
+		Expect(err).To(MatchError(ContainSubstring("no operator is available")))
+	})
+})

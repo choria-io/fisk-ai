@@ -25,9 +25,11 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/choria-io/fisk-ai/config"
+	"github.com/choria-io/fisk-ai/internal/a2a"
 	"github.com/choria-io/fisk-ai/internal/agent"
 	"github.com/choria-io/fisk-ai/internal/agenttest"
 	"github.com/choria-io/fisk-ai/internal/llm"
+	"github.com/choria-io/fisk-ai/internal/memory/file"
 	"github.com/choria-io/fisk-ai/internal/rag"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/toolkit"
@@ -769,4 +771,210 @@ func TestExample_CustomToolConfirmGated(t *testing.T) {
 	g.Expect(approved).To(BeTrue())
 	g.Expect(events.ToolResults()).To(HaveLen(1))
 	g.Expect(events.HasWarning(agent.WarnConfirmNoTerminal)).To(BeFalse())
+}
+
+// TestExample_SharedMemoryStore injects one caller-built memory store
+// (memory/file.NewFileStore) into two sequential runs and proves Run borrows it: a
+// memory written through the model in run 1 is still readable through the same handle
+// after run 2, since Run used the injected store verbatim and never closed it. Mirrors
+// TestExample_SharedRAGStore.
+func TestExample_SharedMemoryStore(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	// One store the caller builds and owns, shared across the runs.
+	store, err := file.NewFileStore(t.TempDir())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	app := agenttest.NewFakeApp(t, exampleApp())
+
+	// Run 1: the model writes a memory through the built-in memory_write tool.
+	write := json.RawMessage(`{"key":"build.notes","description":"how the build works","content":"run abt t u"}`)
+	provider1 := agenttest.NewScriptedProvider(t,
+		agenttest.ToolUseResponse("c1", "memory_write", write),
+		agenttest.TextResponse("saved"),
+	)
+	res1, err := agent.Run(ctx, agent.Options{
+		Config:      agenttest.Config(t, app, agenttest.WithMemory()),
+		ConfigFile:  "agent.yaml",
+		Prompt:      []string{"remember the build"},
+		Provider:    provider1,
+		MemoryStore: store,
+	}, agenttest.NewRecordingEvents(), agenttest.NewScriptedPrompter(t))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res1.Reason).To(Equal(runstate.ReasonCompleted))
+
+	// Run 2: a second run against the same injected store completes, existing only to
+	// prove the store survives another run (Run did not close it between the two).
+	provider2 := agenttest.NewScriptedProvider(t, agenttest.TextResponse("done"))
+	res2, err := agent.Run(ctx, agent.Options{
+		Config:      agenttest.Config(t, app, agenttest.WithMemory()),
+		ConfigFile:  "agent.yaml",
+		Prompt:      []string{"go"},
+		Provider:    provider2,
+		MemoryStore: store,
+	}, agenttest.NewRecordingEvents(), agenttest.NewScriptedPrompter(t))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res2.Reason).To(Equal(runstate.ReasonCompleted))
+
+	// The memory written by run 1 is still readable through the caller's handle after
+	// run 2, proving Run borrowed the store rather than rebuilding or closing it.
+	description, content, err := store.Read(ctx, "build.notes")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(description).To(Equal("how the build works"))
+	g.Expect(content).To(ContainSubstring("run abt t u"))
+}
+
+// TestExample_SharedSessionStore injects one in-memory session store into a
+// checkpoint+resume pair and proves Run borrows it: run 1 suspends into the injected
+// store and run 2 resumes from it. Because the store lives only in that instance, the
+// resume succeeds only because Run used the injected store for both runs rather than
+// building its own from cfg. Adapts TestExample_CheckpointSuspendResume, and unlike it
+// needs no StoreDir since the store is supplied directly.
+func TestExample_SharedSessionStore(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	store := agenttest.NewFakeSessionStore(t)
+	app := agenttest.NewFakeApp(t, exampleApp())
+
+	// Run 1: one tool call, then a suspend at the next boundary, journaled to the store.
+	suspendPolls := 0
+	res1, err := agent.Run(ctx, agent.Options{
+		Config:           agenttest.Config(t, app),
+		ConfigFile:       "agent.yaml",
+		Prompt:           []string{"start work"},
+		Provider:         agenttest.NewScriptedProvider(t, agenttest.ToolUseResponse("c1", "do", json.RawMessage(`{"subject":"x"}`))),
+		Checkpoint:       agent.Checkpoint{Enabled: true},
+		SessionStore:     store,
+		SuspendRequested: func() bool { suspendPolls++; return suspendPolls > 1 },
+	}, agenttest.NewRecordingEvents(), agenttest.NewScriptedPrompter(t))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res1.Reason).To(Equal(runstate.ReasonSuspended))
+	g.Expect(res1.SessionID).NotTo(BeEmpty())
+
+	// Run 2: resume the saved session from the same injected store to a final answer.
+	res2, err := agent.Run(ctx, agent.Options{
+		Config:       agenttest.Config(t, app),
+		ConfigFile:   "agent.yaml",
+		Provider:     agenttest.NewScriptedProvider(t, agenttest.TextResponse("finished")),
+		Checkpoint:   agent.Checkpoint{ResumeID: res1.SessionID},
+		SessionStore: store,
+	}, agenttest.NewRecordingEvents(), agenttest.NewScriptedPrompter(t))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res2.Reason).To(Equal(runstate.ReasonCompleted))
+	g.Expect(res2.SessionID).To(Equal(res1.SessionID))
+}
+
+// TestExample_InjectedA2ATransport configures a remote_tools host and injects a fake
+// a2a.Transport, with no broker reachable, proving Run borrows the transport: the
+// remote tool is discovered and invoked through the fake, Run never dials, and it
+// never closes the borrowed transport. The a2a seam has no conflict error, so this is
+// the one place the skip-dial gating is directly observable end to end.
+func TestExample_InjectedA2ATransport(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+
+	// The fake answers discovery with a card exposing one tool and answers that tool's
+	// invocation with a fixed result.
+	transport := agenttest.NewFakeTransport(t, a2a.AgentCard{
+		Name:    "weather-svc",
+		Version: "1.0.0",
+		Tools: []a2a.ToolDescriptor{{
+			Name:        "forecast",
+			Description: "get the forecast",
+			InputSchema: json.RawMessage(`{"type":"object"}`),
+		}},
+	})
+	transport.SetToolReply(`{"forecast":"sunny"}`, false)
+
+	app := agenttest.NewFakeApp(t, exampleApp())
+	cfg := agenttest.Config(t, app)
+	cfg.RemoteTools = []config.RemoteToolHost{{Name: "weather-svc"}}
+
+	provider := agenttest.NewScriptedProvider(t,
+		agenttest.ToolUseResponse("call-1", "forecast", json.RawMessage(`{}`)),
+		agenttest.TextResponse("done"),
+	)
+	events := agenttest.NewRecordingEvents()
+
+	res, err := agent.Run(ctx, agent.Options{
+		Config:       cfg,
+		ConfigFile:   "agent.yaml",
+		Prompt:       []string{"what is the forecast"},
+		Provider:     provider,
+		A2ATransport: transport,
+	}, events, agenttest.NewScriptedPrompter(t))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.Reason).To(Equal(runstate.ReasonCompleted))
+
+	// The imported tool round-tripped through the fake: discovery at import, then the
+	// one tool call. The borrowed transport was never closed by Run.
+	g.Expect(transport.RoundTrips()).To(BeNumerically(">=", 2))
+	g.Expect(transport.Closed()).To(BeFalse())
+
+	// The result the fake returned came back to the model as a tool result.
+	results := events.ToolResults()
+	g.Expect(results).To(HaveLen(1))
+	g.Expect(results[0].IsError).To(BeFalse())
+	g.Expect(results[0].Output).To(ContainSubstring("sunny"))
+}
+
+// TestExample_CustomToolElicits shows a custom tool consulting the operator: its
+// handler calls tc.Prompter().Confirm, which routes to the run's prompter, and the
+// operator's answer flows back to the model. It is the discoverability example for the
+// otherwise-invisible CallContext.Prompter() seam every custom-tool example previously
+// discarded; a run with no operator would fail this same call closed (the functool
+// package's fail-closed spec asserts that half).
+func TestExample_CustomToolElicits(t *testing.T) {
+	g := NewWithT(t)
+
+	tool, err := functool.New(functool.Spec{
+		Name:        "escalate_ticket",
+		Description: "escalate a support ticket to a human",
+		Schema:      map[string]any{"type": "object"},
+		Handler: func(ctx context.Context, input json.RawMessage, tc *functool.CallContext) (string, error) {
+			// A custom tool may consult the operator through the run's prompter; a run with
+			// no operator fails closed.
+			ok, err := tc.Prompter().Confirm(ctx, "escalate this ticket to a human?")
+			if err != nil {
+				return "", err
+			}
+			return functool.Result(map[string]any{"escalated": ok})
+		},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	app := agenttest.NewFakeApp(t, exampleApp())
+	provider := agenttest.NewScriptedProvider(t,
+		agenttest.ToolUseResponse("call-1", "escalate_ticket", json.RawMessage(`{}`)),
+		agenttest.TextResponse("done"),
+	)
+	events := agenttest.NewRecordingEvents()
+
+	// The scripted prompter records the question and approves it, standing in for a
+	// reachable operator.
+	prompter := agenttest.NewScriptedPrompter(t)
+	var asked string
+	prompter.ConfirmFn = func(q string) (bool, error) {
+		asked = q
+		return true, nil
+	}
+
+	res, err := agent.Run(context.Background(), agent.Options{
+		Config:      agenttest.Config(t, app),
+		ConfigFile:  "agent.yaml",
+		Prompt:      []string{"escalate my ticket"},
+		Provider:    provider,
+		CustomTools: []toolkit.Tool{tool},
+	}, events, prompter)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.Reason).To(Equal(runstate.ReasonCompleted))
+
+	// The handler reached the operator through the run's prompter with its own question,
+	// and the approved answer came back as the tool result.
+	g.Expect(asked).To(Equal("escalate this ticket to a human?"))
+	results := events.ToolResults()
+	g.Expect(results).To(HaveLen(1))
+	g.Expect(results[0].Output).To(ContainSubstring(`"escalated":true`))
 }
