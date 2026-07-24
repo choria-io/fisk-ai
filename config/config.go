@@ -122,15 +122,14 @@ type HarnessConfig struct {
 	// active only when the embeddings sub-block is present.
 	RAG *RAGConfig `json:"knowledge,omitempty" yaml:"knowledge,omitempty"`
 	// Sessions selects and configures the store that holds checkpointed run
-	// journals. It is deliberately NOT parsed from the config file yet (yaml:"-"):
-	// it is synthesized at boot from the --state-dir flag and defaults (see
-	// SessionConfigFromStateDir), so the construction path is already the one a
-	// future YAML block will use. Exposing it to the file is a designed change (it
-	// needs strict options decoding, unknown-backend validation, and the
-	// --state-dir precedence rule), not a one-line tag flip; when that lands, change
-	// the tag to yaml:"sessions,omitempty" and route it through the same canonical
-	// JSON path memory uses for its options block.
-	Sessions *SessionConfig `json:"-" yaml:"-"`
+	// journals. Like the memory and knowledge blocks its options are captured as a
+	// raw block (through the same canonical JSON path, so an unknown option key fails
+	// as loudly as an unknown top-level key) and decoded per backend at store
+	// construction. It is optional: an absent block resolves to the file backend
+	// under the XDG default (see SessionBackend). The --state-dir flag is folded in
+	// last, after parsing, by ApplyStateDir, so an explicit flag still wins over a
+	// configured file directory and is rejected against a non-file backend.
+	Sessions *SessionConfig `json:"sessions,omitempty" yaml:"sessions,omitempty"`
 }
 
 // SessionConfig selects and configures the session store backend. Its shape
@@ -185,6 +184,26 @@ func SessionConfigFromStateDir(dir string) *SessionConfig {
 		Backend: "file",
 		Options: json.RawMessage(fmt.Sprintf(`{"directory":%q}`, dir)),
 	}
+}
+
+// ApplyStateDir folds the --state-dir flag into the session config after the file
+// has been parsed, so an explicit flag wins over a configured directory. It applies
+// only to the file backend: --state-dir names a filesystem directory, which a
+// non-file backend (jetstream) has no place for, so combining the two is a hard
+// error rather than a silently ignored flag. An empty dir is a no-op, leaving
+// whatever the config set (or the nil default that resolves to the file backend).
+func (c *Config) ApplyStateDir(dir string) error {
+	if dir == "" {
+		return nil
+	}
+
+	if c.SessionBackend() != "file" {
+		return fmt.Errorf("--state-dir applies only to the file session backend, but harness.sessions.backend is %q: remove --state-dir, or set harness.sessions.backend to \"file\"", c.SessionBackend())
+	}
+
+	c.Harness.Sessions = SessionConfigFromStateDir(dir)
+
+	return nil
 }
 
 // RAGConfig configures the built-in knowledge_search tool and the backing SQLite

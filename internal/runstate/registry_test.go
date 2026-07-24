@@ -31,6 +31,10 @@ func init() {
 		lastFakeOptions = string(options)
 		return stubStore{}, nil
 	})
+
+	Register("faketest.nats", func(_ RuntimeEnv, _ json.RawMessage) (Store, error) {
+		return stubStore{}, nil
+	}, RequiresNats())
 }
 
 var _ = Describe("Register", func() {
@@ -55,15 +59,29 @@ var _ = Describe("Register", func() {
 
 var _ = Describe("New", func() {
 	It("Should dispatch to the registered backend with the options", func() {
-		store, err := New("faketest", json.RawMessage(`{"any":"thing"}`), "")
+		store, err := New("faketest", json.RawMessage(`{"any":"thing"}`), RuntimeEnv{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(store).To(BeAssignableToTypeOf(stubStore{}))
 		Expect(lastFakeOptions).To(Equal(`{"any":"thing"}`))
 	})
 
 	It("Should reject an unknown backend and list the known ones", func() {
-		_, err := New("redis", nil, "")
+		_, err := New("redis", nil, RuntimeEnv{})
 		Expect(err).To(MatchError(ContainSubstring("unknown session backend")))
 		Expect(err).To(MatchError(ContainSubstring("faketest")))
+	})
+})
+
+var _ = Describe("NeedsNats", func() {
+	It("Should report true for a backend that declared RequiresNats", func() {
+		Expect(NeedsNats("faketest.nats")).To(BeTrue())
+	})
+
+	It("Should report false for a backend that declared no requirement", func() {
+		Expect(NeedsNats("faketest")).To(BeFalse())
+	})
+
+	It("Should report false for an unknown backend, leaving New to surface it", func() {
+		Expect(NeedsNats("redis")).To(BeFalse())
 	})
 })

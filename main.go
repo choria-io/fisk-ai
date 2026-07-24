@@ -45,6 +45,7 @@ var (
 	resumeID          string
 	forceResume       bool
 	stateDirFlag      string
+	sessionConfigFile string
 	sessionArgID      string
 	sessionTranscript bool
 )
@@ -62,7 +63,7 @@ func interruptContext() (context.Context, context.CancelFunc) {
 func main() {
 	util.SetVersion(version)
 
-	cmd := fisk.New("fisk-ai", "Fisk AI Agent builder")
+	cmd := fisk.New("fisk", "Fisk AI Toolkit")
 	cmd.Version(version)
 
 	registerRunCommand(cmd)

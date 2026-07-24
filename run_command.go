@@ -69,10 +69,13 @@ func runAction(_ *fisk.ParseContext) error {
 		return err
 	}
 
-	// The session store is not configured in the file yet; synthesize it from
-	// --state-dir (and its default) so the construction path is the one a future
-	// YAML block will use. The flag is applied here, last, so it always wins.
-	cfg.Harness.Sessions = config.SessionConfigFromStateDir(stateDirFlag)
+	// Fold --state-dir into the (possibly file-configured) session config, applied
+	// last so an explicit flag wins over a configured file directory. It is a hard
+	// error against a non-file backend, which has no place for a filesystem path.
+	err = cfg.ApplyStateDir(stateDirFlag)
+	if err != nil {
+		return err
+	}
 
 	// --http-debug dumps the API bodies to a file rather than stderr, so it coexists
 	// with the full-screen UI whose alt-screen stderr would otherwise be corrupted.

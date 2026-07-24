@@ -50,8 +50,11 @@ import (
 	"github.com/choria-io/fisk-ai/internal/remotetools"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	// Link the file session backend in so it registers itself; runstate.New resolves
-	// the configured backend from the registry, and this is the sole backend today.
+	// the configured backend from the registry.
 	_ "github.com/choria-io/fisk-ai/internal/runstate/file"
+	// Link the jetstream session backend in so it registers itself; it binds a
+	// pre-existing NATS JetStream stream over the shared connection.
+	_ "github.com/choria-io/fisk-ai/internal/runstate/jetstream"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
@@ -417,17 +420,27 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 		events.Warn(Warning{Kind: WarnHITLNoTerminal})
 	}
 
+	// Whether this run journals its state: an explicit --checkpoint, or a --resume of
+	// a stored session. It gates both the session-store dial just below and the store
+	// construction further down, so it is resolved once here, above the dial.
+	checkpointing := opts.Checkpoint.Enabled || opts.Checkpoint.ResumeID != ""
+
 	// Acquire the shared NATS connection once, ahead of every subsystem that needs
-	// it: the jetstream memory backend just below, and remote tools further down. A
-	// run that uses several of them then establishes a single connection. A
-	// caller-injected Provider is borrowed: the caller established it and shares it
-	// across concurrent runs, so Run uses it but never Closes it. Only a connection
-	// Run dials itself is owned and released here; dialing per run is the CLI path.
+	// it: the jetstream memory backend just below, the jetstream session store, and
+	// remote tools further down. A run that uses several of them then establishes a
+	// single connection. A caller-injected Provider is borrowed: the caller
+	// established it and shares it across concurrent runs, so Run uses it but never
+	// Closes it. Only a connection Run dials itself is owned and released here; dialing
+	// per run is the CLI path.
 	memNeedsNats := memory.NeedsNats(cfg)
+	// A jetstream session store only needs NATS when the run actually journals: an
+	// un-checkpointed run stores no session, so gate the dial on checkpointing rather
+	// than dialing (and failing on) NATS for a run that never touches the store.
+	sessionNeedsNats := checkpointing && runstate.NeedsNats(cfg.SessionBackend())
 	var natsConns *conns.Provider
 	if opts.Conns != nil {
 		natsConns = opts.Conns
-	} else if memNeedsNats || len(cfg.RemoteTools) > 0 {
+	} else if memNeedsNats || sessionNeedsNats || len(cfg.RemoteTools) > 0 {
 		p, err := conns.Connect(cfg.NatsContext, cfg.Identity)
 		if err != nil {
 			return res, fmt.Errorf("connecting to NATS: %w", err)
@@ -769,7 +782,8 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	thinking := cfg.ThinkingEnabled()
 	maxOutputTokens := resolveMaxOutputTokens(cfg, thinking)
 
-	checkpointing := opts.Checkpoint.Enabled || opts.Checkpoint.ResumeID != ""
+	// checkpointing was resolved above the NATS dial (the session store it gates
+	// depends on that connection); only interactive is decided here.
 	interactive := opts.NextPrompt != nil
 
 	info := RunInfo{
@@ -797,7 +811,7 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 			return res, err
 		}
 
-		store, err := runstate.New(cfg.SessionBackend(), cfg.SessionRawOptions(), opts.StoreDir)
+		store, err := runstate.New(cfg.SessionBackend(), cfg.SessionRawOptions(), runstate.RuntimeEnv{StoreDir: opts.StoreDir, Nats: natsConns.Nats()})
 		if err != nil {
 			return res, err
 		}
@@ -1045,10 +1059,22 @@ func endsOnAssistant(messages []llm.Message) bool {
 // resume without the operator re-passing the flag. It does not lock the session (the
 // subsequent resume takes the lock), so it is a cheap pre-flight read.
 func SessionInteractive(cfg *config.Config, id string) (bool, error) {
-	// This is a CLI-only pre-flight read, where run journals live in the XDG default,
-	// so it resolves with no store base. A server resume runs through Run, which passes
-	// its StoreDir.
-	store, err := runstate.New(cfg.SessionBackend(), cfg.SessionRawOptions(), "")
+	// This is a CLI-only pre-flight read. A file-backed journal lives in the XDG
+	// default, so the file backend resolves with an empty environment (a server resume
+	// runs through Run, which passes its own StoreDir). A jetstream backend needs a
+	// connection: dial a short-lived one here for the read; the resume that follows
+	// dials its own through Run (the double dial is accepted for simplicity).
+	env := runstate.RuntimeEnv{}
+	if runstate.NeedsNats(cfg.SessionBackend()) {
+		p, err := conns.Connect(cfg.NatsContext, cfg.Identity)
+		if err != nil {
+			return false, fmt.Errorf("connecting to NATS for the jetstream session pre-flight read: %w", err)
+		}
+		defer p.Close()
+		env.Nats = p.Nats()
+	}
+
+	store, err := runstate.New(cfg.SessionBackend(), cfg.SessionRawOptions(), env)
 	if err != nil {
 		return false, err
 	}

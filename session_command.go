@@ -5,6 +5,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -15,25 +16,74 @@ import (
 	"github.com/choria-io/ui/table"
 
 	"github.com/choria-io/fisk-ai/config"
+	"github.com/choria-io/fisk-ai/internal/conns"
 	"github.com/choria-io/fisk-ai/internal/runstate"
 	"github.com/choria-io/fisk-ai/internal/tui"
 	"github.com/choria-io/fisk-ai/internal/util"
 )
 
-// openSessionStore opens the session store the inspection subcommands read. The
-// session command parses no agent config, so it synthesizes the session config
-// from --state-dir (and its default) the same way runAction does, resolving the
-// store identically across the run and session commands.
-func openSessionStore() (runstate.Store, error) {
-	sc := config.SessionConfigFromStateDir(stateDirFlag)
+// openSessionStore opens the session store the inspection subcommands read and
+// returns a cleanup that releases any NATS connection it dialed (always non-nil, safe
+// to defer). Without --config it uses the file backend under --state-dir, today's
+// behavior; with --config it reads the configured backend (parsed in the lenient MCP
+// mode, since the session command needs no prompt or model) and dials NATS when that
+// backend requires it. --state-dir is folded in through the same ApplyStateDir the run
+// command uses, so combining it with a non-file backend is the same hard error in both.
+func openSessionStore() (runstate.Store, func(), error) {
+	noop := func() {}
 
-	// The session command locates the store through --state-dir (folded into the
-	// backend options), not a store base, so it passes none.
-	return runstate.New(sc.BackendName(), sc.RawOptions(), "")
+	var cfg *config.Config
+	if sessionConfigFile == "" {
+		cfg = config.NewConfig()
+	} else {
+		var err error
+		cfg, err = config.ParseConfigFileForMode(sessionConfigFile, config.ModeMCP)
+		if err != nil {
+			return nil, noop, err
+		}
+	}
+
+	err := cfg.ApplyStateDir(stateDirFlag)
+	if err != nil {
+		return nil, noop, err
+	}
+
+	backend := cfg.SessionBackend()
+
+	// A file backend keeps its journals locally and needs no connection; a jetstream
+	// backend borrows a short-lived one, released by the returned cleanup. The dialed
+	// provider is closed here if store construction then fails, so no connection leaks
+	// on an error path.
+	env := runstate.RuntimeEnv{}
+	cleanup := noop
+	if runstate.NeedsNats(backend) {
+		p, err := conns.Connect(cfg.NatsContext, cfg.Identity)
+		if err != nil {
+			// conns.Connect already names the NATS context; add the stream so an
+			// unreachable jetstream backend names both. The stream is decoded
+			// best-effort: this is an error message, not a validation path.
+			var opts struct {
+				Stream string `json:"stream"`
+			}
+			_ = json.Unmarshal(cfg.SessionRawOptions(), &opts)
+			return nil, noop, fmt.Errorf("opening the %q session backend (stream %q): %w", backend, opts.Stream, err)
+		}
+		env.Nats = p.Nats()
+		cleanup = p.Close
+	}
+
+	store, err := runstate.New(backend, cfg.SessionRawOptions(), env)
+	if err != nil {
+		cleanup()
+		return nil, noop, err
+	}
+
+	return store, cleanup, nil
 }
 
 func registerSessionCommand(cmd *fisk.Application) {
 	session := cmd.Command("session", "Manage checkpointed agent runs")
+	session.Flag("config", "Path to an agent configuration file whose session backend to use (default: the file backend under --state-dir)").ExistingFileVar(&sessionConfigFile)
 	session.Flag("state-dir", "Directory holding checkpointed sessions (default: XDG state dir)").StringVar(&stateDirFlag)
 
 	session.Command("ls", "Lists checkpointed sessions").Alias("list").Action(sessionLsAction)
@@ -56,17 +106,24 @@ func sessionStatus(reason runstate.TerminalReason) string {
 }
 
 func sessionLsAction(_ *fisk.ParseContext) error {
-	store, err := openSessionStore()
+	store, cleanup, err := openSessionStore()
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 
 	infos, err := store.List()
 	if err != nil {
 		return err
 	}
 	if len(infos) == 0 {
-		fmt.Println("No checkpointed sessions")
+		// Without --config the file backend is all that was consulted, so hint that a
+		// configured backend (if that is where the operator's sessions live) needs it.
+		if sessionConfigFile == "" {
+			fmt.Println("No checkpointed sessions (file backend; pass --config if your sessions are in a configured backend)")
+		} else {
+			fmt.Println("No checkpointed sessions")
+		}
 		return nil
 	}
 
@@ -86,10 +143,11 @@ func sessionLsAction(_ *fisk.ParseContext) error {
 }
 
 func sessionShowAction(_ *fisk.ParseContext) error {
-	store, err := openSessionStore()
+	store, cleanup, err := openSessionStore()
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 
 	rs, err := store.Load(sessionArgID)
 	if err != nil {
@@ -177,10 +235,11 @@ func showTranscriptTUI(rs *runstate.RunState) (bool, error) {
 }
 
 func sessionRmAction(_ *fisk.ParseContext) error {
-	store, err := openSessionStore()
+	store, cleanup, err := openSessionStore()
 	if err != nil {
 		return err
 	}
+	defer cleanup()
 
 	err = store.Delete(sessionArgID)
 	if err != nil {
