@@ -402,14 +402,14 @@ without it.
 Run `fisk info` to see which globals a binary exposes; it lists the application's global flags and marks the ones you
 have allowlisted.
 
-### Session snapshots and resumption
-
-#### Creating a snapshot
+## Session snapshots and resumption
 
 By default a run is ephemeral: its conversation lives only in memory and is lost when the process exits. `--checkpoint`
-instead journals the run to a session on disk so it can be suspended and resumed later, in a fresh process or on another
+instead journals the run to a session so it can be suspended and resumed later, in a fresh process or on another
 machine. Sessions are the foundation for longer-running work where the agent may need to pause, for example while a slow
 external step completes.
+
+### Creating and resuming a snapshot
 
 Start a checkpointed run. fisk prints the session id at startup; it is generated unless `--name` sets it:
 
@@ -428,7 +428,7 @@ $ fisk run --resume orders-report
 On resume fisk replays the conversation so far to stderr, so the run continues in context rather than from a blank
 screen, then carries on from where it left off.
 
-#### Chat sessions
+### Chat sessions
 
 `--chat` and `--checkpoint` combine into a durable, resumable conversation.
 
@@ -442,13 +442,13 @@ since the session already knows what it is), and fisk first replays the conversa
 input bar needs a real terminal, a chat session can only be resumed in the full-screen UI, not with `--no-tui` or over a
 pipe. A checkpointed chat has no "completed" state; remove it with `session rm` once it is no longer needed.
 
-#### Suspending
+### Suspending
 
 For a checkpointed run the first `Ctrl-C`, or a SIGTERM, requests a graceful suspend: the current step finishes, the
 session is checkpointed, and the process exits printing how to resume it. A second `Ctrl-C` aborts immediately. A run
 started without `--checkpoint` keeps the usual behavior, where `Ctrl-C` cancels it.
 
-#### Durability
+### Durability
 
 A session is journaled event by event as the run proceeds: each model turn and each tool result is recorded as it
 happens.
@@ -468,11 +468,10 @@ conversation may not fit the current configuration. The provider is the one exce
 `llm.provider` can never be resumed against another, and `--force` does not apply. A session that already completed
 cannot be resumed.
 
-#### Managing sessions
+### Managing sessions
 
-Sessions are stored under the `XDG` state directory, `$XDG_STATE_HOME/fisk-ai/runs`, defaulting to
-`~/.local/state/fisk-ai/runs`; `--state-dir` overrides the location. A suspended or completed session is kept until it
-is removed.
+A suspended or completed session is kept until it is removed. List, inspect, and remove sessions with the `session`
+subcommands:
 
 ```nohighlight
 fisk session ls
@@ -486,14 +485,26 @@ status; `--transcript` shows the full conversation (prompt, thinking, narration,
 interactive terminal `--transcript` opens the full-screen viewer with thinking and tool output folded, which `z` and `Z`
 expand; `--no-tui`/`NO_TUI` prints it as line output instead. `session rm` deletes a session.
 
-#### Storage backends
+These commands read the `file` backend under `--state-dir` by default. To inspect sessions in a configured backend, a
+jetstream stream or a file directory named in the config, pass that config with `--config`:
+
+```nohighlight
+fisk session ls --config agent.yaml
+fisk session show <id> --config agent.yaml
+```
 
 Where a session is journaled is configurable through `harness.sessions`, which mirrors the shape of `harness.memory`.
 Two backends ship: `file` (the default) and `jetstream` {{% badge style="primary" title="Version" %}}0.0.3{{% /badge %}}.
-The block is optional; leaving it out keeps the `file` backend under the `XDG` state directory described above.
+The block is optional; leaving it out keeps the `file` backend under the `XDG` state directory.
 
-The `file` backend keeps each session as a JSON-lines journal under a directory. Set `options.directory` to move it off
-the default `XDG` path:
+`fisk info` shows a `Sessions` section with the resolved backend and, for the jetstream backend, the stream and NATS
+context, so you can confirm where sessions are stored without starting a run.
+
+### File backend
+
+The `file` backend keeps each session as a JSON-lines journal under a directory. Sessions are stored under the `XDG`
+state directory, `$XDG_STATE_HOME/fisk-ai/runs`, defaulting to `~/.local/state/fisk-ai/runs`. Set `options.directory` to
+move it off the default `XDG` path:
 
 ```yaml
 harness:
@@ -506,6 +517,8 @@ harness:
 `--state-dir` overrides `options.directory` for a single `run` or `session` command, so the flag always wins over the
 configured path. It applies only to the `file` backend: combining it with a non-file backend is an error rather than a
 silently ignored flag.
+
+### JetStream backend
 
 The `jetstream` backend keeps sessions as messages on a NATS JetStream stream instead of on disk, so a run suspended on
 one machine resumes on another over a broker. It uses the connection from the configured `nats_context`, the same one
@@ -536,20 +549,6 @@ expire. The subject prefix (`fisk.sessions` above) is yours to choose; the backe
 wildcard subject when it binds, so it is not set in the config. The backend fails at run start, rather than degrading silently, if
 the stream does not exist or its configuration does not match this shape. Sessions are never namespaced by identity, so a
 run started by one agent is found by another reading the same stream; keep separate environments in separate streams.
-
-#### Inspecting a configured backend
-
-`session ls`, `session show`, and `session rm` read the `file` backend under `--state-dir` by default. To inspect
-sessions in a configured backend, a jetstream stream or a file directory named in the config, pass that config with
-`--config`:
-
-```nohighlight
-fisk session ls --config agent.yaml
-fisk session show <id> --config agent.yaml
-```
-
-To confirm which backend a config resolves to without starting a run, `fisk info` shows a `Sessions` section with the
-resolved backend and, for the jetstream backend, the stream and NATS context.
 
 ## Human in the loop (HITL)
 
