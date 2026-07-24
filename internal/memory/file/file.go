@@ -5,8 +5,9 @@
 // Package file is the file-backed memory backend: one markdown file per key
 // under a directory, each carrying its one-line description in YAML frontmatter.
 // Importing this package registers the backend under memory.BackendFile, so the
-// program links it in by importing it (usually for its side effect). It holds no
-// exported API beyond that registration.
+// program links it in by importing it (usually for its side effect). Beyond that
+// registration it exports NewFileStore, the constructor a Go caller embedding the
+// agent uses to build a built-in store to hand to agent.Options.MemoryStore.
 package file
 
 import (
@@ -89,6 +90,18 @@ func newFileStore(dir string) (*fileStore, error) {
 	}
 
 	return &fileStore{dir: dir}, nil
+}
+
+// NewFileStore opens the file-backed memory store rooted at dir, creating the directory
+// if needed. It is the constructor a Go caller embedding the agent uses to build a
+// built-in store to hand to agent.Options.MemoryStore, without importing this package
+// for its registration side effect. dir is used verbatim (no identity namespacing, no
+// StoreDir rebasing); the caller resolves the path it wants. The store is safe for
+// concurrent use across runs: writes stage in a temp file and link or rename into place
+// atomically, so a reader never observes a half-written value and concurrent overwrites
+// of one key are last-write-wins.
+func NewFileStore(dir string) (memory.Store, error) {
+	return newFileStore(dir)
 }
 
 // path returns the filename for key. The key is validated by the caller, so it

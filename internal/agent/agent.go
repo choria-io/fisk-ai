@@ -216,6 +216,44 @@ type Options struct {
 	// knowledge.
 	RAGStore *rag.Store
 
+	// MemoryStore, when non-nil, is the memory store Run borrows instead of building one
+	// from cfg. It lets a caller running many agents in one process construct a store once
+	// and share it across runs of one identity, rather than each run building its own from
+	// the configured backend. It is used verbatim when set: Run does not consult the
+	// configured backend, does not provision a memory.RuntimeEnv (no StoreDir rebasing, no
+	// NATS connection), and never closes it (the memory.Store interface exposes no Close;
+	// the caller closes the concrete backend it built). It must be safe for concurrent
+	// use: the runs sharing it call it concurrently. Unlike an injected Provider it
+	// holds no subprocess-facing secret, so the credential scrub does not apply to it.
+	// When nil, Run builds a store per run from cfg and opts.StoreDir, the CLI path. It is
+	// consulted only when the config enables memory (harness.memory); with memory disabled
+	// it is ignored. Setting it while cfg also names a non-default memory backend is a
+	// run-start error, since that would name two stores.
+	MemoryStore memory.Store
+
+	// SessionStore, when non-nil, is the run-journal store Run borrows for checkpointing
+	// and resume instead of building one from cfg. A caller running many agents in one
+	// process constructs one store and shares it. It is used verbatim when set: Run does
+	// not consult the configured backend, does not provision a runstate.RuntimeEnv, and
+	// never closes it. It must be safe for concurrent use: the runs sharing it call it
+	// concurrently. When nil, Run builds a store per run from cfg and opts.StoreDir. It
+	// is consulted only when the run journals (an explicit Checkpoint or a resume); an
+	// un-checkpointed run never touches it, so injecting it into a one-shot run is a no-op.
+	// Setting it while cfg also names a non-default session backend is a run-start error.
+	SessionStore runstate.Store
+
+	// A2ATransport, when non-nil, is the a2a client transport Run borrows for importing
+	// remote tools instead of constructing one from the registry over Conns. It is used
+	// verbatim when set and never closed, and must be safe for concurrent use: the runs
+	// sharing it call RoundTrip concurrently. When nil, Run constructs the transport per run
+	// from cfg.A2ATransport() (its NAME string, not this value) over the shared connection.
+	// It is consulted only when the config declares remote_tools; with none it is ignored,
+	// so injecting it into a run with no remote tools is a no-op. It is a client transport:
+	// Run never serves a2a (that is the `agent a2a` command's separate seam). Do not
+	// confuse it with config.Config.A2ATransport(), which returns the transport name string
+	// this field replaces.
+	A2ATransport a2a.Transport
+
 	// CustomTools are application tools a Go caller injects into the run, addressed by
 	// the model by name alongside the wrapped application's command tools, the built-ins
 	// and any remote tools. The recommended way to build one is functool.New (whose
@@ -432,15 +470,18 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	// established it and shares it across concurrent runs, so Run uses it but never
 	// Closes it. Only a connection Run dials itself is owned and released here; dialing
 	// per run is the CLI path.
-	memNeedsNats := memory.NeedsNats(cfg)
+	// An injected store or transport is self-contained (the caller provisioned it), so
+	// it must not force Run to dial: gate each term on its seam not being injected.
+	memNeedsNats := opts.MemoryStore == nil && memory.NeedsNats(cfg)
 	// A jetstream session store only needs NATS when the run actually journals: an
 	// un-checkpointed run stores no session, so gate the dial on checkpointing rather
 	// than dialing (and failing on) NATS for a run that never touches the store.
-	sessionNeedsNats := checkpointing && runstate.NeedsNats(cfg.SessionBackend())
+	sessionNeedsNats := opts.SessionStore == nil && checkpointing && runstate.NeedsNats(cfg.SessionBackend())
+	transportNeedsNats := opts.A2ATransport == nil && len(cfg.RemoteTools) > 0
 	var natsConns *conns.Provider
 	if opts.Conns != nil {
 		natsConns = opts.Conns
-	} else if memNeedsNats || sessionNeedsNats || len(cfg.RemoteTools) > 0 {
+	} else if memNeedsNats || sessionNeedsNats || transportNeedsNats {
 		p, err := conns.Connect(cfg.NatsContext, cfg.Identity)
 		if err != nil {
 			return res, fmt.Errorf("connecting to NATS: %w", err)
@@ -459,9 +500,20 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	var memStore memory.Store
 	var memBuiltins []*functool.Tool
 	if cfg.MemoryEnabled() {
-		memStore, err = memory.New(cfg, memory.RuntimeEnv{StoreDir: opts.StoreDir, Nats: natsConns.Nats()})
-		if err != nil {
-			return res, err
+		// A caller-injected store is borrowed: a fleet shares one store across runs of one
+		// identity rather than each building its own. It is used verbatim (no configured
+		// backend, no RuntimeEnv, never closed). Naming both an injected store and an
+		// explicit non-default backend would name two stores, so that is rejected.
+		if opts.MemoryStore != nil {
+			if cfg.MemoryBackend() != memory.BackendFile {
+				return res, fmt.Errorf("Options.MemoryStore was injected but the config also selects a memory backend (harness.memory.backend %q): an injected store replaces the configured backend, so setting both is ambiguous; drop Options.MemoryStore to use the configured backend, or remove harness.memory.backend to use the injected store", cfg.MemoryBackend())
+			}
+			memStore = opts.MemoryStore
+		} else {
+			memStore, err = memory.New(cfg, memory.RuntimeEnv{StoreDir: opts.StoreDir, Nats: natsConns.Nats()})
+			if err != nil {
+				return res, err
+			}
 		}
 
 		memBuiltins = builtin.MemoryTools(cfg, memStore)
@@ -524,11 +576,18 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 	var remoteTools []*functool.Tool
 	remoteByName := map[string]*functool.Tool{}
 	if len(cfg.RemoteTools) > 0 {
-		// The shared connection was acquired above (natsConns), borrowed or owned as
-		// the case may be; remote tools reuse it rather than dialing a second time.
-		transport, err := a2a.NewTransport(cfg.A2ATransport(), natsConns, a2a.TransportConfig{Identity: cfg.Identity, Timeout: cfg.LLM.Budget.CallTimeoutParsed})
-		if err != nil {
-			return res, err
+		// A caller-injected transport is borrowed: a fleet shares one client transport
+		// across runs rather than each constructing its own. It is used verbatim and never
+		// closed (the caller owns it). Otherwise the shared connection acquired above
+		// (natsConns, borrowed or owned) is used to construct the registry transport, which
+		// reuses it rather than dialing a second time.
+		transport := opts.A2ATransport
+		if transport == nil {
+			transportName := cfg.A2ATransport()
+			transport, err = a2a.NewTransport(transportName, natsConns, a2a.TransportConfig{Identity: cfg.Identity, Timeout: cfg.LLM.Budget.CallTimeoutParsed})
+			if err != nil {
+				return res, err
+			}
 		}
 
 		client, err := a2a.NewClient(transport, cfg.Identity)
@@ -811,9 +870,21 @@ func Run(ctx context.Context, opts Options, events Events, prompter toolkit.Prom
 			return res, err
 		}
 
-		store, err := runstate.New(cfg.SessionBackend(), cfg.SessionRawOptions(), runstate.RuntimeEnv{StoreDir: opts.StoreDir, Nats: natsConns.Nats()})
-		if err != nil {
-			return res, err
+		// A caller-injected store is borrowed: a fleet shares one session store across runs
+		// rather than each building its own. It is used verbatim (no configured backend, no
+		// RuntimeEnv, never closed). Naming both an injected store and an explicit
+		// non-default backend would name two stores, so that is rejected.
+		var store runstate.Store
+		if opts.SessionStore != nil {
+			if cfg.SessionBackend() != runstate.BackendFile {
+				return res, fmt.Errorf("Options.SessionStore was injected but the config also selects a session backend (harness.sessions.backend %q): an injected store replaces the configured backend, so setting both is ambiguous; drop Options.SessionStore to use the configured backend, or remove harness.sessions.backend to use the injected store", cfg.SessionBackend())
+			}
+			store = opts.SessionStore
+		} else {
+			store, err = runstate.New(cfg.SessionBackend(), cfg.SessionRawOptions(), runstate.RuntimeEnv{StoreDir: opts.StoreDir, Nats: natsConns.Nats()})
+			if err != nil {
+				return res, err
+			}
 		}
 
 		if opts.Checkpoint.ResumeID != "" {
