@@ -238,8 +238,9 @@ Every handler tolerates a nil store and returns an error rather than panicking. 
 Traced output for the three key-taking tools runs the model-supplied key through `util.SanitizeForTerminal` before it
 reaches the screen, falling back to the bare tool name on a decode failure.
 
-None of these tools can be served over MCP. The configuration validator rejects any builtin other than
-`knowledge_search` by name (`config/config.go:1134`).
+None of these tools can be served over MCP or a2a. They declare no serving exposure, which the serving surfaces apply
+per tool, and the configuration validator independently rejects any name other than `knowledge_search` in the MCP
+allowlist. Both gates must pass, so neither one alone is load-bearing.
 
 ## Failing at construction
 

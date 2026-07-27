@@ -224,16 +224,24 @@ non-determinism here turns into a spurious resume refusal. See
 
 All in-process, all `KindBuiltin`, all never deferred.
 
-| Tool | Group | Notes |
-|------|-------|-------|
-| `ask_human_confirm` | HITL | Yes or no, deny by default |
-| `ask_human_select` | HITL | Up to 25 options, labels sanitized, never auto-picks |
-| `ask_human_input` | HITL | Free text with an editable default; the description says explicitly it is not for secrets |
-| `memory_list` | memory | The live view, contrasted with the start-of-run index |
-| `memory_read` | memory | A miss is a soft result, not an error |
-| `memory_write` | memory | Create by default; an existing-key reply names the colliding description |
-| `memory_delete` | memory | Idempotent |
-| `knowledge_search` | knowledge | The only built-in servable over MCP |
+Each declares the serving surfaces that may ever carry it. The declaration is the ceiling; an operator's allowlist
+narrows it further and can never widen past it, and the zero value serves nowhere.
+
+| Tool | Group | MCP | A2A | Notes |
+|------|-------|-----|-----|-------|
+| `ask_human_confirm` | HITL | no | no | Yes or no, deny by default |
+| `ask_human_select` | HITL | no | no | Up to 25 options, labels sanitized, never auto-picks |
+| `ask_human_input` | HITL | no | no | Free text with an editable default; the description says explicitly it is not for secrets |
+| `memory_list` | memory | no | no | The live view, contrasted with the start-of-run index |
+| `memory_read` | memory | no | no | A miss is a soft result, not an error |
+| `memory_write` | memory | no | no | Create by default; an existing-key reply names the colliding description |
+| `memory_delete` | memory | no | no | Idempotent |
+| `knowledge_search` | knowledge | yes | no | The only built-in that declares any serving exposure |
+
+The HITL tools need an operator at a terminal and the memory tools carry operator state, so neither is offered on a
+served surface. `knowledge_search` is read-only and needs no prompt, so it declares MCP. It declares no A2A exposure
+because there is no a2a `builtins` allowlist: without a selection mechanism, declaring it would serve it the moment an
+operator enables a2a, with nothing to narrow it.
 
 `mustNew` is the single chokepoint that stamps `KindBuiltin`, and it panics on a bad spec. A compiled-in static spec is
 correct by construction, so a failure there is a programming error, surfaced the way `regexp.MustCompile` does rather

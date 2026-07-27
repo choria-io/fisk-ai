@@ -331,7 +331,8 @@ expose:
 ```
 
 Only `knowledge_search` is accepted in `builtins`; listing any other built-in is a configuration error that names the
-exposable set. The MCP process opens the read-only store and, when embeddings are configured, embeds the query itself, so
+accepted set. The allowlist is the selection, not the ceiling: a built-in must also declare MCP exposure in its own
+definition, and the server applies both, so naming a tool here can never serve one that has not declared it. The MCP process opens the read-only store and, when embeddings are configured, embeds the query itself, so
 the embeddings server must be reachable from that process. Degrade-to-lexical and the stored model validation apply
 unchanged.
 
@@ -352,5 +353,7 @@ at-rest encryption, so the posture matches the [memory](../agents/#memory) featu
 * Embeddings secrets are supplied by environment-variable name and never logged, and are stripped from the environment of
   model-chosen command tools, so a tool cannot read the embeddings credential. A non-loopback embeddings `base_url` must
   use `https`, and the request timeout is enforced.
-* Over MCP the allowlist is the only gate, and only the read-only `knowledge_search` is ever served; no index or write
-  path is reachable over MCP.
+* Over MCP two gates apply, and both must pass: the tool itself declares whether it may ever be served over MCP, and the
+  allowlist selects which of those this operator wants served. The allowlist can only narrow the tools declared servable,
+  never widen past them, so a tool added alongside `knowledge_search` is not served on the strength of its neighbour's
+  entry. Only the read-only `knowledge_search` declares MCP exposure today; no index or write path is reachable over MCP.

@@ -92,8 +92,8 @@ system_prompt: |
 [agent-to-agent](#agent-to-agent), and the default memory directory is `memory/<identity>`. Keep it to the safe
 character set so those uses stay valid.
 
-`application_path` is optional for `run` and `mcp` modes and required only for `a2a`, which serves the wrapped
-application's tools and cannot serve the built-ins. When set, the target must be built with a current
+`application_path` is optional for `run` and `mcp` modes and required only for `a2a`, because no built-in is offered
+over a2a today and such a server would have nothing to serve. When set, the target must be built with a current
 [Fisk](https://github.com/choria-io/fisk) (v0.9.0 or newer) that supports `--fisk-introspect` and precomputed
 per-command schemas. When it is left out, Fisk AI skips introspection entirely and the agent runs on its built-in and
 remote tools alone; see [a knowledge-only agent](#a-knowledge-only-agent) below.

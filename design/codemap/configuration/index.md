@@ -117,15 +117,16 @@ Mode-specific requirements:
 | `ModeMCP` | nothing beyond the structural checks |
 | `ModeServer` | `application_path` and `nats_context` |
 
-A2A requires an application because it serves only the wrapped application's tools, never the built-ins, so an
-application-less a2a server could never have anything to serve.
+A2A requires an application because no built-in declares a2a exposure, so an application-less a2a server would start
+with an empty tool set. The server itself can carry any tool kind; the requirement expires when a built-in first opts in.
 
 Several rejections happen during `prepare` rather than validation, so they fire in all modes:
 
 - `confirm_over_mcp` must be `auto`, `always`, or `never` after trimming and lowercasing. A typo must not silently select a
   weaker gate than intended.
-- `expose.agent.mcp.builtins` may contain only `knowledge_search`, and the error names the exposable set and why the
-  others are excluded. A non-empty allowlist with knowledge disabled is also rejected, since there would be nothing to
+- `expose.agent.mcp.builtins` may contain only `knowledge_search`, and the error names the accepted set and why the
+  others are excluded. This is the selection, not the capability: the tool's own declaration is the ceiling and this can
+  only narrow it. A non-empty allowlist with knowledge disabled is also rejected, since there would be nothing to
   serve.
 - `max_concurrent_tools` rejects a negative value and anything above 1024. Zero is treated as unset rather than rejected,
   because an omitted YAML key unmarshals to zero and the server applies its own default.

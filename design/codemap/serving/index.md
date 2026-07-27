@@ -109,24 +109,44 @@ expressing the confirm gate as one would imply an enforcement it does not have.
 
 ### Built-ins over MCP
 
-Only `knowledge_search` may be served, validated by name at config parse time. The memory and human-in-the-loop built-ins
-need operator state or interaction, so they are never exposable.
+Two gates apply and both must pass. Each tool declares whether it may ever be served on a surface, and the operator's
+`builtins` allowlist selects which of those to serve, validated by name at config parse time. The declaration is the
+ceiling and the allowlist can only narrow it, so a tool added alongside an allowlisted one is never served on its
+neighbour's entry. Only `knowledge_search` declares MCP exposure; the memory and human-in-the-loop built-ins need
+operator state or interaction, so they declare none.
 
-Built-ins register last, and a collision with a wrapped command's name is a hard error in `Serve`. `BuildServer` also
-skips a colliding built-in as a library-level backstop for a caller that bypasses `Serve`. The reason is the same as
-everywhere else: the model addresses every tool by one flat name.
+The declaration is default-deny: a new tool is served nowhere until someone says otherwise, and `mustNew` refuses to
+build a built-in that has not stated a posture, so a harness tool cannot arrive at "nowhere" by forgetting.
 
-Built-in calls share the semaphore and the timeout but skip the gate, and they receive a default-deny prompter, since
-nothing on that path can prompt.
+Every kind registers through one list and one handler. The caller orders wrapped-application commands ahead of built-ins,
+and the first tool to claim a name keeps it, so a built-in can never shadow a command tool and strip its confirm gate. A
+collision is a hard error in `Serve`; `BuildServer` skips the loser as a library-level backstop for a caller that
+bypasses `Serve`. The reason is the same as everywhere else: the model addresses every tool by one flat name.
+
+A tool that cannot report whether it is confirmation-gated is refused rather than served ungated, since an absent gate
+must not be indistinguishable from not needing one. Built-in calls share the semaphore and the timeout, and receive a
+default-deny prompter, since nothing on that path can prompt.
+
+Both kinds return a `toolkit.Outcome`, and its exec metadata decides the rendering: a command's output is wrapped in the
+`CommandResult` envelope carrying the exit code, while an in-process tool's output is already the JSON the client asked
+for and travels verbatim.
 
 ## A2A
 
-`ModeServer` additionally requires `application_path` and `nats_context`. The application is required because A2A serves
-only wrapped-application tools, never the built-ins, so an application-less A2A server could never have anything to serve.
+`ModeServer` additionally requires `application_path` and `nats_context`. The server itself accepts any tool kind, but no
+built-in declares A2A exposure today, so an application-less A2A server would start with an empty tool set. The
+requirement is an earlier, clearer version of that empty-set error rather than a correctness gate, and it is deletable
+once a built-in first opts in.
 
-`selectExposed` drops three classes of tool, logging a reason for each: confirm-gated tools, invalid tool names, and tools
-with an empty model-facing description. A description-less tool gives the model nothing to decide on, so it is dropped by
-the server and independently refused by the importer.
+`selectExposed` drops five classes of tool, logging a reason for each: tools that do not declare A2A exposure, tools that
+cannot report whether they are confirmation-gated, confirm-gated tools, invalid tool names, and tools with an empty
+model-facing description. The exposure check is the ceiling the rest sit under. A tool that cannot answer the
+confirmation question is refused rather than served ungated, since over an interface the absence of a gate would
+otherwise be indistinguishable from not needing one. A description-less tool gives the model nothing to decide on, so it
+is dropped by the server and independently refused by the importer.
+
+There is no A2A equivalent of the MCP `builtins` allowlist, which is why no built-in declares A2A exposure: without a
+selection mechanism, declaring one would serve it the moment an operator enables A2A, with nothing to narrow it.
 
 A gated tool is dropped from both the agent card and the dispatch map, so it is unadvertised and uninvokable rather than
 merely hidden.
