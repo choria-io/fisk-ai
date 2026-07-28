@@ -124,10 +124,10 @@ Several rejections happen during `prepare` rather than validation, so they fire 
 
 - `confirm_over_mcp` must be `auto`, `always`, or `never` after trimming and lowercasing. A typo must not silently select a
   weaker gate than intended.
-- `expose.agent.mcp.builtins` may contain only `knowledge_search`, and the error names the accepted set and why the
-  others are excluded. This is the selection, not the capability: the tool's own declaration is the ceiling and this can
-  only narrow it. A non-empty allowlist with knowledge disabled is also rejected, since there would be nothing to
-  serve.
+- `expose.agent.mcp.builtins` may contain only `knowledge_search` and `knowledge_enumerate`, and the error names the
+  accepted set and why the others are excluded. This is the selection, not the capability: the tool's own declaration is
+  the ceiling and this can only narrow it, and naming one knowledge tool never selects the other. A non-empty allowlist
+  with knowledge disabled is also rejected, since there would be nothing to serve.
 - `max_concurrent_tools` rejects a negative value and anything above 1024. Zero is treated as unset rather than rejected,
   because an omitted YAML key unmarshals to zero and the server applies its own default.
 - `tool_timeout` must parse and be non-negative, and the error names which block it came from since MCP and a2a share the
@@ -188,7 +188,7 @@ and `k` as aliases.
 | `run` | `ModeAgent` | Runs the agent. Owns the largest flag set |
 | `session ls`, `show`, `rm` | `ModeMCP`, or none | Inspects checkpointed journals. `--config` is optional |
 | `info` | `ModeMCP` | Explains a config without contacting a model |
-| `knowledge` and its nine subcommands | reads `harness.knowledge` | Builds and inspects the local index |
+| `knowledge` and its thirteen subcommands | reads `harness.knowledge` | Builds and inspects the local index |
 | `mcp` | `ModeMCP` | Serves tools over MCP |
 | `a2a` | `ModeServer` | Serves tools to other agents over NATS |
 | `discover` | reads `nats_context` only | Prints a remote agent's card |

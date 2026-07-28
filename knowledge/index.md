@@ -1,25 +1,20 @@
 # Knowledge (RAG)
 
-Knowledge gives an agent a search tool over a locally built index of its own markdown and text documents. The agent
-gains a single in-process `knowledge_search` tool that returns the most relevant sections of the indexed corpus, each
-with a citation, so it can ground its answers in project documentation rather than its training data.
+Knowledge gives an agent search tools over a locally built index of its own markdown and text documents. They run
+in-process and cite what they return, so it can ground its answers in project documentation rather than its training
+data.
 
 In AI terms this is a RAG (retrieval-augmented generation) system contained entirely in a single binary and a single
-process. It is aimed at keeping source data local and handles markdown files. It runs with or without a local embedding
-model; without one it uses full-text search alone.
+process. It is aimed at keeping source data local and private. It runs with or without a local embedding model; without
+one it uses full-text search alone.
 
 Everything ships in the one `fisk` binary. The index is a single SQLite file built and queried in-process, with no
-CGo and no external database. The orchestrating LLM stays remote at Anthropic or a local compatible model; only storage
-and retrieval are local. A local embeddings server is the only optional external process, and only when semantic search
+external database. A local embeddings server is the only optional external process, and only when semantic search
 is turned on.
-
-> [!info] Note
-> Knowledge is opt-in and off by default. Like the [memory](../agents/#memory) tools it is only wired into the agent
-> loop, though `knowledge_search` can be exposed over [MCP](#serving-over-mcp) through an explicit allowlist.
 
 ## Enabling knowledge
 
-The minimal enable needs no model and no server. Turn the feature on and point it at the documents to index:
+Knowledge is off by default. You get full-text search without any LLM requirements.
 
 ```yaml
 harness:
@@ -29,7 +24,7 @@ harness:
       - docs/
 ```
 
-Build the index and search it from the command line, then run the agent, which now has the `knowledge_search` tool:
+Build the index and search it from the command line, then run the agent, which now has the knowledge tools:
 
 ```nohighlight
 $ fisk knowledge index docs/    # build the index, incremental, no embeddings needed
@@ -42,41 +37,31 @@ reconciles deletions when a full configured root is walked.
 
 ## Two retrieval tiers
 
-Knowledge has two retrieval tiers. The lexical tier is always on and is the default; the vector tier is a separate
-opt-in.
+Knowledge has two retrieval tiers. The lexical tier is always on, has no dependencies, and is the default. Vector
+search is opt-in and requires an embeddings model.
 
-The two tiers match a query in different ways. The lexical tier matches on words: a query and a section rank together
-when they share the same terms. The vector tier matches on meaning: a query and a section rank together when an
-embedding model places them close in vector space, even when they share no words. Lexical search is exact and literal;
-vector search is fuzzy and semantic. Hybrid mode runs both and fuses the results, so a query gets lexical precision on
-the terms it names and vector recall on the ideas it only paraphrases.
+### Lexical search
 
-### Lexical, the default
+Lexical search finds only exact words present in the text. Synonyms and concepts do not match.
 
-The lexical tier is an FTS5/BM25 full-text index. It is always active when knowledge is enabled and needs no embedding
-model, no external service, and no per-query cost. This is the baseline the feature works on for everyone, and for a
-corpus of local technical documents it is often all that is needed.
+The lexical tier is an [FTS5/BM25](https://sqlite.org/fts5.html) full-text index. It is always active when knowledge
+is enabled and needs no embedding model or other dependencies. Command output calls this tier `lexical`.
 
-Lexical search is strongest when the query uses the corpus's own vocabulary: an exact identifier, a command name, an
-error string, or a term of art the documents themselves use. Its limit is the mirror image. A query worded differently
-from the documents can miss a section that explains the same idea in other words, since a section that never uses the
-searched term does not match however relevant it is.
+### Vector search
 
-### Semantic, opt-in
-
-Add an `embeddings` block to turn on the vector tier. Its presence is the switch: with no block, knowledge stays
-lexical-only. When it is set, each chunk is embedded through a local OpenAI-compatible embeddings server, and a query is
-answered by fusing the lexical and vector rankings with Reciprocal Rank Fusion behind the one search call.
-
-The benefit is recall on meaning rather than wording. A natural-language question finds the right section even when it
+Semantic search recalls on meaning rather than wording. A natural-language question finds the right section even when it
 shares no keywords with it: asking "how do I stop the agent spending too much" can surface the section on budgets though
 that section never says "spending". This suits an agent, which phrases a search in its own words rather than the
-documents' exact terms. Fusing the two tiers keeps lexical's precision on named terms while adding this semantic reach,
-so the hybrid result is usually better than either tier alone.
+documents' exact terms.
 
-The cost is what the vector tier adds. It needs a local embedding model and server to run, a `--reindex` to embed the
-existing corpus, and one embedding call per query at search time. Retrieval stays local either way; the vector tier
-trades the extra moving part for better recall on paraphrased and conceptual queries.
+Fusing the two tiers keeps lexical's precision on named terms while adding this semantic reach, so the hybrid result is
+usually better than either tier alone.
+
+It needs a local embedding server, such as Ollama or LM Studio, running at both index and query time.
+
+Add an `embeddings` block to turn on the vector tier. When it is set, each chunk is embedded through a local
+OpenAI-compatible embeddings server, and a query is answered by fusing the lexical and vector rankings with Reciprocal
+Rank Fusion behind the one search call.
 
 ```yaml
 harness:
@@ -89,11 +74,10 @@ harness:
       model: text-embedding-embeddinggemma-300m
 ```
 
-EmbeddingGemma-300m, used in the examples here, is a good default to start from for local embedding: a small
-(300M-parameter) Gemma-based model that runs comfortably on CPU or modest hardware, is multilingual, and is well
-supported by the local runtimes this feature talks to, such as Ollama and LM Studio. It supports Matryoshka dimension
-truncation if you want smaller, faster vectors. The feature stays model-agnostic - any OpenAI-compatible endpoint works -
-but if you have no specific reason to prefer another model, this is a sound choice.
+`text-embedding-embeddinggemma-300m`, used in the examples here, is a good default to start from for local embedding: a
+small (300M-parameter) Gemma-based model that runs comfortably on CPU or modest hardware, is multilingual, and is well
+supported by the local runtimes this feature talks to, such as Ollama and LM Studio. The feature stays model-agnostic,
+any OpenAI-compatible endpoint works, and it is a sound default absent a specific reason to prefer another.
 
 The embedding model is user-chosen, so nothing about it is assumed. `fisk knowledge doctor` probes the configured
 server and reports the model, its vector dimension, and whether its output is normalized. After turning embeddings on,
@@ -110,8 +94,7 @@ mismatched model upfront, before embedding anything, rather than silently return
 
 ### Tier line
 
-Every surface, the CLI commands and the `knowledge_search` tool result, prints one canonical tier line so it is never
-ambiguous which tier answered a query:
+All invocations of related tools will print a line indicating configuration and active state:
 
 ```nohighlight
 tier: lexical (FTS5) - no embeddings configured
@@ -119,22 +102,22 @@ tier: hybrid (FTS5 + vectors, RRF) - model=<name> dim=<n>
 tier: hybrid -> DEGRADED to lexical (embeddings unreachable: <reason>)
 ```
 
-A configured embeddings server that is unreachable at query time degrades to lexical-only and says so, rather than
-failing the search. A configured embeddings server that is unreachable at index time fails loud, so an index the user
-asked to be semantic is never silently built lexical-only.
+A configured embeddings server that is unreachable at query time degrades to lexical-only, rather than failing the
+search. A configured embeddings server that is unreachable at index time errors, so an index the user asked to be
+semantic is never silently built lexical-only.
 
 ### When to enable embeddings
 
-Start lexical. It has nothing to run and no per-query cost, and it is often enough on its own. Add embeddings when the
-searches that matter are worded differently from the documents.
+Start with lexical search. It has nothing to run and no per-query cost, and it is often enough on its own. Add
+embeddings when the searches that matter are worded differently from the documents.
 
-| Aspect        | Lexical (default)                          | Hybrid (with embeddings)                             |
-|---------------|--------------------------------------------|------------------------------------------------------|
-| Matches on    | shared words, exact terms                  | meaning, plus shared words                           |
-| Best for      | identifiers, command names, error strings  | natural-language questions, paraphrased queries      |
-| Needs         | nothing beyond the binary                  | a local embedding model and server                   |
-| Per-query cost| none                                       | one embedding call                                   |
-| Index cost    | text index only                            | a `--reindex` to embed the corpus                    |
+| Aspect         | Lexical (default)                         | Hybrid (with embeddings)                        |
+|----------------|-------------------------------------------|-------------------------------------------------|
+| Matches on     | shared words, exact terms                 | meaning, plus shared words                      |
+| Best for       | identifiers, command names, error strings | natural-language questions, paraphrased queries |
+| Needs          | nothing beyond the binary                 | a local embedding model and server              |
+| Per-query cost | none                                      | one embedding call                              |
+| Index cost     | text index only                           | a `--reindex` to embed the corpus               |
 
 The two are not exclusive: enabling embeddings keeps the lexical tier and fuses the two, so nothing is lost by turning it
 on beyond the extra model to run.
@@ -161,19 +144,18 @@ harness:
       document_prefix: ""
 ```
 
-| Field                          | Description                                                                                 |
-|--------------------------------|---------------------------------------------------------------------------------------------|
-| `enabled` (boolean)            | turns the feature on; absent or `false` means off                                           |
-| `paths` (array)                | default index roots used when `knowledge index` is run with no path argument                |
-| `directory` (string)           | store location; a relative value resolves under the store base when set, else the working directory; default `knowledge/<identity>`  |
-| `top_k` (integer)              | default retrieval count, default `5`, hard ceiling `20`                                      |
-| `max_injected_tokens` (integer)| cap on the total retrieved text fed to the model, default `6000`                             |
-| `embeddings`                   | optional block; its presence turns on the vector tier                                       |
+| Field                           | Description                                                                                                                         |
+|---------------------------------|-------------------------------------------------------------------------------------------------------------------------------------|
+| `enabled` (boolean)             | turns the feature on; absent or `false` means off                                                                                   |
+| `paths` (array)                 | default index roots used when `knowledge index` is run with no path argument                                                        |
+| `directory` (string)            | store location; a relative value resolves under the store base when set, else the working directory; default `knowledge/<identity>` |
+| `top_k` (integer)               | default retrieval count, default `5`, hard ceiling `20`                                                                             |
+| `max_injected_tokens` (integer) | cap on the total retrieved text fed to the model, default `6000`                                                                    |
+| `embeddings`                    | optional block; its presence turns on the vector tier                                                                               |
 
-The `directory` follows the same rule as memory's `options.directory`: an absolute value is used as-is; a relative
-value, including the default `knowledge/<identity>`, resolves under the store base when one is set and against the
-working directory otherwise. The `identity` is the agent's name, so two agents pointed at the same directory share an
-index and the default keeps each agent's index its own.
+An absolute `directory` is used as-is; a relative value, including the default `knowledge/<identity>`, resolves under
+the store base when one is set and against the working directory otherwise. The `identity` is the agent's name, so two
+agents pointed at the same directory share an index and the default keeps each agent's index its own.
 
 The store base is a deployment concern for running many agents in one process, not an agent setting: a programmatic
 caller passes `store_dir`, and the `knowledge` command takes a matching `--store-dir` flag or `FISK_AI_STORE_DIR`
@@ -185,14 +167,14 @@ needs neither, and is the surest way to keep them pointed at the same index.
 The `embeddings` block is only read when the vector tier is on. It describes a local OpenAI-compatible endpoint that
 `fisk` POSTs to at `<base_url>/embeddings`.
 
-| Field                       | Description                                                                                |
-|-----------------------------|--------------------------------------------------------------------------------------------|
-| `base_url` (string)         | OpenAI-compatible base URL; requests go to `<base_url>/embeddings`                          |
-| `model` (string)            | the embedding model name to request                                                        |
-| `api_key_env` (string)      | name of an environment variable holding the API key, never the secret itself; optional     |
-| `timeout` (duration)        | per-request timeout, default `30s`                                                          |
-| `query_prefix` (string)     | text prepended to a query before embedding; optional, default empty                        |
-| `document_prefix` (string)  | text prepended to a chunk before embedding, supports `{title}`; optional, default empty    |
+| Field                      | Description                                                                             |
+|----------------------------|-----------------------------------------------------------------------------------------|
+| `base_url` (string)        | OpenAI-compatible base URL; requests go to `<base_url>/embeddings`                      |
+| `model` (string)           | the embedding model name to request                                                     |
+| `api_key_env` (string)     | name of an environment variable holding the API key, never the secret itself; optional  |
+| `timeout` (duration)       | per-request timeout, default `30s`                                                      |
+| `query_prefix` (string)    | text prepended to a query before embedding; optional, default empty                     |
+| `document_prefix` (string) | text prepended to a chunk before embedding, supports `{title}`; optional, default empty |
 
 `api_key_env` names an environment variable rather than carrying the secret, so no secret lives in `agent.yaml` and none
 is logged. Prefixes default to empty because the model is user-chosen and a wrong prefix is worse than none; the models
@@ -204,7 +186,7 @@ that need one document it. Run `knowledge doctor` to see whether a chosen model 
 
 #### EmbeddingGemma prefixes
 
-Google's EmbeddingGemma is trained with task-specific prompts, so it expects a prefix on both sides: a query is embedded
+`text-embedding-embeddinggemma-300m` is trained with task-specific prompts, so it expects a prefix on both sides: a query is embedded
 under a retrieval instruction and a document under a title-and-text template. Setting them to the model's documented
 values improves retrieval; leaving them empty still works but embeds text bare, the way the model was not trained to see
 it.
@@ -218,98 +200,122 @@ harness:
     embeddings:
       base_url: http://127.0.0.1:1234/v1
       model: text-embedding-embeddinggemma-300m
+      # trailing space is required
       query_prefix: "task: search result | query: "
       document_prefix: "title: {title} | text: "
 ```
 
-The trailing space is significant, so quote both values in YAML. `{title}` in `document_prefix` is filled from each
-chunk's heading path, or the literal `none` when a chunk has no heading, matching the template the model expects. Because
-a prefix is part of the pinned vector identity, adding or changing one forces a `--reindex`; the index refuses a
-mismatched prefix upfront rather than mixing vectors embedded under different prompts.
+## The agent tools
 
-> [!info] Note
-> Some GGUF builds of EmbeddingGemma log `'tokenizer.ggml.add_eos_token' should be set to 'true' in the GGUF header` on
-> every embedded string. This comes from the embeddings server, not `fisk`: the OpenAI embeddings API exposes no
-> control over tokenization, so it cannot be silenced from the client. It is harmless but means the model embeds without
-> the end-of-sequence token it was trained with; a GGUF whose header sets `tokenizer.ggml.add_eos_token = true` resolves
-> it.
+When knowledge is enabled the agent is offered two tools, along with instructions.
 
-## The knowledge_search tool
+### knowledge_search
 
-When knowledge is enabled the agent is offered one tool, `knowledge_search`, that takes a `query` and an optional
-`top_k`. It runs the lexical search, adds and fuses the vector search when the vector tier is on, and returns the ranked
-sections. The effective count is `min(requested or configured top_k, 20)`, and the total returned text is capped at
-`max_injected_tokens`.
+`knowledge_search` runs the lexical search, adds and fuses the vector search when the vector tier is on, and returns
+the ranked sections.
 
 Each result carries a citation token of the form `<relpath>#<ordinal>`, the file path relative to the index root and the
-chunk's position in that file, alongside the human-readable heading path of the section. The same token is printed by
-`knowledge search` and `knowledge sources` and accepted verbatim by `knowledge show`, so a result can be resolved back to
-its full text.
+chunk's position in that file, alongside the human-readable heading path of the section.
 
 Results are returned to the model as untrusted reference data, framed as material to draw on rather than as
-instructions. When the store has no index yet the tool returns a soft `index_not_built` status naming the fix, rather
-than failing the run, so a missing index never bricks agent startup.
+instructions. When the store has no index yet the tool returns a soft `index_not_built` status rather than failing the
+run, so a missing index never bricks agent startup.
 
-> [!info] Warning
-> Retrieved text is data the corpus contains, not trusted instructions. Treat a `knowledge_search` result the same way as
-> a memory: content to reason over, not directives to follow.
+### knowledge_enumerate
+
+{{% badge style="primary" title="Version" %}}0.0.4{{% /badge %}} `knowledge_enumerate` is the tool form of
+[`knowledge match`](#which-documents-mention-a-word), with the same syntax. The model routes here
+before answering that something is absent, then reads what it needs with `knowledge_search`.
 
 ## CLI commands
 
-The `fisk knowledge` command builds and inspects the index. It is separate from the agent's `knowledge_search` tool;
-the CLI never runs the agent. Every command reads `--config` (default `agent.yaml`) and prints the tier line.
+The `fisk knowledge` command builds and inspects the index. It is separate from the agent's tools; the CLI never runs
+the agent. Every command reads `--config` (default `agent.yaml`) and prints the tier line.
 
-| Command                              | Description                                                                        |
-|--------------------------------------|------------------------------------------------------------------------------------|
-| `knowledge index [paths...]`         | incremental build; requires a path argument or a configured `knowledge.paths`      |
-| `knowledge watch [paths...]`         | watch the configured paths and re-index on change, coalescing edit bursts          |
-| `knowledge search <query>`           | retrieve from the CLI for tuning; prints citation, heading, and a snippet          |
-| `knowledge show <relpath#ordinal>`   | print one chunk verbatim, resolving a citation token                               |
-| `knowledge sources`                  | list indexed files with chunk counts and last-indexed time                         |
-| `knowledge doctor`                   | preflight checks; probes the embeddings server only when it is configured          |
-| `knowledge stats`                    | tier banner, document and chunk counts, vector count, pinned model, store size     |
-| `knowledge rm <source...>`           | remove specific sources' chunks by path                                            |
-| `knowledge reset`                    | wipe the index; the bare form refuses and names `--force`                          |
+| Command                            | Description                                                                                                                                                |
+|------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `knowledge index [paths...]`       | incremental build; requires a path argument or a configured `knowledge.paths`                                                                              |
+| `knowledge watch [paths...]`       | watch the configured paths and re-index on change, coalescing edit bursts                                                                                  |
+| `knowledge search <query>`         | retrieve from the CLI for tuning; prints citation, heading, and a snippet                                                                                  |
+| `knowledge match <query>`          | list every document containing the words, as a complete set; aliases `enumerate`, `which` {{% badge style="primary" title="Version" %}}0.0.4{{% /badge %}} |
+| `knowledge words [pattern]`        | list the words the documents actually use, with document counts; aliases `vocab`, `terms` {{% badge style="primary" title="Version" %}}0.0.4{{% /badge %}} |
+| `knowledge show <relpath#ordinal>` | print one chunk verbatim, resolving a citation token                                                                                                       |
+| `knowledge sources`                | list indexed files with chunk counts and last-indexed time                                                                                                 |
+| `knowledge doctor`                 | preflight and general consistency checks for the index and embeddings requirements                                                                         |
+| `knowledge rebuild`                | rebuild the search index from the stored text, without re-embedding {{% badge style="primary" title="Version" %}}0.0.4{{% /badge %}}                       |
+| `knowledge stats`                  | tier banner, document and chunk counts, vector count, pinned model, store size                                                                             |
+| `knowledge rm <source...>`         | remove specific sources' chunks by path                                                                                                                    |
+| `knowledge reset`                  | wipe the index; the bare form refuses and names `--force`                                                                                                  |
 
-The command is also available as `fisk rag`.
-
-`knowledge index` is incremental and per-file: a file whose hash is unchanged is skipped, a changed file is re-chunked,
-and a walk of a full configured root reconciles deletions. `--dry-run` lists the files and an embedding-call estimate
-without embedding anything, and `--reindex` forces a full rebuild. Indexing walks markdown and text files only, by the
+Indexing is incremental and per-file: a file whose hash is unchanged is skipped, a changed file is re-chunked,
+and a walk of a full configured root reconciles deletions. Indexing walks markdown and text files only, by the
 `.md`, `.markdown`, `.txt`, and `.text` extensions, and always excludes the store directory itself and the `memory/`
 directory.
 
-`knowledge watch` keeps the index current while you edit. It runs one initial index over the configured paths, then
-watches them and re-indexes on every change, coalescing a burst of edits with a `--debounce` window (default `2s`,
-minimum `100ms`). Each re-index is the same incremental pass, so unchanged files are skipped by hash and only edited
-files are re-chunked and re-embedded, and a file is dropped from the index as it is deleted. Watching is recursive and
-cross-platform, on Linux, macOS, and Windows, and applies the same exclusions as `index`: the store directory, `memory/`,
-and dotdirs such as `.git`. A configured path that does not exist is warned about and skipped rather than failing the
-command, and `--no-initial` skips the startup pass to watch only for later changes.
+### Which documents mention a word
 
-Unlike the one-shot `knowledge index`, `watch` is long-running, but it holds the single writer lock only for the moment
-each re-index runs, so an occasional manual `knowledge index` still succeeds between changes and a clash simply retries.
-Stop it with Ctrl-C. Paths must exist when it starts: a root created afterwards is not picked up until the next run, and
-if the process misses a deletion event the stale entry clears on the next `knowledge index` or a restart, both of which
-reconcile.
+{{% badge style="primary" title="Version" %}}0.0.4{{% /badge %}} The search functions answer "what do the documents say
+about this" and return the sections that scored best.
 
-`knowledge doctor` degrades for lexical-only users and never exits non-zero solely because embeddings are absent. It
-always checks that the store is present and writable, that FTS5 is compiled in, and that the configured paths resolve.
-Only when `embeddings` is configured does it probe the endpoint and check the stored model and dimension for a mismatch.
+`knowledge match` answers what search cannot: which documents mention a word. It returns a complete list of all
+matching documents. An empty result means the documents do not contain the words.
 
-`knowledge reset` without `--force` refuses and names the document and chunk count it would delete; `knowledge reset
---force` clears every row and leaves a clean empty index in place, ready for the next `knowledge index`.
+```nohighlight
+$ fisk knowledge match "retention policy"
+$ fisk knowledge match deprecated --paths-only
+$ fisk knowledge which api -deprecated
+```
+
+> [!info] Complete, not literal
+> The set is complete: every indexed document containing the words is listed. It is not literal. Matching is by word
+> stem, so `deprecated` also finds `deprecate` and `deprecation`, and it merges words that share a stem: `universe` and
+> `university` both reduce to `univers`. Case always folds. Diacritics fold only within Latin-1, so `cafe` finds `café`,
+> but `strasse` does not find `Straße` and `viet` does not find `Việt`. A complete answer therefore includes documents
+> about a word that was not typed, and excludes spellings it might have been expected to reach.
+
+#### Query syntax
+
+| Form               | Example              | Matches                                             |
+|--------------------|----------------------|-----------------------------------------------------|
+| words side by side | `deprecated api`     | documents containing both, anywhere in the document |
+| a quoted phrase    | `"retention policy"` | the words adjacent, within one section              |
+| a leading minus    | `api -deprecated`    | documents with the first and without the second     |
+| `body:`            | `body:retention`     | the section body only, not its heading              |
+| `heading:`         | `heading:retention`  | the section heading breadcrumb only                 |
+
+### What words the documents use
+
+{{% badge style="primary" title="Version" %}}0.0.4{{% /badge %}} `knowledge words` lists the vocabulary of the index,
+which is every word the documents actually contain.
+
+```nohighlight
+$ fisk knowledge words              # the whole vocabulary
+$ fisk knowledge words depre        # only words containing "depre"
+$ fisk knowledge words '^depre'     # only words starting with it
+```
+
+The argument is a regular expression used to narrow the listing.
+
+A short list is shown with its counts, since a short list is there to be compared:
+
+```nohighlight
+Word           Stem       As written   Any form
+deprecation    deprec              9         17
+deprecated     deprec              6         17
+deprecate      deprec              2         17
+```
+
+`As written` counts documents holding that exact word. `Any form` counts documents holding any word sharing its stem,
+which is the number `knowledge match <word>` reports.
+
+A long list is shown as plain words several to a line, because a vocabulary runs to thousands of words and is scanned
+for one rather than read row by row.
 
 ## Store location and layout
 
-The index is project-local by default. It lives at `knowledge/<identity>` relative to the working directory, alongside
-the `memory/<identity>` store, which suits the one-project-per-directory workflow where an `agent.yaml`, a `memory/`
-directory, and a `knowledge/` directory sit side by side. A store base relocates that default under it, and the
-`directory` field overrides the location outright.
-
-The store is a single SQLite file with its `-wal` and `-shm` sidecars. The agent opens it read-only while `knowledge
-index` is the single writer, so an index can be rebuilt while an agent runs without the agent seeing a half-written
-state. A cross-process lock stops two indexers from running at once.
+The index is project-local by default. It lives at `knowledge/<identity>` relative to the working directory, supporting
+the one-project-per-directory workflow where an `agent.yaml`, a `memory/` directory, and a `knowledge/` directory sit
+side by side. A store base relocates that default under it, and the `directory` field overrides the location outright.
 
 > [!info] Warning
 > The store uses SQLite WAL and its shared-memory sidecar, so every process must be on the same machine. Do not place the
@@ -317,9 +323,8 @@ state. A cross-process lock stops two indexers from running at once.
 
 ## Serving over MCP
 
-`knowledge_search` is the one built-in tool that can also be served over [MCP](../mcp/). It is read-only and needs no
-operator prompt, unlike the human-in-the-loop and memory tools, which stay agent-only. Exposure is off by default and
-enabled through an explicit allowlist:
+Both knowledge tools can be served over [MCP](../mcp/) as well as to the agent. Exposure is off by default and enabled
+by naming them in an allowlist:
 
 ```yaml
 expose:
@@ -328,32 +333,28 @@ expose:
       port: 8080
       builtins:
         - knowledge_search
+        - knowledge_enumerate
 ```
 
-Only `knowledge_search` is accepted in `builtins`; listing any other built-in is a configuration error that names the
-accepted set. The allowlist is the selection, not the ceiling: a built-in must also declare MCP exposure in its own
-definition, and the server applies both, so naming a tool here can never serve one that has not declared it. The MCP process opens the read-only store and, when embeddings are configured, embeds the query itself, so
-the embeddings server must be reachable from that process. Degrade-to-lexical and the stored model validation apply
-unchanged.
-
-> [!info] Warning
-> The MCP server binds every interface. Exposing `knowledge_search` lets any client that can reach the port read verbatim
-> snippets of the indexed corpus. Bind localhost or front it with authentication if the corpus is sensitive.
+Name both. A client that can rank but cannot enumerate cannot tell an absent term from a low-scoring one, which is the
+whole reason the second tool exists. See [MCP](../mcp/) for binding, ports, and the rest of the serving configuration.
 
 ## Security
 
-The index holds the verbatim text of every indexed document, unencrypted on disk. `modernc.org/sqlite` has no pure-Go
-at-rest encryption, so the posture matches the [memory](../agents/#memory) feature: the file and its sidecars are created
+The index holds the verbatim text of every indexed document, unencrypted on disk. The file and its sidecars are created
 `0600` inside a `0700` directory.
 
-* The `0600` permission protects the file from other users on the same host. It does not protect against disk theft,
-  backups, or a stolen copy, so do not index secrets.
-* Retrieved chunks are framed as untrusted reference data and stripped of terminal control sequences before any TUI
+- Retrieved chunks are framed as untrusted reference data and stripped of terminal control sequences before any TUI
   render, so indexed text cannot spoof the display or inject instructions.
-* Embeddings secrets are supplied by environment-variable name and never logged, and are stripped from the environment of
+- Embeddings secrets are supplied by environment-variable name and never logged, and are stripped from the environment of
   model-chosen command tools, so a tool cannot read the embeddings credential. A non-loopback embeddings `base_url` must
   use `https`, and the request timeout is enforced.
-* Over MCP two gates apply, and both must pass: the tool itself declares whether it may ever be served over MCP, and the
+- Over MCP two gates apply, and both must pass: the tool itself declares whether it may ever be served over MCP, and the
   allowlist selects which of those this operator wants served. The allowlist can only narrow the tools declared servable,
-  never widen past them, so a tool added alongside `knowledge_search` is not served on the strength of its neighbour's
-  entry. Only the read-only `knowledge_search` declares MCP exposure today; no index or write path is reachable over MCP.
+  never widen past them, so a tool added alongside `knowledge_search` is not served on the strength of its neighbor's
+  entry. That holds between the two knowledge tools themselves: allowlisting one never serves the other. Only the two
+  read-only knowledge tools declare MCP exposure; no index or write path is reachable over MCP, and no built-in declares
+  a2a exposure at all.
+- `knowledge_enumerate` returns a complete set rather than a ranked sample, so a client that can reach it can inventory
+  which documents mention which terms without reading any of them. That is less text than `knowledge_search` discloses
+  per call and more structure. Both matter when deciding what to bind.

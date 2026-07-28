@@ -112,8 +112,9 @@ expressing the confirm gate as one would imply an enforcement it does not have.
 Two gates apply and both must pass. Each tool declares whether it may ever be served on a surface, and the operator's
 `builtins` allowlist selects which of those to serve, validated by name at config parse time. The declaration is the
 ceiling and the allowlist can only narrow it, so a tool added alongside an allowlisted one is never served on its
-neighbour's entry. Only `knowledge_search` declares MCP exposure; the memory and human-in-the-loop built-ins need
-operator state or interaction, so they declare none.
+neighbour's entry, which holds between the two knowledge tools as much as between strangers. Only `knowledge_search`
+and `knowledge_enumerate` declare MCP exposure; the memory and human-in-the-loop built-ins need operator state or
+interaction, so they declare none.
 
 The declaration is default-deny: a new tool is served nowhere until someone says otherwise, and `mustNew` refuses to
 build a built-in that has not stated a posture, so a harness tool cannot arrive at "nowhere" by forgetting.

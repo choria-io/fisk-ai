@@ -1,13 +1,16 @@
 # Knowledge
 
-Knowledge gives an agent one tool, `knowledge_search`, over a locally built index of its own markdown. The design
-constraint that shapes everything else is that the whole feature ships inside the single Fisk AI binary: no C toolchain
-at build time, no shared library at runtime, and no external database.
+Knowledge gives an agent two tools over a locally built index of its own markdown: `knowledge_search`, which ranks, and
+`knowledge_enumerate`, which does not. The design constraint that shapes everything else is that the whole feature ships
+inside the single Fisk AI binary: no C toolchain at build time, no shared library at runtime, and no external database.
 
 {{% notice style="note" title="Where it lives" %}}
 `internal/rag` holds the store. Key files: `store.go` for the handle and schema, `index.go` for the write path,
-`search.go` for the read path, `chunk.go` for chunking, `embed.go` for the embeddings client, `watch.go`, `doctor.go`.
-The tool is in `internal/toolkit/builtin/builtin_rag.go`, and the CLI in `rag_command.go`.
+`search.go` for the ranked read path, `enumerate.go` and `enumerate_query.go` for the set-valued one, `words.go` for the
+vocabulary, `integrity.go` for the write-locked check and repair, `chunk.go` for chunking, `embed.go` for the embeddings
+client, `watch.go`, `doctor.go`.
+The tools are in `internal/toolkit/builtin/builtin_rag.go` and `builtin_rag_enumerate.go`, and the CLI in
+`rag_command.go`, `rag_match.go` and `rag_words.go`.
 
 The YAML key and user-facing noun are `knowledge`; the Go identifiers keep the `rag` prefix. Knowledge is the feature,
 RAG is the technique.
@@ -67,8 +70,9 @@ The chunker is heading-aware and size-packed, and it is pure: no database, no IO
   keeps a markdown table's rows together.
 
 Blocks accumulate to a 1200-byte target and a 1500-byte maximum, and a divisible block over the maximum is hard-split.
-Each finished chunk folds its breadcrumb into the body, so the section title travels into both the embedding and the
-lexical index.
+A finished chunk carries its body and its breadcrumb as two separate fields and never folds one into the other. The two
+are folded in exactly one place, where the chunk is handed to the embedder, so the section title still travels into the
+vector and pulls the on-topic chunk up; the lexical index keeps them apart.
 
 The chunk ordinal is its index within the document. That is exactly why citations shift when a file is edited.
 
@@ -76,20 +80,149 @@ The chunk ordinal is its index within the document. That is exactly why citation
 
 ```sql
 documents(id, path UNIQUE, title, mtime, hash)
-chunks(id, document_id REFERENCES documents ON DELETE CASCADE, heading_path, ordinal, content)
-chunks_fts  VIRTUAL USING fts5(content, heading_path,
-                               content='chunks', content_rowid='id',
-                               tokenize='porter unicode61')
-chunks_vec  VIRTUAL USING vec0(chunk_id INTEGER PRIMARY KEY, embedding FLOAT[<dim>])
+chunks(id, document_id REFERENCES documents ON DELETE CASCADE, heading_path, ordinal, body)
+chunks_fts        VIRTUAL USING fts5(body, heading_path,
+                                     content='chunks', content_rowid='id',
+                                     tokenize='porter unicode61')
+chunks_fts_exact  VIRTUAL USING fts5(body, heading_path,
+                                     content='chunks', content_rowid='id',
+                                     tokenize='unicode61')
+chunks_vocab      VIRTUAL USING fts5vocab('chunks_fts_exact', 'row')
+chunks_vec        VIRTUAL USING vec0(chunk_id INTEGER PRIMARY KEY, embedding FLOAT[<dim>])
 rag_meta(key PRIMARY KEY, value)
 ```
 
 `chunks_fts` is an external-content table, so chunk text is stored exactly once and FTS5 holds only the index.
 `heading_path` gets its own FTS column because a section title is often the most search-relevant phrase in a chunk.
 
+`chunks.body` is the body alone. That is worth stating because it was not always so: the breadcrumb used to be stored
+folded into the same column, which put the heading text in two columns at once and cost three things. No body-only
+question could be asked, since every heading term was also a body term. A phrase could match across the join between a
+heading and the body under it, matching text no document contains. And the breadcrumb was rendered twice by every
+surface that prints both, and billed twice against the injected-token budget.
+
+{{% notice style="warning" title="Load-bearing decision" %}}
+Separating the columns removed an implicit ranking weight. While the breadcrumb sat inside the indexed body, heading
+tokens were counted twice and BM25 weighted headings without anyone choosing to. `bm25(chunks_fts, 1.0, 2.0)` puts that
+back as a decision rather than a side effect. Both `bm25()` calls in the search statement carry the weights, or the
+`ORDER BY` and the returned score disagree, and a spec pins the result against rankings recorded before the split.
+{{% /notice %}}
+
 Foreign keys are on for every connection, so deleting a document cascades to chunks and, through triggers, to both the
 full-text and vector indexes. The vector table is created only when the vector tier is on and only once the dimension is
 known, so a lexical-only index has no vector table at all.
+
+Three rules govern the sync triggers, and two of the three ways to break them corrupt silently. The hidden first column
+of a command insert is the target table's own name, so a copy-paste that leaves the wrong name there writes into the
+wrong index. Every indexed column must be supplied on a delete, with the `old` value, or terms are left behind against a
+rowid that no longer exists and every later delete wedges `SQLITE_CORRUPT`; search hides exactly that, because hydration
+drops rows it cannot join. And the FTS5 column names must equal the content-table column names: a mismatch still answers
+`MATCH` and still passes a bare integrity check, failing only at `rebuild`.
+
+That last one is why a bare `integrity-check` is not evidence. Only `('integrity-check', 1)`, the rank form, compares
+the index against its content table, and that is the form the specs use, after an insert, an update and a delete.
+
+Neither form is available to `knowledge doctor`. Both are command inserts, so both are writes, and every read-only
+handle carries `query_only(1)`; a reader gets `attempt to write a readonly database`. Verifying an index against its
+content table therefore needs the writer and its advisory lock, which `doctor` does not take.
+
+### Two tokenizers over the same rows
+
+FTS5 sets the tokenizer per table rather than per column, so a second tokenizer means a second table, not a third
+column. `chunks_fts_exact` indexes the same rows through the same triggers and stems nothing.
+
+Every query runs against the stemmed table. That is what makes an empty result mean "no document holds this word in any
+form" rather than "no document spells it the way you typed it". The unstemmed table never answers a search; it earns its
+size three other ways: it holds real words, so a vocabulary dump returns `deprecation` rather than `deprec`; it is the
+only table where a prefix search grows monotonically; and it lets a stemmed count say how many of those documents
+contain the word as it was written.
+
+{{% notice style="warning" title="Load-bearing decision" %}}
+The unstemmed table must not become the matcher. The idea is attractive, since it would make matching literal and would
+let a prefix operator ship, and the cost is invisible without measurement. Measured over this repository's own
+`docs/content`, 19 files and 389 chunks: of 20 word forms present in the index, **every one loses documents** without
+the stemmer. Two drop to zero, and 17 more return strictly fewer. `tooling` matches all 19 documents under the stemmer
+and none without it. A command whose output says "this is the complete answer, not a ranking cutoff" cannot be built on
+that.
+{{% /notice %}}
+
+Prefix behavior is the other half, and it is why no `*` operator is offered against the stemmed table. Against an index
+of stems, a prefix longer than the stem but shorter than the word matches nothing, so lengthening a query walks a result
+set from non-empty to empty and back. Measured against a document containing `deprecated`:
+
+| Prefix | `chunks_fts` (stemmed) | `chunks_fts_exact` |
+|--------|------------------------|--------------------|
+| `deprec*` | matches | matches |
+| `depreca*` | **empty** | matches |
+| `deprecat*` | **empty** | matches |
+| `deprecate*` | matches | matches |
+
+`chunks_vocab` is an `fts5vocab` table over the unstemmed index, exposing every term with the number of chunks holding
+it. It costs no write time and no bytes of its own. It has to be created by the writer, because a read-only connection
+cannot create a virtual table at all, in `main` or in `temp`; once created it is fully readable through every read-only
+handle.
+
+{{% notice style="warning" title="Load-bearing decision" %}}
+Its `doc` column counts **chunks, not documents**. A word in five chunks of one document and a word in one chunk of each
+of five documents both report `doc=5`. `knowledge words` therefore never displays it, never sorts on it and never
+filters on it: every document count it shows comes from a `count(DISTINCT document_id)` query per word. Filtering or
+ordering on the cheap number while displaying the expensive one produces a list whose own column contradicts the flags
+that built it, and it is the kind of wrong that looks like a rendering bug rather than a counting one.
+{{% /notice %}}
+
+The exact per-word count is the only option on the read path, which was established by exhausting the alternatives. An
+instance-form `fts5vocab` would give every word's true document frequency in one `GROUP BY`, but it cannot be created on
+the read-only connection, nor in `temp`, because `query_only` blocks the temp database too, and the schema-qualified
+three-argument form does not exist in this SQLite build, so the scratch-database trick `stemSurfaces` uses cannot be
+pointed at an attached index either. Adding it to the schema would be a format generation bump and a reindex, for a scan
+proportional to total tokens rather than to distinct words.
+
+Narrowing the vocabulary scan is done in Go, against the whole list. SQLite has no `REGEXP`, and the driver's function
+registration is process-global, so registering one would put it on the agent's connection too. Taking a literal prefix
+from the pattern and range-scanning on it is worse than useless: `LiteralPrefix` describes a prefix of the *match*, not
+of the *subject*, so under unanchored matching a scan from `ing` silently drops `testing`. Measured, the alternatives it
+would have optimized cost about a third of a second across a five thousand word vocabulary, which is not worth a
+silently incomplete answer from a command whose whole promise is completeness.
+
+## The format gate
+
+An index carries a format generation, and every open refuses any generation but this build's: a newer one so an older
+binary never misreads a future layout, an older one because nothing migrates it today. The documents on disk are the
+source of truth, so the index is rebuilt from them rather than upgraded in place.
+
+Both refusals are the same shape, and the gate is deliberately the whole of the mechanism. Nothing drops and recreates
+inside an open, and no writer destroys an index because a flag implied consent. The operator discards the index with
+`knowledge reset --force` and rebuilds it with `knowledge index`, in that order, which is what the refusal says.
+
+Rebuilding rather than migrating is a decision the absence of users pays for, not a permanent one. The gate is the
+single place that would change: it is the one point that knows a generation is behind, so a migration added later hooks
+in there and every open inherits it.
+
+| Situation | Where it is refused | What the message names |
+|-----------|---------------------|------------------------|
+| Older generation | Every reader and every writer | `reset --force`, then `index` |
+| Newer generation | Every reader and every writer | Upgrade fisk-ai; the index is not the thing that is wrong |
+
+`reset --force` is the only path that can act on an index nothing can open, so it removes the file and its WAL sidecars
+rather than clearing rows: with no handle there are no rows to clear. That path takes the same advisory write lock as
+any writer, so it cannot race a live indexer, and refuses a symlink at any of the three paths rather than deleting
+through it.
+
+{{% notice style="warning" title="Load-bearing decision" %}}
+Two checks, not one. `CREATE TABLE IF NOT EXISTS` silently no-ops against a table from an older layout, leaving the
+stored schema untouched and failing much later as `no such column`, so the gate runs before it. The pinned generation
+alone is not enough to catch that: a reset performed by an older build cleared the manifest but kept the table shape, so
+there is no generation left to compare, and an unpinned manifest is also what a freshly created schema has. The column
+shape of `chunks` settles those cases.
+{{% /notice %}}
+
+A spec asserts the named commands actually succeed against the state they are named for, since a message naming a fix
+that also refuses is worse than one naming none.
+
+The generation also covers changes that are invisible to every other check. Nothing in the manifest is a function of the
+text handed to the embedder, so a chunker change combined with the equal-hash skip would otherwise leave unchanged
+files' vectors computed from the old text and touched files' from the new, silently. Bumping the generation is what
+forces the full re-embed.
 
 ## The pinned vector identity
 
@@ -152,8 +285,110 @@ is skipped rather than failing the search.
 
 When the vector tier is off or degraded, no fusion runs at all and the result is straight BM25 order.
 
-The active tier is never ambiguous. One canonical tier line is rendered by every CLI subcommand and included in the
-tool's JSON, and a degraded query renders a distinct line naming the reason.
+The active tier is never ambiguous. One canonical tier line is rendered by every ranking surface and included in the
+tool's JSON, and a degraded query renders a distinct line naming the reason. Enumeration overrides it with a line of its
+own and its machine-readable modes print none, which is covered below.
+
+## Enumeration
+
+Search answers "what do the documents say about this" and ranks. Enumeration answers "which documents mention this" and
+does not rank: it returns a set. The two are different questions, and the second is the one a search cannot answer,
+because a search that returns nothing means nothing scored well, which is not the same as nothing being there.
+
+`Store.Enumerate` is the engine. Two surfaces reach it: the `knowledge match` CLI verb in `rag_match.go`, and the
+`knowledge_enumerate` tool in `builtin_rag_enumerate.go`.
+
+{{% notice style="warning" title="Load-bearing decision" %}}
+`MATCH` is a predicate, so the set is complete by construction. No `bm25()` call takes part, nothing is truncated by
+score, and the only limit is a display budget applied after the total is known. That is what lets an empty result be
+reported as an answer rather than as a cutoff, and it is the property the whole feature is for.
+{{% /notice %}}
+
+{{% notice style="warning" title="Load-bearing decision" %}}
+FTS5 booleans evaluate **within one row, which is one chunk**. A document with "retention" in one chunk and "policy" in
+the next is found by each term alone and missed entirely by `"retention" AND "policy"`. Composition therefore happens in
+Go over document-id sets, one query per term, intersected and subtracted. This is not an optimization detail: a command
+that claims completeness cannot be built on chunk-scoped booleans, and a spec asserts the single-MATCH form misses the
+document that the composed form finds.
+{{% /notice %}}
+
+The syntax is small and closed. Every form composes over sets rather than inside one expression:
+
+| Form | Example | Matches |
+|------|---------|---------|
+| terms side by side | `deprecated api` | documents holding both, anywhere in the document |
+| a quoted phrase | `"retention policy"` | the words adjacent, within one section |
+| a leading minus | `api -deprecated` | documents holding the first and not the second |
+| a field prefix | `heading:retention` | the section breadcrumb only |
+| a field prefix | `body:retention` | the body only |
+
+What is missing is missing deliberately, and each absence is enforced by name rather than passed through to FTS5:
+
+| Typed | What happens | Instead |
+|-------|--------------|---------|
+| `OR`, `AND`, `NOT`, `NEAR` | rejected, naming the working form | terms side by side; a leading minus to exclude |
+| `*` anywhere | rejected | matching is by word stem already |
+| only exclusions | rejected | add a term to match |
+| an unknown field | rejected, naming the two that exist | `body:` or `heading:` |
+
+`OR` is the one that shows why rejecting by name matters. It is two runes, so it survives the minimum-term-length drop,
+and an unguarded compiler turns `foo OR bar` into `"foo" AND "or" AND "bar"`, intersecting with every document
+containing the word "or". A wrong answer, not an empty one, from the command whose contract is completeness. `*` is
+refused for the reason in the tokenizer section: against an index of stems it is not monotonic.
+
+Every token emitted into `MATCH` is double-quoted with internal quotes doubled, and the only unquoted characters this
+package emits are its own operators and the two column names, which are constants it chooses rather than user text. The
+doubling is load-bearing here rather than defensive, because a doubled quote inside a phrase is how FTS5 spells a
+literal quote, so a term can legitimately contain the character that delimits it.
+
+Per-document body and heading counts are reported separately, which the column split made computable. They are counted
+as the OR of the query's terms within each column, not the AND: they are a statistic about how much a document is about
+the query, so a document holding one term in one chunk and another in the next has to report both chunks rather than
+the zero an AND would give it. A dropped term, one below the length floor, is named in the result rather than discarded,
+since a term that was never queried makes the answer complete about a different question.
+
+Each term is also reported against both indexes: how many documents hold it in any form, and how many hold it as
+written. The stem is named too, and it comes from SQLite's own porter tokenizer, run over a scratch in-memory FTS5 table
+rather than from a second implementation of the algorithm that could drift from the index it describes. The reader
+cannot compute it in place, since it is query-only and cannot create a table; a failure there leaves the stem empty
+rather than failing the query, because the stem explains the answer and the answer does not depend on it.
+
+### The tool surface
+
+`knowledge_enumerate` returns citations and counts, never document text. Reading is a separate call the model makes with
+the citation, which keeps the decision to spend context on text apart from the decision to find out where the text is.
+The list is bounded by a quarter of `max_injected_tokens` rather than a constant, because an operator who raised the
+budget should get a longer list, and because enumeration precedes the retrieval it exists to inform: spending the whole
+budget on filenames would crowd out the text the model reasons over. The budget floors at one document, since rounding a
+real match down to an empty list would read as absence.
+
+{{% notice style="warning" title="Load-bearing decision" %}}
+The `note` field is never omitted. A model does not read the absence of a warning as a signal, so a complete set has to
+say it is complete as loudly as a truncated one says it is not. The note also names any gap between what a term matched
+and what is written, in both directions: a count above the literal one because stemming reached other forms, and a zero
+that is a genuine absence. Without it the model has counts and no reading of them.
+{{% /notice %}}
+
+The tool declares `Expose: &functool.ExposeSpec{MCP: true}`, on the same terms as `knowledge_search`: read-only over the
+operator's own index, needing no operator at a terminal. `config.mcpExposableBuiltins` names both, so an operator can
+allowlist either or both.
+
+{{% notice style="warning" title="Load-bearing decision" %}}
+They are meant to be served together, and that is a note rather than a mechanism. `notePartialKnowledgeSet` tells an
+operator who exposed one what the missing half costs their clients; it does not select the other for them. Making one
+allowlist entry serve two tools would break the property the whole exposure design rests on, that selection narrows
+capability and never widens it, and would silently invalidate the spec that guards it. A client served only
+`knowledge_search` is exactly the case enumeration exists to fix, so the note is worth printing, but not at that price.
+{{% /notice %}}
+
+Having two servable tools in one group is what finally tests the per-tool filter properly. `mcpSelectedBuiltins` applies
+the allowlist per tool rather than once as a boolean, so naming one knowledge tool serves precisely that one. Before
+this the guard could only be exercised with a tool that was unservable anyway, which could not distinguish a working
+filter from a filter that never mattered.
+
+`RAGSystemNote` gains one routing sentence, not a syntax lesson: the model is told which question each tool answers, and
+the tool's own description carries the syntax. Without the routing the model has two tools and no rule for choosing, and
+the one it under-reaches for is the one that makes "no" safe to say.
 
 ## Soft states and hard failures
 
@@ -163,6 +398,7 @@ The split is consistent and worth stating plainly.
 |-----------|----------|
 | No index file yet | A store opens with a nil database; searches report a status, not an error, so a first agent run still starts |
 | Index exists but is empty | A status, not an error |
+| Index built by an older or newer generation | A hard error on every path but the two that declare destruction |
 | Embeddings server unreachable at query time | Degrade to lexical, set the reason, and report it |
 | Embeddings dimension differs from the manifest | A hard error |
 | Model or prefixes differ from the manifest | A hard error naming the reindex |
@@ -170,6 +406,22 @@ The split is consistent and worth stating plainly.
 
 A silent lexical fallback would be indistinguishable from "vectors did not help", which is why the reason is always
 surfaced.
+
+Enumeration carries its own status enum rather than reusing the search one, and the reason is the feature itself.
+`SearchStatus` folds "the index holds nothing" and "the query reduced to nothing" into a single member, and those are
+exactly the two states enumeration exists to tell apart: one says nothing about the documents, the other says nothing
+about the query.
+
+| Enumerate status | Means |
+|------------------|-------|
+| `ok` | The set is complete, and may be empty. An empty `ok` is the answer the feature exists to give |
+| `index_not_built` | No index file yet, which is the ordinary first-run state for an agent |
+| `corpus_empty` | The index holds no documents, so a zero says nothing about any document |
+| `query_empty` | Every term was dropped before anything ran, so a zero is about the query |
+
+A malformed query is an error rather than a status. It carries a fix, there is nothing to report about the index, and
+the error is the compiler's own rather than a wrapped FTS5 one, which would quote the user's text back inside a parser's
+wording.
 
 ## Embedding
 
@@ -249,18 +501,58 @@ Reader connections are opened read-only by the driver and additionally set query
   before the journal mode.
 - Everything is bounded: 512 KiB source files, 1200 and 1500 byte chunks, 40 query terms, 8192-character queries, 128 KiB
   embed inputs, 64 MiB responses, at most 20 results, and a default 6000-token injection budget.
+- A second full-text index is the largest single line item in the store, and it buys tooling around retrieval rather
+  than retrieval itself. It is paid at index time and on disk, never per query, since no search reads it. `prefix='2 3'`
+  was measured and rejected: it helps only the two-to-three character band, does nothing at four or more, and costs
+  again in both size and index time, where a compiler-enforced minimum prefix length costs nothing.
+- Reset drops the schema and recreates it rather than deleting rows. It is the cheaper operation, it is the only one
+  that works against a corrupt index, and it means the schema has exactly one definition instead of a per-table rebuild
+  list that has to be kept in step with the table list forever.
 
 The tool's own budget converts injected tokens to characters at four per token and stops adding hits once the budget
 would be exceeded, but always includes at least the first hit so a large first chunk is not silently dropped to nothing.
 
 ## The doctor
 
-`fisk knowledge doctor` renders the tier line as its header and then runs a series of checks, of which exactly one is
-fatal: FTS5 compiled in. Store presence, journal mode, index writability, each configured path, and the embeddings checks
-are all reported without failing the command.
+`fisk knowledge doctor` renders the tier line as its header and then runs a series of checks, of which two are fatal:
+FTS5 compiled in, and the search index matching the stored text. Store presence, journal mode, index writability, each
+configured path, and the embeddings checks are all reported without failing the command.
 
 The policy is deliberate: an absent or unreachable embeddings server is never fatal, so a lexical-only operator is never
 told their setup is broken.
+
+A check is three-valued rather than a boolean, because "did not run" is a real answer that neither of the other two can
+carry. Reporting an unrun check as passing is the dishonesty the whole report exists to avoid; reporting it as failing
+says something is broken when nothing is. `HasFatal` ignores an unrun check, since not knowing is not the same as
+knowing something is wrong, and the report says in words that it verified less than it lists.
+
+{{% notice style="warning" title="Load-bearing decision" %}}
+The integrity check is the one that needs the write lock, and it does **not** go through `OpenWriter`. That function is
+the index constructor: it creates the directory, creates the database file, sets persistent journal and vacuum modes,
+and creates the whole schema. A diagnostic built on it would manufacture the index it was asked to inspect, and the very
+check reporting "no index file" would report a built store on the next run. `withWriteAccess` takes the advisory lock
+directly and opens a writable handle on a file that already exists, refusing when it does not.
+{{% /notice %}}
+
+Only the rank form of `integrity-check` detects the failure worth detecting. The bare form and the rank-0 form both pass
+on an index that has drifted from its content table, and a drifted index answers `MATCH` with fewer rows than the corpus
+holds, so every search silently under-reports while `knowledge match` keeps promising a complete set. That is why it is
+worth taking a write lock for, and why it runs on every `doctor` invocation rather than behind a flag: a check that
+guards the completeness contract and is off by default protects nobody.
+
+It is cheap enough to be unconditional. Measured at 0.2s over 600 documents, 4,727 chunks and 11 MiB, against 0.02s for
+the rest of a doctor run, and it leaves the database file's mtime alone, touching only the WAL sidecar, so what
+`knowledge stats` reports as Modified does not move.
+
+Everything that can prevent the check from running is reported as skipped, not failed: a read-only index file and a
+read-only store directory are both supported deployments, a concurrent writer is ordinary, and none of them is a finding
+about the index. SQLite reports the real failure as `database disk image is malformed`, which reads as a dying disk and
+is not what happened, so it is translated into a sentence naming the stale table and the repair.
+
+`knowledge rebuild` is that repair, and it is a separate verb rather than something the doctor offers. It rebuilds both
+FTS indexes from the chunk text, leaving documents, text and vectors untouched, so nothing is re-embedded. The reason it
+is not automatic is that it repairs a derived index over intact text and nothing else: given a damaged chunks table it
+builds a consistent index over the damage, after which the check passes and reports nothing.
 
 ## Store directory resolution is a documented footgun
 
@@ -278,6 +570,18 @@ says outright not to index secrets.
 
 Retrieved text is framed to the model as untrusted reference data rather than instructions, in the system note and in the
 tool description alike. The model-supplied query is sanitized before it reaches an operator's terminal.
+
+`chunks_vocab` deserves its own sentence, because it is the one object whose contents are broader than any query result.
+It makes the full vocabulary of the corpus, with per-term frequencies, readable through every read-only handle,
+including the agent's. That is acceptable only as long as nothing serves it: `knowledge words` is a CLI verb, which the
+agent cannot reach, and that is the control rather than the table's own permissions.
+
+The reason to keep it that way is not confidentiality. The same read-only handle already returns verbatim document text
+through `knowledge_search`, so a vocabulary adds no new class of secret. What it adds is a discovery primitive.
+Retrieval today requires guessing a word: `*` is refused outright, and the related-forms explanation names at most five
+words sharing a stem, and only when the counts disagree. A vocabulary tool removes both limits at once and hands any
+caller, including one following injected instructions, the identifiers that make the rest of the corpus searchable. It
+is also, more prosaically, thousands of tokens of low signal for a model that asked a question.
 
 ## What is deliberately absent
 
@@ -298,11 +602,12 @@ and nothing else:
 
 - `IndexOptions.Extensions` is a real extension point that no caller sets, so the indexable extension set is not
   configurable from YAML or flags today.
-- `documents.title` is computed and written on every upsert and read on no path at all. Chunk-level heading paths do all
-  the work.
+- `documents.title` is computed and written on every upsert and read on no path at all, which stays true only because
+  the enumerate result carries no title either: adding one would turn a written-and-never-read column into a read one,
+  for output nothing renders. Chunk-level heading paths do all the work.
 - `IndexStats.FirstBuild` is computed and read by nobody; both first-build previews check the document count themselves.
 - `Hit.ChunkID` is populated and never read outside the package.
-- The format version has a refusal for anything newer but no migration path.
+- `rag.Destroy` has one caller, `knowledge reset --force`, and only on the branch where the index could not be opened.
 - `Meta.Normalized` is always written true and any index with it false is a mismatch. It documents the invariant rather
   than selecting a behavior.
 - `Store.VectorEnabled()` and `Store.Dir()` have no in-repository callers.

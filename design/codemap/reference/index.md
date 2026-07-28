@@ -15,11 +15,14 @@ mean here".
 | `fisk knowledge index` | Builds or updates the index, incrementally by content hash |
 | `fisk knowledge watch` | Watches the configured paths and re-indexes on change |
 | `fisk knowledge search` | Retrieves from the index for tuning, printing citations and snippets |
+| `fisk knowledge match` | Lists every document containing the words, as a complete set. Aliases `enumerate`, `which` |
+| `fisk knowledge words` | Lists the vocabulary of the index with document counts. Aliases `vocab`, `terms` |
 | `fisk knowledge show` | Prints one chunk verbatim, resolving a citation |
 | `fisk knowledge rm` | Removes specific indexed sources by path |
 | `fisk knowledge reset` | Wipes the entire index |
 | `fisk knowledge sources` | Lists indexed files with chunk counts and last-indexed time |
-| `fisk knowledge doctor` | Checks the index and, when configured, the embeddings server |
+| `fisk knowledge doctor` | Checks the index, its full-text integrity, and when configured the embeddings server |
+| `fisk knowledge rebuild` | Rebuilds the search indexes from the stored text, without re-embedding |
 | `fisk knowledge stats` | Prints the tier banner and index counts and sizes |
 | `fisk mcp` | Serves the tools over MCP on streamable HTTP |
 | `fisk a2a` | Serves the tools to other agents over NATS |
@@ -33,16 +36,16 @@ Line counts exclude tests, at the snapshot commit.
 
 | Package | Files | Lines | Role | Page |
 |---------|------:|------:|------|------|
-| `main` (repo root) | 13 | 3016 | The CLI: command registration, flags, signals, and both terminal renderers | [Configuration]({{% relref "configuration" %}}) |
+| `main` (repo root) | 15 | 3869 | The CLI: command registration, flags, signals, and both terminal renderers | [Configuration]({{% relref "configuration" %}}) |
 | `config` | 1 | 1281 | The whole configuration surface, parsing, defaulting, and validation | [Configuration]({{% relref "configuration" %}}) |
 | `internal/agent` | 5 | 2975 | Run setup, the loop, hooks, and the events contract | [The agent loop]({{% relref "agent-loop" %}}) |
 | `internal/toolkit` | 8 | 637 | Neutral tool contracts: `Tool`, `Kind`, `Presentation`, `Prompter` | [Tools]({{% relref "tools" %}}) |
 | `internal/toolkit/fisk` | 5 | 1384 | Introspection, filtering, argv construction, execution | [Tools]({{% relref "tools" %}}) |
-| `internal/toolkit/builtin` | 3 | 955 | The human-in-the-loop, memory, and knowledge tools | [Tools]({{% relref "tools" %}}) |
+| `internal/toolkit/builtin` | 4 | 1299 | The human-in-the-loop, memory, and knowledge tools | [Tools]({{% relref "tools" %}}) |
 | `internal/toolkit/functool` | 3 | 446 | The generic function-tool backend | [Tools]({{% relref "tools" %}}) |
 | `internal/llm` | 6 | 423 | The provider-neutral message model and registry | [Providers]({{% relref "providers" %}}) |
 | `internal/llm/anthropic` | 3 | 534 | The only provider, and the only SDK importer | [Providers]({{% relref "providers" %}}) |
-| `internal/rag` | 12 | 3055 | The knowledge index: chunking, embedding, hybrid search, watching | [Knowledge]({{% relref "knowledge" %}}) |
+| `internal/rag` | 16 | 4905 | The knowledge index: chunking, embedding, hybrid search, enumeration, vocabulary, watching | [Knowledge]({{% relref "knowledge" %}}) |
 | `internal/memory` | 6 | 513 | The memory contract and shared rules | [Memory]({{% relref "memory" %}}) |
 | `internal/memory/file` | 3 | 316 | One markdown file per memory | [Memory]({{% relref "memory" %}}) |
 | `internal/memory/jetstream` | 1 | 487 | One KV entry per memory, with a read-before-update guard | [Memory]({{% relref "memory" %}}) |
@@ -60,7 +63,7 @@ Line counts exclude tests, at the snapshot commit.
 
 The root `main` package holds one file per command plus the two event renderers: `main.go`, `run_command.go`,
 `run_events.go`, `run_tui_events.go`, `session_command.go`, `resume_replay.go`, `info_command.go`, `rag_command.go`,
-`rag_watch.go`, `mcp_command.go`, `a2a_command.go`, `discover_command.go`, `remote_tools.go`.
+`rag_match.go`, `rag_words.go`, `rag_watch.go`, `mcp_command.go`, `a2a_command.go`, `discover_command.go`, `remote_tools.go`.
 
 ## Key types
 

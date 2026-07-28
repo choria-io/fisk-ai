@@ -239,7 +239,7 @@ Traced output for the three key-taking tools runs the model-supplied key through
 reaches the screen, falling back to the bare tool name on a decode failure.
 
 None of these tools can be served over MCP or a2a. They declare no serving exposure, which the serving surfaces apply
-per tool, and the configuration validator independently rejects any name other than `knowledge_search` in the MCP
+per tool, and the configuration validator independently rejects any name but the two knowledge tools in the MCP
 allowlist. Both gates must pass, so neither one alone is load-bearing.
 
 ## Failing at construction

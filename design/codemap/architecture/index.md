@@ -138,7 +138,7 @@ applies and what happens to a confirm-gated tool.
 | | `run` | `mcp` | `a2a` |
 |---|-------|-------|-------|
 | Needs a model and prompt | yes | no | no |
-| Built-in tools | all enabled ones | `knowledge_search` only, if allowlisted | none declares a2a exposure |
+| Built-in tools | all enabled ones | the knowledge tools only, if allowlisted | none declares a2a exposure |
 | Confirm-gated tools | prompted locally | exposed and gated by elicitation | dropped entirely |
 | Concurrency | one loop | semaphore | semaphore |
 | Human reachable | yes, on a terminal | maybe, through the client | no |

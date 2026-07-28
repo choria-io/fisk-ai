@@ -236,12 +236,19 @@ narrows it further and can never widen past it, and the zero value serves nowher
 | `memory_read` | memory | no | no | A miss is a soft result, not an error |
 | `memory_write` | memory | no | no | Create by default; an existing-key reply names the colliding description |
 | `memory_delete` | memory | no | no | Idempotent |
-| `knowledge_search` | knowledge | yes | no | The only built-in that declares any serving exposure |
+| `knowledge_search` | knowledge | yes | no | Read-only ranked retrieval |
+| `knowledge_enumerate` | knowledge | yes | no | Read-only complete-set matching; returns paths and counts, no text |
 
 The HITL tools need an operator at a terminal and the memory tools carry operator state, so neither is offered on a
-served surface. `knowledge_search` is read-only and needs no prompt, so it declares MCP. It declares no A2A exposure
-because there is no a2a `builtins` allowlist: without a selection mechanism, declaring it would serve it the moment an
-operator enables a2a, with nothing to narrow it.
+served surface. Both knowledge tools are read-only and need no prompt, so both declare MCP. Neither declares A2A
+exposure because there is no a2a `builtins` allowlist: without a selection mechanism, declaring it would serve it the
+moment an operator enables a2a, with nothing to narrow it.
+
+The two knowledge tools are meant to be served together, since a client that can rank but cannot enumerate has the
+defect enumeration exists to fix. That is carried by a note from `notePartialKnowledgeSet`, never by one allowlist entry
+selecting the other: selection stays strictly per tool, so naming `knowledge_search` serves exactly `knowledge_search`.
+The per-tool filter now has two genuinely servable tools to keep apart, which tests it harder than a tool that could not
+be served either way.
 
 `mustNew` is the single chokepoint that stamps `KindBuiltin`, and it panics on a bad spec. A compiled-in static spec is
 correct by construction, so a failure there is a programming error, surfaced the way `regexp.MustCompile` does rather
