@@ -423,6 +423,79 @@ Imported tools keep their own name where it is unambiguous, and take the `<alias
 would collide. A `run` is strict: an unreachable or unimportable remote agent fails the run. `fisk info` is lenient
 and reports each remote host's reachability instead.
 
+## Telemetry
+
+`telemetry` exports OpenTelemetry traces and metrics over OTLP/HTTP. It applies to `fisk run`, and to knowledge
+searches served by `fisk mcp`; `fisk a2a` ignores it. Nothing is exported unless `enabled` is true.
+
+```yaml
+telemetry:
+  enabled: true
+  endpoint: http://127.0.0.1:4318
+  service_name: ""
+  sample_ratio: 1.0
+  no_metrics: false
+  capture:
+    enabled: false
+    messages: delta
+    max_bytes: 8192
+```
+
+| Setting        | Description                                                                                                                                       |
+|----------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
+| `enabled`      | Turns export on. Default `false`.                                                                                                                 |
+| `endpoint`     | OTLP/HTTP base URL; `/v1/traces` and `/v1/metrics` are appended. Unset, the standard `OTEL_EXPORTER_OTLP_*` variables apply, defaulting to `http://localhost:4318`. |
+| `service_name` | Service name reported to the backend. Unset, it falls back to `OTEL_SERVICE_NAME`, then `identity`, then `fisk-ai`.                                |
+| `sample_ratio` | Head sampling ratio from `0.0` to `1.0`. Default `1.0`. An explicit `0` samples nothing.                                                           |
+| `no_metrics`   | Exports traces only. Metrics are on with telemetry.                                                                                               |
+| `capture`      | Exports the conversation itself, not only structure and timing. Off by default; see below.                                                        |
+
+### Content capture
+
+| Setting            | Description                                                                                                          |
+|--------------------|----------------------------------------------------------------------------------------------------------------------|
+| `capture.enabled`  | Exports the system prompt, the conversation, model replies, tool arguments and tool results. Default `false`.         |
+| `capture.messages` | `delta` (default) exports what each model call added; `full` exports the whole conversation on every call.            |
+| `capture.max_bytes`| Cap per content attribute, measured on the encoded JSON. Default `8192`, from `256` to `65536`.                       |
+
+Everything the model saw and everything the tools returned reaches the collector, including the verbatim output of
+commands the model ran, and an export cannot be recalled. Nothing is redacted. There is no command-line flag; only
+`--no-telemetry`, which suppresses the whole export.
+
+Plain `http://` to a non-loopback host is rejected at startup while capture is on. The settings under `capture` are
+ignored and unvalidated while `capture.enabled` is false. See the [telemetry guide](../telemetry/#content-capture)
+for the attributes, sizing and collector limits.
+
+Transport credentials are never written in the file. `OTEL_EXPORTER_OTLP_HEADERS` and the other standard `OTEL_*`
+variables configure the connection, so the same configuration sends to a collector, Grafana Tempo, Honeycomb, or any
+OTLP/HTTP endpoint without a change here. This build speaks OTLP/HTTP only: port `4318`, not `4317`.
+
+Whether a run exports is decided in this order:
+
+| Condition                                                        | Result             |
+|------------------------------------------------------------------|--------------------|
+| `--no-telemetry`, `NO_TELEMETRY`, or `OTEL_SDK_DISABLED=true`    | Off                |
+| `telemetry.enabled: true`                                        | On                 |
+| Otherwise                                                        | Off                |
+
+Setting `OTEL_EXPORTER_OTLP_*` does not enable export on its own; a host-wide collector endpoint does not turn every
+agent on the machine into an exporter. A run that finds those variables set while telemetry is off prints a note saying
+so.
+
+An invalid configuration fails at startup rather than exporting nowhere: an endpoint that is not an `http` or `https`
+URL, an endpoint on port `4317`, `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, a `sample_ratio` outside `0.0` to `1.0`, or plain
+`http` to a non-loopback host while an `OTEL_EXPORTER_OTLP_*_HEADERS` variable is set, which would send the credential in
+the clear.
+
+`fisk info` shows the resolved settings and where each came from. After a run, an export that did not reach the
+collector is reported; `--verbose` also reports a successful one.
+
+A run exports one trace covering the whole run, with spans for setup, each turn, each model call, each tool call, each
+knowledge search, each request to the embeddings server and each tool served by a remote agent, plus the GenAI metric
+instruments. A model call carries one event per HTTP attempt, so a retried call reports what it spent waiting.
+Indexing is not instrumented. The [Telemetry guide](../telemetry/) has a local collector to try it against, the span
+tree to expect, and the attribute reference.
+
 ## Models
 
 Well-known Anthropic model identifiers are available as constants in the `config` package; any value the Anthropic API
@@ -466,6 +539,7 @@ overlap, except for the hard off switches (`harness.no_tui`), which the command 
 | `--checkpoint` |                      | Journal the run to a session that can be suspended and resumed.                                                                                                            |
 | `--resume`     |                      | Resume a checkpointed session by id instead of starting a new run.                                                                                                         |
 | `--state-dir`  |                      | Override where sessions are stored, default `$XDG_STATE_HOME/fisk-ai/runs`.                                                                                                |
+| `--no-telemetry` | `NO_TELEMETRY`     | Suppress OpenTelemetry export for this run, whatever `telemetry.enabled` says. The credential scrub still applies.                                                          |
 
 The MCP server port also reads `FISK_AI_MCP_PORT`, which `--port` overrides and which in turn overrides
 `expose.agent.mcp.port`. Sessions, chat, and their durability semantics are covered in the [Agents guide](../agents/).
@@ -478,3 +552,14 @@ fix which of its commands become tools, and nothing outside that set is callable
 Commands run as an argument vector rather than through a shell, their arguments are bound to each command's schema, the
 `ANTHROPIC_API_KEY` is stripped from their environment, output is capped at 64 KiB, and `LLMFORMAT=1` is set. The
 [Agents](../agents/#safety) and [MCP](../mcp/#safety) guides describe the full threat model for each mode.
+
+The OpenTelemetry export credentials are stripped from tool environments too: `OTEL_EXPORTER_OTLP_HEADERS` and its
+per-signal forms, and the mTLS variables `OTEL_EXPORTER_OTLP_CLIENT_KEY`, `OTEL_EXPORTER_OTLP_CERTIFICATE` and
+`OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` with their per-signal forms. This happens whether or not telemetry is enabled,
+so `--no-telemetry` does not re-expose a collector token. The mTLS variables name a file path rather than holding a
+secret, so removing them from the environment hides the location of the key, not the key: a tool running as the same
+user can still read that file if it knows where to look.
+
+Spans carry structure and timing, tool names and argument key names, and no prompts, tool arguments or results.
+Setting `telemetry.capture.enabled` reverses that for every one of them, and for the `error.type` reduction as well,
+since a tool's error text is part of its result.
