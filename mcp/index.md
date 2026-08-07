@@ -105,14 +105,25 @@ Each command becomes an MCP tool named by its command path, for example `stream_
 description built from the command's help. Both the short help and any long help are surfaced to the client, so a
 command that carries detailed long help gives the model richer guidance than a one-line summary alone.
 
-Each tool also carries one MCP annotation, a readable title holding the space-separated command path, so `stream rm`
-rather than the underscore tool name.
+Each tool carries a readable title annotation holding the space-separated command path, so `stream rm` rather than the
+underscore tool name, and the behavioral hints its [behavior tags](../reference/#behavior-tags) declare:
 
-What a command declares about itself reaches the client as description text rather than as an annotation: every tag it
-carries is appended to the description, as described under [Command tags over MCP](#command-tags-over-mcp) below.
+| Tag              | Annotation                |
+|------------------|---------------------------|
+| `ai:read_only`   | `readOnlyHint: true`      |
+| `ai:destructive` | `destructiveHint: true`   |
+| `ai:additive`    | `destructiveHint: false`  |
+| `ai:idempotent`  | `idempotentHint: true`    |
 
-Approval is not expressed as an annotation, because annotations are advisory hints a client may ignore rather than a
-control channel.
+Untagged commands send no hints at all, leaving the client on the MCP defaults, which treat a tool as destructive and
+open-world. A confirmation gate does not change these hints: a command tagged both `ai:read_only` and `ai:confirm` is
+still advertised as read-only.
+
+Approval itself is not expressed as an annotation, because annotations are advisory hints a client may ignore rather
+than a control channel.
+
+Every tag a command carries, reserved and free-form alike, also reaches the client as description text, as described
+under [Command tags over MCP](#command-tags-over-mcp) below.
 
 The served tools are the agent's `include`/`exclude` selection, narrowed further by `expose.agent.tools` when it is set.
 With neither, every command is served, subject to the tag rules below. Tool selection uses the same regular expressions
@@ -123,11 +134,12 @@ bounded by `tool_timeout` per call and `max_concurrent_tools` in flight at once.
 
 The reserved [command tags](../agents/#command-tags) are honored over MCP, with two differences from the agent loop:
 
-| Tag           | Behavior over MCP                                                                          |
-|---------------|-------------------------------------------------------------------------------------------|
-| `ai:deny`     | never exposed, the reliable way to keep a command off MCP entirely                         |
-| `ai:no_defer` | no effect, since MCP does not defer tools behind a tool-search tool                        |
-| `ai:confirm`  | exposed and gated through elicitation rather than a local operator prompt                  |
+| Tag             | Behavior over MCP                                                          |
+|-----------------|-----------------------------------------------------------------------------|
+| `ai:deny`       | never exposed, the reliable way to keep a command off MCP entirely          |
+| `ai:no_defer`   | no effect, since MCP does not defer tools behind a tool-search tool         |
+| `ai:confirm`    | exposed and gated through elicitation rather than a local operator prompt   |
+| behavior tags   | advertised as tool annotations, as described above                          |
 
 All of a command's tags, reserved and free-form alike, are included in the tool description as a trailing `Tags: ...`
 line, the same as in the agent, so a client's prompt can reference them.

@@ -213,6 +213,7 @@ harness:
   # a regex, and additive to ai:confirm. An entry that matches no loaded
   # command is reported as a warning at startup.
   confirm_tags:
+    - ai:destructive
     - impact:rw
 
   # A hard off switch for the full-screen terminal UI: the agent always
@@ -275,12 +276,18 @@ Treat what a memory contains as data the model saved, not as trusted instruction
 ## Command tags
 
 Fisk commands can carry tags, set in their fisk definition or, for App Builder applications, in YAML. Any tag can be
-matched by `include`/`exclude`, and three are reserved and interpreted by Fisk AI itself:
+matched by `include`/`exclude`. The `ai:` prefix is reserved for the tags Fisk AI interprets; a tag under that prefix
+that is not one of the tags below does nothing and is reported as a warning at startup, by `fisk info`, and by the MCP
+and agent-to-agent servers.
 
-| Tag           | Meaning                                                                                                        |
-|---------------|----------------------------------------------------------------------------------------------------------------|
+### Control tags
+
+These change what Fisk AI does with a command.
+
+| Tag           | Meaning                                                                                                       |
+|---------------|---------------------------------------------------------------------------------------------------------------|
 | `ai:deny`     | Never expose the command; dropped before include/exclude and can never be added back. The reliable off switch. |
-| `ai:no_defer` | Always send the command directly instead of deferring it behind the tool-search tool.                          |
+| `ai:no_defer` | Always send the command directly instead of deferring it behind the tool-search tool.                         |
 | `ai:confirm`  | Require the operator to approve the command at the terminal before it runs; always active, no config flag.     |
 
 `ai:confirm` denies by default: an interrupt, an end-of-input, or no interactive terminal declines rather than runs. An
@@ -289,8 +296,35 @@ matched by `include`/`exclude`, and three are reserved and interpreted by Fisk A
 requested through elicitation instead of a local operator prompt; over agent-to-agent, confirmation-gated commands are
 not served at all. The full behavior is documented under [Command Tags](../agents/#command-tags) in the Agents guide.
 
+### Behavior tags
+
+These describe what the command does. They enforce nothing: they are advice, carried to the model, to MCP clients as
+[tool annotations](https://modelcontextprotocol.io/specification/server/tools#tool-annotations), and to peer agents. Use
+`ai:deny` and `ai:confirm` for control.
+
+| Tag              | Meaning                                                                            |
+|------------------|------------------------------------------------------------------------------------|
+| `ai:read_only`   | The command does not modify anything.                                              |
+| `ai:destructive` | The command may destroy or overwrite existing state.                               |
+| `ai:additive`    | The command changes state but only adds to it.                                     |
+| `ai:idempotent`  | Running the command again with the same arguments has no further effect.           |
+
+Most commands need one tag: `ai:read_only` for a read, `ai:destructive` for a delete. Leave a command untagged and
+clients fall back to the MCP defaults, which assume the worst and treat it as destructive.
+
+Each tag sets only what it names. `ai:read_only` does not imply `ai:idempotent`, and MCP clients ignore the destructive
+and idempotent hints for a read-only tool. A command tagged both `ai:read_only` and `ai:destructive` is used as
+destructive and the contradiction is reported as a warning.
+
+Because these are ordinary tags, `harness.confirm_tags: [ai:destructive]` gates every destructive command behind
+approval, and `include: {tags: [ai:read_only]}` serves a read-only tool set. Both select on what the command author
+remembered to tag, so they are a convenience rather than a boundary; `ai:deny` and name-based `include`/`exclude` remain
+the reliable controls.
+
 All of a command's tags, reserved and free-form alike, are appended to the tool description Fisk AI sends the model as a
-trailing `Tags: ...` line, so a prompt can reference them.
+trailing `Tags: ...` line, so a prompt can reference them. Adding or changing a tag changes that description, which
+changes the tool-set fingerprint a checkpointed session is keyed on: a session suspended before the change refuses to
+resume after it.
 
 ## Serving over MCP
 

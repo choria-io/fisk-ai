@@ -597,14 +597,23 @@ command should run only with the operator's say-so, typically something destruct
 
 Fisk commands can carry tags, set in their fisk definition (or, for App Builder
 applications, in YAML). Tags can be referenced by the `include`/`exclude` rules
-to select commands by group, and a few tags are reserved and interpreted by
-fisk itself to control how a command is exposed to the model:
+to select commands by group, and the `ai:` prefix is reserved for the tags fisk
+interprets. The full vocabulary is listed under
+[Command tags](../reference/#command-tags) in the Reference guide; the tags that
+control how a command is exposed to the model are:
 
 | Tag           | Description                                                                                                                                                           |
 |---------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `ai:deny`     | Never expose the command to the model; it is dropped before include/exclude and can never be added back.                                                              |
 | `ai:no_defer` | Always send the command directly instead of deferring it behind the tool-search tool.                                                                                 |
 | `ai:confirm`  | Require the operator to approve the command at the terminal before it runs; an "allow for the session" answer is remembered for that command for the rest of the run. |
+
+The behavior tags (`ai:read_only`, `ai:destructive`, `ai:additive`,
+`ai:idempotent`) describe what a command does rather than controlling it. They
+reach the model and, over MCP, the client; they gate nothing.
+
+A tag under the `ai:` prefix that fisk does not recognize does nothing, so it is
+reported as a warning at startup and by `fisk info`.
 
 `ai:deny` is the reliable way to keep a command the agent should never call out of
 reach, since it applies before any `include`/`exclude` rule. `ai:no_defer` keeps the
@@ -632,7 +641,7 @@ enable it.
 The same gate can be extended to other tags with the `harness.confirm_tags`
 configuration key: any tag listed there gates its commands exactly as `ai:confirm` does, which
 lets an operator require confirmation for a tag the application already uses (for
-example `impact:rw`) without editing the application. It is additive to the
+example `ai:destructive`, or an application's own `impact:rw`) without editing the application. It is additive to the
 always-on `ai:confirm` tag and matching is exact rather than a regex. A
 `confirm_tags` entry that matches no loaded command is reported as a warning at
 startup, since a typo would otherwise leave a command ungated. The approval prompt

@@ -79,10 +79,10 @@ The root `main` package holds one file per command plus the two event renderers:
 | `toolkit.CommandResult` | `internal/toolkit` | The JSON shape a command-ish tool returns, local or remote |
 | `llm.Provider` | `internal/llm` | The one place a concrete SDK is spoken on the request path |
 | `llm.Message` | `internal/llm` | The neutral message model, and also the on-disk format |
-| `runstate.Store` | `internal/runstate` | Create, open, load, list, delete for run journals |
+| `runstate.Store` | `internal/runstate` | Describe, create, open, load, list, delete for run journals |
 | `runstate.RunState` | `internal/runstate` | The folded, resumable state |
 | `runstate.Fingerprint` | `internal/runstate` | The configuration a journal was written against |
-| `memory.Store` | `internal/memory` | Four methods over durable model-written notes |
+| `memory.Store` | `internal/memory` | Describe, list, read, write, delete over durable model-written notes |
 | `rag.Store` | `internal/rag` | One handle over the single SQLite index file |
 | `a2a.Transport` | `internal/a2a` | Round-trip, serve, describe, close; moves bytes and never decodes |
 | `a2a.Header` | `internal/a2a` | Framing embedded flat into every message |
