@@ -216,6 +216,18 @@ harness:
     - ai:destructive
     - impact:rw
 
+  # Bounds a single tool call. Unset, or 0s, leaves tool execution
+  # unbounded, which is the default: at a terminal you can interrupt a
+  # command that will never answer. A host serving work with nobody
+  # watching applies a default of its own when this is unset.
+  #
+  # The bound cancels the call. A command is killed along with its
+  # process group; an in-process tool stops only if it checks. A call
+  # waiting on your answer is never bounded. Separate from
+  # expose.agent.mcp.tool_timeout and expose.agent.a2a.tool_timeout,
+  # which bound a served call.
+  tool_timeout: 5m
+
   # A hard off switch for the full-screen terminal UI: the agent always
   # uses line-by-line output, even on an interactive terminal, and the
   # command line cannot turn the UI back on. Use the --no-tui flag for a
