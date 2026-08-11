@@ -585,7 +585,7 @@ overlap, except for the hard off switches (`harness.no_tui`), which the command 
 | `--checkpoint` |                      | Journal the run to a session that can be suspended and resumed.                                                                                                            |
 | `--resume`     |                      | Resume a checkpointed session by id instead of starting a new run.                                                                                                         |
 | `--state-dir`  |                      | Override where sessions are stored, default `$XDG_STATE_HOME/fisk-ai/runs`.                                                                                                |
-| `--no-telemetry` | `NO_TELEMETRY`     | Suppress OpenTelemetry export for this run, whatever `telemetry.enabled` says. The credential scrub still applies.                                                          |
+| `--no-telemetry` | `NO_TELEMETRY`     | Suppress OpenTelemetry export, whatever `telemetry.enabled` says. On `fisk-ai run` it covers the run, on `fisk-ai serve` the whole worker. The credential scrub still applies. |
 
 The MCP server port also reads `FISK_AI_MCP_PORT`, which `--port` overrides and which in turn overrides
 `expose.agent.mcp.port`. Sessions, chat, and their durability semantics are covered in the [Agents guide](../agents/).

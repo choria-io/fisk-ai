@@ -29,7 +29,8 @@ Every setting is in the [reference](../reference/#telemetry). Transport credenti
 standard `OTEL_EXPORTER_OTLP_HEADERS` and friends configure the connection, so the same configuration sends to a
 collector, Grafana Tempo, Honeycomb or any OTLP/HTTP endpoint.
 
-`--no-telemetry` suppresses export for one run.
+`--no-telemetry` suppresses export: for one run on `fisk-ai run`, and for the whole process on `fisk-ai serve`,
+which reports whether telemetry is on in its startup banner.
 
 ## A local collector
 
