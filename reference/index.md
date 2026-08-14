@@ -261,6 +261,10 @@ harness:
     # system prompt at run start so the model knows what it has saved. Set
     # true to keep the store's contents out of the prompt. Negative switch.
     no_index: false
+    # Serve memory_list and memory_read only, withholding memory_write and
+    # memory_delete, so a run uses what earlier runs saved without changing
+    # it. The store is untouched: anything else writing to it still does.
+    read_only: false
     # Backend-specific settings. For the "file" backend: "directory", the
     # path memory files live under, defaulting to "memory/<identity>". A
     # relative directory resolves under the store base when a deployment

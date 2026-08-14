@@ -691,6 +691,9 @@ and refuses to overwrite an existing key unless called with `overwrite: true`, s
 the model does not silently clobber a note; the create still fails cleanly if two
 writers race for the same new key.
 
+`read_only: true` serves `memory_list` and `memory_read` and withholds the other two, for a run that should use what
+earlier runs saved without changing it. The store itself is unaffected, so anything else writing to it still does.
+
 At the start of a run the stored keys and descriptions are injected into the
 system prompt as an index so the model knows what it has saved; `memory_list` is
 the live view during the run. Turn the index off with `no_index: true`.
