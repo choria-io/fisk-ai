@@ -60,7 +60,7 @@ service:
 Then run the agent. The run's summary line ends with the trace id, and the full-screen UI shows it on the end card:
 
 ```nohighlight
-Run summary: model=claude-sonnet-5 llm_calls=2 tool_calls=1 tokens=1832/241 latency=4.1s trace=4bf92f3577b34da6a3ce929d0e0e4736
+Run summary: model=claude-sonnet-5 llm_calls=2 tool_calls=1 tokens=1832/241 thinking=0 latency=4.1s trace=4bf92f3577b34da6a3ce929d0e0e4736
 ```
 
 With `--verbose` the run also reports what reached the collector. An export that did not arrive is always reported.
@@ -269,6 +269,10 @@ cost = (input_tokens - cache_read - cache_creation) x uncached rate
 
 `fisk.llm.uncached_input_tokens` is that first term already worked out, and is the same number the run summary prints.
 
+`gen_ai.usage.reasoning.output_tokens` is the share of `output_tokens` the model spent reasoning. It is already
+included in `output_tokens`, so it does not enter the calculation above; it is there because reasoning is not
+displayed by default, which makes a dashboard the only place its cost is visible.
+
 On a resumed run, `gen_ai.usage.*` on the root covers that process alone, so summing it across a session's traces
 gives the session total once. `fisk.session.usage.*` carries the cumulative view for comparison.
 
@@ -307,7 +311,7 @@ telemetry:
 A run with capture on shows `OTEL Enabled + content` on the full-screen startup card and marks its summary line:
 
 ```nohighlight
-Run summary: model=claude-sonnet-5 llm_calls=2 tool_calls=1 tokens=1832/241 latency=4.1s trace=4bf92f35 content=exported
+Run summary: model=claude-sonnet-5 llm_calls=2 tool_calls=1 tokens=1832/241 thinking=0 latency=4.1s trace=4bf92f35 content=exported
 ```
 
 `fisk info` shows what would be captured, including the derived export batch size. Plain `http://` to a non-loopback

@@ -167,14 +167,21 @@ llm:
     # "2m". Default "120s".
     call_timeout: 120s
 
-  # Controls whether the model exposes its reasoning. Off by default; when
-  # off, no thinking is requested and the model uses its default behavior.
+  # Controls whether the model exposes its reasoning, which some providers
+  # call reasoning rather than thinking. The whole block is optional and
+  # leaving it out is the default: nothing is sent and the model uses its own
+  # behavior. Including it states a preference either way, so omitting it and
+  # setting enabled false are different requests.
+  #
+  # Older models that predate adaptive thinking (Sonnet 4.5, Haiku 4.5) reject
+  # the parameter, and so may a proxy behind ANTHROPIC_BASE_URL. Both explicit
+  # states send one, so remove the block for those rather than setting false.
   thinking:
-    # When true, asks the model to think and surfaces its reasoning
-    # separately from the answer (thought-bubble lines on stderr in shell
-    # mode, folding blocks in the TUI). Older models that predate adaptive
-    # thinking (Sonnet 4.5, Haiku 4.5) reject it, so leave it off for those.
-    enabled: false
+    # true asks the model to think and surfaces its reasoning separately from
+    # the answer (thought-bubble lines on stderr in shell mode, folding blocks
+    # in the TUI). false asks it not to think, which changes only a model that
+    # would otherwise reason unaided.
+    enabled: true
 
   # When true, disables Anthropic prompt caching for the run. Left off,
   # Fisk AI caches the stable prefix of each request to lower cost and
@@ -581,6 +588,7 @@ overlap, except for the hard off switches (`harness.no_tui`), which the command 
 | `--no-tui`     | `NO_TUI`             | Disable the full-screen terminal UI for this run and use line-by-line output.                                                                                              |
 | `--chat`       |                      | Keep the full-screen UI open for interactive follow-ups after each turn.                                                                                                   |
 | `--verbose`    | `VERBOSE`            | Show more verbose output.                                                                                                                                                  |
+| `--thinking`   | `THINKING`           | Show the model's reasoning, which is hidden by default. On `fisk session show --transcript` it includes reasoning in the transcript. The `thinking=N` token counter is reported either way. |
 | `--trace`      |                      | Write a JSON-lines trace of every LLM request and response to a file.                                                                                                      |
 | `--checkpoint` |                      | Journal the run to a session that can be suspended and resumed.                                                                                                            |
 | `--resume`     |                      | Resume a checkpointed session by id instead of starting a new run.                                                                                                         |

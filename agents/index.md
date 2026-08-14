@@ -162,7 +162,7 @@ $ fisk run --tool-output --no-tui 'tell me a joke '
 
   There you go! A classic cow joke for you!
 
-Run summary: model=claude-haiku-4-5-20251001 llm_calls=2 tool_calls=2 tokens=3536/113 latency=3.613s
+Run summary: model=claude-haiku-4-5-20251001 llm_calls=2 tool_calls=2 tokens=3536/113 thinking=0 latency=3.613s
 ```
 
 The default is a running TUI. To make the output easy to show here, the run passes `--no-tui` and shows the tool call
@@ -177,7 +177,7 @@ $ fisk run 'tell me a joke about a cat'
 
   If you'd like to hear some funny cow jokes instead, I'd be happy to moo-ve right into those for you!
 
-Run summary: model=claude-haiku-4-5-20251001 llm_calls=1 tool_calls=0 tokens=1632/54 latency=1.341s
+Run summary: model=claude-haiku-4-5-20251001 llm_calls=1 tool_calls=0 tokens=1632/54 thinking=0 latency=1.341s
 ```
 
 ## Running the agent
@@ -214,9 +214,8 @@ markdown is written so the result stays free of ANSI escape codes. Rendering can
 the standard `NO_COLOR` environment variable.
 
 Output is separated by kind. Only the final answer goes to stdout; everything else goes to stderr: the commands being
-run, mid-conversation updates, a final run summary (LLM calls, tool calls, tokens, latency), and, when thinking is
-enabled, the model's reasoning (each line prefixed with a thought bubble). This keeps stdout safe to pipe into other
-tools.
+run, mid-conversation updates, a final run summary (LLM calls, tool calls, tokens, latency), and, with `--thinking`,
+the model's reasoning (each line prefixed with a thought bubble). This keeps stdout safe to pipe into other tools.
 
 #### One-shot runs
 
@@ -273,7 +272,8 @@ The run stops with a summary once a budget is reached, whether or not the task i
 
 ### Thinking
 
-Extended thinking lets the model expose its reasoning before it answers. It is off by default:
+Extended thinking lets the model expose its reasoning before it answers. Some providers call this reasoning rather
+than thinking; it is the same setting.
 
 ```yaml
 llm:
@@ -281,12 +281,16 @@ llm:
     enabled: true
 ```
 
-When enabled, the reasoning is surfaced separately from the answer: as thought-bubble lines on stderr in shell mode, and
-as folding thinking blocks in the TUI.
+Reasoning is never displayed unless asked for. `--thinking` (or `THINKING=1`) shows it, on `fisk run` and on
+`fisk session show --transcript`.
+
+`thinking=N` on the run summary and in the TUI status bar reports the tokens spent reasoning, shown whether or not
+reasoning is displayed. It is part of the output half of `tokens=in/out`, not extra.
 
 > [!info] Note
-> Older models that predate adaptive thinking, such as Sonnet 4.5 and Haiku 4.5, reject the request. Leave thinking off
-> for those.
+> Older models that predate adaptive thinking, such as Sonnet 4.5 and Haiku 4.5, reject the parameter. Both explicit
+> states send one, so for those models remove the `thinking` block rather than setting `enabled: false`. The same
+> applies to an endpoint behind `ANTHROPIC_BASE_URL` whose proxy does not implement it.
 
 ### Terminal UI
 
@@ -461,12 +465,10 @@ happens.
 
 Resume a session against the same agent configuration it started with. A session can be resumed from anywhere, including
 a machine that no longer has the original `agent.yaml`, so care is required: continuing a conversation against a
-different model, tool set, or system prompt can make the replayed transcript incoherent. fisk guards this by
-fingerprinting the configuration (provider, model, prompt, tool set, budget) at checkpoint time and refusing a resume
-when it no longer matches; the refusal names what changed. `--force` overrides the check, accepting that the restored
-conversation may not fit the current configuration. The provider is the one exception: a session started against one
-`llm.provider` can never be resumed against another, and `--force` does not apply. A session that already completed
-cannot be resumed.
+different model, tool set, or system prompt can make the replayed transcript incoherent. fisk fingerprints the
+configuration at checkpoint time and refuses a resume when it no longer matches, naming what changed. `--force`
+overrides it, except for the provider: a session started against one `llm.provider` can never be resumed against
+another. A session that already completed cannot be resumed.
 
 ### Managing sessions
 
