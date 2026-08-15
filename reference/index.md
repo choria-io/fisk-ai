@@ -1,8 +1,8 @@
 # Reference
 
 A Fisk AI agent is described by a single YAML configuration file. It names the application to drive, selects which of
-its commands become tools, and sets the model, the prompt, and how the harness behaves. The `run`, `mcp`, `a2a`, and
-`serve` commands all read the same file; each uses the parts it needs and ignores the rest.
+its commands become tools, and sets the model, the prompt, and how the harness behaves. The `run`, `mcp`, and `serve`
+commands all read the same file; each uses the parts it needs and ignores the rest.
 
 The `--config` flag selects the file, defaulting to `agent.yaml` in the working directory:
 
@@ -77,13 +77,14 @@ identity: nats
 # When set, the binary is introspected once at startup to obtain its
 # command tree and per-command JSON schemas. Leave it out to run an agent
 # on the built-in tools (knowledge, memory, human_in_the_loop) and any
-# remote tools alone, with no wrapped application. Required only for "a2a"
-# mode, which serves the wrapped application's tools.
+# remote tools alone, with no wrapped application. Required only when
+# expose.agent.agent_to_agent serves the wrapped application's tools.
 application_path: /usr/local/bin/nats
 
 # The system prompt describing what the agent should do. REQUIRED for a
-# "run", ignored by "mcp" and "a2a" mode. Think of it as a one-file SKILL:
-# describe the goals and give broad guidance.
+# "run" and for a channel that runs one, ignored by "mcp" mode and by the
+# a2a surface. Think of it as a one-file SKILL: describe the goals and
+# give broad guidance.
 system_prompt: |
   You manage NATS JetStream Streams using tools.
 ```
@@ -92,8 +93,8 @@ system_prompt: |
 [agent-to-agent](#agent-to-agent), and the default memory directory is `memory/<identity>`. Keep it to the safe
 character set so those uses stay valid.
 
-`application_path` is optional for `run` and `mcp` modes and required only for `a2a`, because no built-in is offered
-over a2a today and such a server would have nothing to serve. When set, the target must be built with a current
+`application_path` is optional for `run` and `mcp` modes and required only when `expose.agent.agent_to_agent` is set,
+because no built-in is offered over a2a today and such a surface would have nothing to serve. When set, the target must be built with a current
 [Fisk](https://github.com/choria-io/fisk) (v0.9.0 or newer) that supports `--fisk-introspect` and precomputed
 per-command schemas. When it is left out, Fisk AI skips introspection entirely and the agent runs on its built-in and
 remote tools alone; see [a knowledge-only agent](#a-knowledge-only-agent) below.
@@ -204,7 +205,7 @@ support and older ones do not; see [Models](#models).
 
 The `harness` block governs how the agent harness behaves during a run, as distinct from the model (`llm`) or the tool
 selection. Everything in it is optional and the whole block can be omitted to leave every setting at its default. These
-settings apply to the agent loop only; `mcp` and `a2a` mode ignore them.
+settings apply to the agent loop only; `mcp` mode and the a2a surface ignore them.
 
 ```yaml
 harness:
@@ -423,7 +424,8 @@ boundary; for a command that must never be reachable over MCP, use `ai:deny` rat
 ## Agent-to-agent
 
 Fisk AI agents can also serve tools to, and import tools from, one another over NATS with no LLM on the serving side.
-Both sides use a named [NATS context](https://github.com/nats-io/jsm.go), given as `nats_context`.
+Both sides use a named [NATS context](https://github.com/nats-io/jsm.go), given as `nats_context`. Serving is a surface
+of `fisk serve`; the [Serving tools](../channels/a2a/) guide covers it end to end.
 
 > [!info] Note
 > A2A capabilities are under development, this is included here for completeness but subject to radical change
@@ -431,16 +433,17 @@ Both sides use a named [NATS context](https://github.com/nats-io/jsm.go), given 
 ```yaml
 # Name of a NATS context (as managed by "nats context" and resolved by
 # jsm.go) used to connect to NATS. REQUIRED when remote_tools is set or
-# when running "fisk a2a".
+# when serving tools to other agents.
 nats_context: ngs
 
 expose:
   agent:
-    # When true, "fisk a2a" serves this agent's tools over NATS. Opt-in:
-    # without it, "fisk a2a" refuses to start. Like MCP mode, serving
-    # needs only application_path, identity, nats_context, and the tool
-    # selection. Confirmation-gated commands are never served, since there
-    # is no operator to approve them.
+    # When true, "fisk serve" serves this agent's tools over NATS. Opt-in:
+    # without it nothing is served. Like MCP mode, serving needs only
+    # application_path, identity, nats_context, and the tool selection: no
+    # prompt and no model, since serving a tool runs no agent loop.
+    # Confirmation-gated commands are never served, since there is no
+    # operator to approve them.
     agent_to_agent: true
 
     # Optional per-server tuning, a sibling of the agent_to_agent switch.
@@ -519,13 +522,15 @@ expose:
 ```
 
 A job runs the whole agent loop, so it uses the agent's own `include` and `exclude` rather than `expose.agent.tools`,
-which selects only what is served over MCP and a2a. The `mcpOnly` waiver does not apply either: a job needs `identity`
-and `system_prompt` like any other run. The [Queued jobs](../channels/asyncjobs/) guide covers submitting work and reading answers.
+which selects only what is served over MCP and a2a. It needs `identity`, `system_prompt` and `llm.model` like any other
+run, where a worker serving only tools needs none of them. The [Queued jobs](../channels/asyncjobs/) guide covers
+submitting work and reading answers.
 
 ## Telemetry
 
-`telemetry` exports OpenTelemetry traces and metrics over OTLP/HTTP. It applies to `fisk run`, and to knowledge
-searches served by `fisk mcp`; `fisk a2a` ignores it. Nothing is exported unless `enabled` is true.
+`telemetry` exports OpenTelemetry traces and metrics over OTLP/HTTP. It applies to `fisk run`, to the runs `fisk serve`
+hosts, and to knowledge searches served by `fisk mcp`. The a2a surface exports nothing. Nothing is exported unless
+`enabled` is true.
 
 ```yaml
 telemetry:

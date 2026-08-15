@@ -1,12 +1,15 @@
 # Serving
 
-The `fisk serve` command hosts an agent behind the channels its configuration enables. It runs until it is stopped,
+The `fisk serve` command hosts an agent behind the surfaces its configuration enables. It runs until it is stopped,
 taking work as it arrives, and it is the same agent as [`fisk run`](../../agents/): the tool set, the prompt, the model
 and the harness settings all come from the same configuration file.
 
+Two kinds of surface are hosted. A channel supplies work the agent runs, which is [queued jobs](../asyncjobs/) today.
+[Serving tools](../a2a/) answers another agent's tool call directly, running one tool and no agent loop.
+
 > [!info] Note
-> At least one channel must be enabled. A configuration with no channel block leaves `fisk serve` with nothing to serve
-> and it refuses to start.
+> At least one surface must be enabled. A configuration enabling none leaves `fisk serve` with nothing to serve and it
+> refuses to start.
 
 ## Starting a worker
 
@@ -49,6 +52,9 @@ Serving worker/1.2.0:
 
 An `Agent Context` line joins them when the agent's own `nats_context` differs from the queue's, since the queue and the
 stores may be on different clusters.
+
+A worker hosting no channel prints none of the lines that describe a run, since it has no model, no queue, no worker
+count and no session store to report. [Serving tools](../a2a/) shows that banner.
 
 ## Shared resources
 
@@ -119,6 +125,13 @@ draining: no new work is taken and running work stops where it can resume. Inter
 A second interrupt stops it at once. Anything still running is left for a later delivery, which resumes from its
 journal rather than starting again.
 
+A drain stops every surface, so a worker also [serving tools](../a2a/#shutdown) stops answering peers at the same
+point. A worker with no channel has nothing to resume and says so instead:
+
+```nohighlight
+draining: the surfaces stop answering. Interrupt again to stop now
+```
+
 ## Sessions
 
 Every run a channel checkpoints is journaled, so an interrupted unit of work resumes rather than paying again for the
@@ -137,8 +150,8 @@ Two settings that narrow the other serving surfaces do not narrow a run served o
 
 * `expose.agent.tools` selects what is served over MCP and a2a. A channel runs the whole agent loop, so it uses the
   agent's own `include` and `exclude` instead
-* the `mcpOnly` waiver that lets an MCP-only configuration omit `identity` and `system_prompt` does not apply, since a
-  run needs both
+* the waiver that lets a tool-serving configuration omit `identity`, `system_prompt` and `llm.model` does not apply to a
+  channel, since a run needs all three
 
 ## Safety
 

@@ -2,7 +2,8 @@
 
 Fisk AI exports OpenTelemetry traces and metrics over OTLP/HTTP, following the GenAI semantic conventions. One run is
 one trace: how long it took, which model calls it made, which tools it ran, and where the tokens went. It applies to
-`fisk run`, and to knowledge searches served by `fisk mcp`. `fisk a2a` ignores it.
+`fisk run`, to the runs `fisk serve` hosts, and to knowledge searches served by `fisk mcp`. The a2a surface, which
+serves tools to other agents without running the loop, exports nothing.
 
 > [!info] Note
 > Traces and metrics go only to the collector configured below. The Fisk project receives
@@ -199,8 +200,9 @@ It covers the a2a call.
 | `canceled`, `timeout` | this run stopped, not the peer |
 | `other` | anything else |
 
-The trace ends at this process. `fisk a2a` exports nothing, and trace context is not put on the wire, so whatever the
-remote agent did is a separate trace with no link to this one. A slow remote call shows only as a slow span here.
+The trace ends at this process. The a2a surface serving the far side exports nothing, and trace context is not put on
+the wire, so whatever the remote agent did is a separate trace with no link to this one. A slow remote call shows only
+as a slow span here.
 
 ### Knowledge
 

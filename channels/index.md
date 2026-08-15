@@ -3,9 +3,12 @@
 A channel is a calling surface an agent is hosted behind. A work queue, a NATS binding, an HTTP listener and a caller
 in the same process are all channels, and they differ in what they can do rather than in kind.
 
-The `fisk serve` command hosts an agent behind whatever channels its configuration enables. Each channel supplies work,
+The `fisk serve` command hosts an agent behind whatever surfaces its configuration enables. Each channel supplies work,
 the agent runs it, and the outcome goes back the way it came. How work reaches a channel is the channel's own business:
 one polls a queue, another might answer a request on a subject, and the agent that runs it never learns which.
+
+`fisk serve` also hosts surfaces that produce no work. [Serving tools](../a2a/) answers another agent's tool call
+directly, running one tool and no agent loop, so it is not a channel and nothing about a run applies to it.
 
 > [!info] Note
 > Channels are a young part of Fisk AI. The queued-jobs channel is the only one that ships today, and the shape of the
@@ -36,3 +39,4 @@ would need one is told the tool is unavailable rather than left waiting for an a
 
 * [Serving](serving/) covers the `fisk serve` command and the settings every channel shares
 * [Queued jobs](asyncjobs/) covers the asyncjobs channel: submitting work, reading answers, and its own configuration
+* [Serving tools](a2a/) covers offering this agent's tools to other agents, which runs no agent loop
