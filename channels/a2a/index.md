@@ -4,8 +4,7 @@ The a2a surface serves the wrapped application's commands to other agents over N
 invokes a tool, and that is the whole exchange: no prompt is involved and the agent loop never runs, which makes it
 cheaper than handing that peer a job and gives it a different security posture.
 
-It is a surface rather than a channel. Nothing it does produces work for the agent, so none of the settings that govern
-a run apply to it.
+Nothing it does produces work for the agent, so none of the settings that govern a run apply to it.
 
 > [!info] Note
 > The surface is opt-in. The configuration must set `expose.agent.agent_to_agent: true`, otherwise `fisk serve` serves
@@ -55,7 +54,7 @@ Serving nats-tools/1.2.0:
                      stream_info
 ```
 
-The lines describing a run are absent because there is none: no model, no queue, no worker count and no session store.
+A worker serving only tools has no model, no queue, no worker count and no session store.
 
 ## Reading the card
 
@@ -84,8 +83,7 @@ carrying `ai:confirm` or any configured confirm tag is dropped from the card rat
 `ai:deny` to keep a command out entirely.
 
 No built-in tool is served. Knowledge, memory and the human-in-the-loop tools declare no a2a exposure, and a
-configuration that enables some says so at startup rather than leaving an operator to notice they are missing from the
-card.
+configuration that enables some has them listed as withheld on the startup banner.
 
 ## Bounds
 
@@ -99,8 +97,7 @@ expose:
 ```
 
 `max_concurrent_tools` is how many calls run at once and `tool_timeout` bounds a single call. Both are separate from
-`--workers` and `harness.tool_timeout`, which pace and bound the agent loop, and the banner reports each under the
-surface it belongs to.
+`--workers` and `harness.tool_timeout`, which pace and bound the agent loop.
 
 Intake is back-pressured rather than queued: a full server does not take another request until a slot frees.
 
@@ -132,8 +129,7 @@ Serving nats-worker/1.2.0:
                       stream_info
 ```
 
-Enabling a2a in a file a worker reads is what turns the surface on, so a file shared between deployments serves tools
-from every worker that reads it.
+A file shared between deployments serves tools from every worker that reads it.
 
 ## Shutdown
 

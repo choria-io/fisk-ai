@@ -10,17 +10,32 @@ job and reads the result whenever it is ready.
 >
 > The queued-jobs channel is available since {{% badge style="primary" title="Version" %}}0.0.5{{% /badge %}}.
 
-## Creating the queue
+## Creating the storage
 
-The queue must already exist. A worker binds to it and creates nothing, so its run time, retry cap and concurrency stay
-with whoever owns the queue:
+A worker requires its storage to exist. Create it with [`ajc`](https://github.com/choria-io/asyncjobs), version 0.4.0
+or newer.
+
+The task store holds every job and the answer written back to it:
+
+```nohighlight
+$ ajc tasks initialize
+```
+
+The work queue holds the jobs waiting to be taken:
 
 ```nohighlight
 $ ajc queue add FISK_AI --run-time 10m --tries 3 --concurrent 10
 ```
 
-Those values are read from the bound consumer at startup and reported on the banner. The run time must be longer than a
-job takes, or the queue redelivers work that is still running.
+The queue's run time, retry cap and concurrency stay with the queue. They are read from the bound consumer at startup
+and reported on the banner. The run time must be longer than a job takes, or the queue redelivers work that is still
+running.
+
+A worker started before either exists fails:
+
+```nohighlight
+fisk: error: building the jobs channel: connecting to queue "FISK_AI": storage not ready: stream CHORIA_AJ_TASKS does not exist, create it with 'ajc tasks initialize'
+```
 
 ## Submitting work
 

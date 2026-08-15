@@ -132,7 +132,7 @@ bounded by `tool_timeout` per call and `max_concurrent_tools` in flight at once.
 
 ## Command tags over MCP
 
-The reserved [command tags](../agents/#command-tags) are honored over MCP, with two differences from the agent loop:
+The reserved [command tags](../agents/#command-tags) are honored over MCP, differing from the agent loop where noted:
 
 | Tag             | Behavior over MCP                                                          |
 |-----------------|-----------------------------------------------------------------------------|
@@ -190,7 +190,7 @@ Every served command gets the same per-command protections as the [agent](../age
 vector rather than through a shell, its arguments are bound to the command's schema, its `ANTHROPIC_API_KEY` is stripped,
 its output combines stdout and stderr and is capped at 64 KiB, and `LLMFORMAT=1` is set.
 
-The threat model is wider than an agent run and worth understanding:
+The threat model is wider than an agent run:
 
 * Any client that can reach the server's port can invoke every exposed tool with any schema-valid arguments.
   `ai:deny` and `include`/`exclude` are the gate on what is reachable, so scope the exposed set deliberately.

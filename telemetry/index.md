@@ -337,8 +337,8 @@ export.
 
 Each is a JSON document in the shape the GenAI conventions define.
 
-Two things are never exported: a thinking block's provider signature, and the payload of a provider-specific block
-such as a server-side tool search result. Reasoning text is exported.
+Never exported: a thinking block's provider signature, and the payload of a provider-specific block such as a
+server-side tool search result. Reasoning text is exported.
 
 A denied tool call still exports its arguments. The system prompt is on `startup` rather than on each model call
 because it does not change during a run.

@@ -94,9 +94,9 @@ system_prompt: |
 character set so those uses stay valid.
 
 `application_path` is optional for `run` and `mcp` modes and required only when `expose.agent.agent_to_agent` is set,
-because no built-in is offered over a2a today and such a surface would have nothing to serve. When set, the target must be built with a current
-[Fisk](https://github.com/choria-io/fisk) (v0.9.0 or newer) that supports `--fisk-introspect` and precomputed
-per-command schemas. When it is left out, Fisk AI skips introspection entirely and the agent runs on its built-in and
+because no built-in is offered over a2a today and such a surface would have nothing to serve. When set, the target must
+be built with a current [Fisk](https://github.com/choria-io/fisk) (v0.9.0 or newer) that supports `--fisk-introspect`
+and precomputed per-command schemas. When it is left out, Fisk AI skips introspection entirely and the agent runs on its built-in and
 remote tools alone; see [a knowledge-only agent](#a-knowledge-only-agent) below.
 
 ## Tool selection
@@ -301,8 +301,8 @@ Treat what a memory contains as data the model saved, not as trusted instruction
 
 Fisk commands can carry tags, set in their fisk definition or, for App Builder applications, in YAML. Any tag can be
 matched by `include`/`exclude`. The `ai:` prefix is reserved for the tags Fisk AI interprets; a tag under that prefix
-that is not one of the tags below does nothing and is reported as a warning at startup, by `fisk info`, and by the MCP
-and agent-to-agent servers.
+that is not one of the tags below does nothing and is reported as a warning at startup, by `fisk info`, by the MCP
+server and by the a2a surface.
 
 ### Control tags
 
@@ -314,8 +314,10 @@ These change what Fisk AI does with a command.
 | `ai:no_defer` | Always send the command directly instead of deferring it behind the tool-search tool.                         |
 | `ai:confirm`  | Require the operator to approve the command at the terminal before it runs; always active, no config flag.     |
 
-`ai:confirm` denies by default: an interrupt, an end-of-input, or no interactive terminal declines rather than runs. An
-"allow for the session" answer is remembered by command regardless of its arguments, for the rest of that run only.
+`ai:confirm` denies by default: no interactive terminal, or a prompt that cannot be shown, declines rather than runs. An
+interrupt or an end-of-input at the prompt ends the run instead of declining, since the operator did not answer; on a
+checkpointed run the session survives and `fisk run --resume` puts the question again. An "allow for the session" answer
+is remembered by command regardless of its arguments, for the rest of that run only.
 `harness.confirm_tags` extends the same gate to any other tag your application already uses. Over MCP these gates are
 requested through elicitation instead of a local operator prompt; over agent-to-agent, confirmation-gated commands are
 not served at all. The full behavior is documented under [Command Tags](../agents/#command-tags) in the Agents guide.
@@ -644,6 +646,8 @@ overlap, except for the hard off switches (`harness.no_tui`), which the command 
 | `--checkpoint` |                      | Journal the run to a session that can be suspended and resumed.                                                                                                            |
 | `--resume`     |                      | Resume a checkpointed session by id instead of starting a new run.                                                                                                         |
 | `--state-dir`  |                      | Override where sessions are stored, default `$XDG_STATE_HOME/fisk-ai/runs`.                                                                                                |
+| `--result`     |                      | On `fisk session answer`, the result to give the model. Read from standard input when the flag is absent.                                                                  |
+| `--error`      |                      | On `fisk session answer`, mark the supplied result the way a tool's own failure would be marked.                                                                            |
 | `--no-telemetry` | `NO_TELEMETRY`     | Suppress OpenTelemetry export, whatever `telemetry.enabled` says. On `fisk-ai run` it covers the run, on `fisk-ai serve` the whole worker. The credential scrub still applies. |
 | `--workers`    |                      | On `fisk serve`, how many jobs to run at once, overriding `expose.agent.jobs.workers`.                                                                                      |
 | `--work-dir`   |                      | On `fisk serve`, the directory command tools run in. Must be an absolute path that exists. Defaults to the worker's own working directory.                                  |

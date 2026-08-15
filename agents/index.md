@@ -182,11 +182,11 @@ Run summary: model=claude-haiku-4-5-20251001 llm_calls=1 tool_calls=0 tokens=163
 
 ## Running the agent
 
-The agent has three specific modes of execution:
+The agent runs in one of these modes:
 
 * A shell script style output, plain text to STDOUT with an exit at the end of the task
 * A TUI for interaction, optionally continuing to chat with the agent after the main task completes
-* Serving the agent over the network using an Agent-to-Agent protocol (planned)
+* Hosted behind a [channel](../channels/), taking work from a queue or serving its tools to other agents
 
 ### TUI
 
@@ -294,7 +294,7 @@ reasoning is displayed. It is part of the output half of `tokens=in/out`, not ex
 
 ### Terminal UI
 
-Two harness settings govern the full-screen UI for an agent, independent of the per-run `--no-tui` flag:
+These harness settings govern the full-screen UI for an agent, independent of the per-run `--no-tui` flag:
 
 ```yaml
 harness:
@@ -332,8 +332,6 @@ Prompt:
 The output shows the `say` and `think` tools and some Human in the Loop tools. When the configuration sets a model,
 `fisk info` also prints a Model section first, listing the resolved model and provider, whether thinking is enabled,
 and how tool search will behave, so you can confirm the backend and feature gates without starting a run.
-
-There are a few ways to control what tools are visible.
 
 ### Application tags
 
@@ -479,6 +477,7 @@ subcommands:
 fisk session ls
 fisk session show <id>
 fisk session show <id> --transcript
+fisk session answer <id> <tool-use-id>
 fisk session rm <id>
 ```
 
@@ -486,6 +485,27 @@ fisk session rm <id>
 status; `--transcript` shows the full conversation (prompt, thinking, narration, tool calls, and tool output). On an
 interactive terminal `--transcript` opens the full-screen viewer with thinking and tool output folded, which `z` and `Z`
 expand; `--no-tui`/`NO_TUI` prints it as line output instead. `session rm` deletes a session.
+
+### Answering a deferred tool call
+
+A tool can report that its answer arrives later rather than now. The run then suspends, releasing the process, and
+resumes once the answer exists. `session show` lists what such a session is waiting on under `Waiting on`, giving the
+`tool_use` id, the tool, and whatever the tool said it is waiting for.
+
+```nohighlight
+fisk session answer <id> <tool-use-id> --result '{"approved":true}'
+cat approval.json | fisk session answer <id> <tool-use-id>
+fisk session answer <id> <tool-use-id> --error --result "the request was rejected"
+```
+
+The result is read from `--result`, or from standard input when that flag is absent. `--error` marks it the way a tool's
+own failure would be marked. The answer is refused unless the call was deferred and is still waiting, and refused while
+another process holds the session.
+
+The tool is never called again: it already started the work, which is why it deferred. Resume the run with
+`fisk run --resume <id>` once the answer is in.
+
+No tool that ships with fisk defers; the mechanism is for tools a Go program registers through `agent.Options.CustomTools`.
 
 These commands read the `file` backend under `--state-dir` by default. To inspect sessions in a configured backend, a
 jetstream stream or a file directory named in the config, pass that config with `--config`:
@@ -563,7 +583,7 @@ harness:
     enabled: true
 ```
 
-Three tools are offered:
+Enabling it offers these tools:
 
 * `ask_human_confirm` - a yes/no question. Returns `{"confirmed": true}` or `{"confirmed": false}`
 * `ask_human_select` - choose one of a list of options the model provides. Returns `{"selected": "<option>"}`, or
@@ -584,7 +604,7 @@ operator. Tool calls within a turn run one at a time, so a prompt has the termin
 
 ### Required tool use confirmations
 
-Two mechanisms put a human in the loop:
+These mechanisms put a human in the loop:
 
 * `human_in_the_loop` (a configuration flag) lets the model ask its own question through a fisk-provided
   `ask_human_*` tool, with no application command involved. The human answers a question the model chose to ask.
@@ -635,8 +655,10 @@ asking again, so reserve that choice for a command you trust the agent to repeat
 It applies for the rest of that run only; nothing is persisted across runs. The
 prompt is rendered on stderr (so a piped final answer stays clean), the displayed
 command line is stripped of terminal control sequences so model-supplied argument
-values cannot spoof what you see, and it denies by default: an interrupt, an
-end-of-input, or no interactive terminal declines rather than runs. Unlike
+values cannot spoof what you see, and it denies by default: no interactive terminal,
+or a prompt that cannot be shown, declines rather than runs. An interrupt or an
+end-of-input at the prompt ends the run rather than declining, since the operator did
+not answer; a checkpointed run stays resumable and asks again. Unlike
 `human_in_the_loop`, the tag is always active: there is no configuration flag to
 enable it.
 
@@ -785,12 +807,11 @@ memory was not read or has changed since it was read. The model then reads the
 current value and retries. This is the same read-before-edit discipline that keeps
 an editor from clobbering a file it has not seen.
 
-It is more than a workflow nicety. Because the check rides on the KV entry's
-revision, it is an atomic compare-and-swap: when two agents share a bucket and both
-try to update the same memory, the second write is rejected rather than silently
-overwriting the first. That lost-update protection is a concrete reason to prefer
-this backend for any shared or concurrent deployment, where the file backend's
-last-writer-wins overwrite would quietly drop a change.
+Because the check rides on the KV entry's revision, it is an atomic
+compare-and-swap: when two agents share a bucket and both try to update the same
+memory, the second write is rejected rather than silently overwriting the first.
+The file backend's last-writer-wins overwrite would quietly drop that change, so a
+shared or concurrent deployment wants this backend.
 
 The guard is on by default. Set `no_require_read_before_update: true` to allow blind
 overwrites, matching the file backend's behavior:
@@ -858,7 +879,7 @@ Every command the agent runs gets the same protections:
 Local LLM hosting tools like `ollama`, `LM Studio` and others support exposing an Anthropic-compatible API. Fisk AI can
 communicate with those tools.
 
-There are some caveats. To support a large number of tools, Fisk AI uses the
+To support a large number of tools, Fisk AI uses the
 [Tool Search Tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool), which these local
 runners do not support. When targeting a locally hosted model, the total tool count may need to stay around 15.
 

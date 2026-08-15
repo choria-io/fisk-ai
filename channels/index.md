@@ -18,7 +18,7 @@ directly, running one tool and no agent loop, so it is not a channel and nothing
 
 ## What a channel decides
 
-Channels differ in what they can offer a run, and the differences are real rather than cosmetic:
+Channels differ in what they can offer a run:
 
 | Capability          | Description                                                      |
 |---------------------|-------------------------------------------------------------------|
@@ -31,9 +31,9 @@ A queue offers none of the first three. Nobody is waiting on the other end, so t
 answer a question, and no second turn. A run served over a queue is therefore one shot: it starts with a prompt, and it
 ends with an answer.
 
-This has a consequence worth stating plainly, because it applies to every channel that cannot reach a person.
-Confirmation-gated tools are dropped at the start of such a run. There is no operator to approve them, so a run that
-would need one is told the tool is unavailable rather than left waiting for an approval that cannot arrive.
+Confirmation-gated tools are dropped at the start of a run on any channel that cannot reach a person. There is no
+operator to approve them, so a run that would need one is told the tool is unavailable rather than left waiting for an
+approval that cannot arrive.
 
 ## Where to go next
 

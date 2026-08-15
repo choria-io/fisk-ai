@@ -37,8 +37,8 @@ reconciles deletions when a full configured root is walked.
 
 ## Two retrieval tiers
 
-Knowledge has two retrieval tiers. The lexical tier is always on, has no dependencies, and is the default. Vector
-search is opt-in and requires an embeddings model.
+The lexical tier is always on, has no dependencies, and is the default. Vector search is opt-in and requires an
+embeddings model.
 
 ### Lexical search
 
@@ -207,7 +207,7 @@ harness:
 
 ## The agent tools
 
-When knowledge is enabled the agent is offered two tools, along with instructions.
+When knowledge is enabled the agent is offered these tools, along with instructions.
 
 ### knowledge_search
 

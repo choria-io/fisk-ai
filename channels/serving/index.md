@@ -4,8 +4,8 @@ The `fisk serve` command hosts an agent behind the surfaces its configuration en
 taking work as it arrives, and it is the same agent as [`fisk run`](../../agents/): the tool set, the prompt, the model
 and the harness settings all come from the same configuration file.
 
-Two kinds of surface are hosted. A channel supplies work the agent runs, which is [queued jobs](../asyncjobs/) today.
-[Serving tools](../a2a/) answers another agent's tool call directly, running one tool and no agent loop.
+A channel supplies work the agent runs, which is [queued jobs](../asyncjobs/) today. [Serving tools](../a2a/) answers
+another agent's tool call directly, running one tool and no agent loop.
 
 > [!info] Note
 > At least one surface must be enabled. A configuration enabling none leaves `fisk serve` with nothing to serve and it
@@ -53,8 +53,8 @@ Serving worker/1.2.0:
 An `Agent Context` line joins them when the agent's own `nats_context` differs from the queue's, since the queue and the
 stores may be on different clusters.
 
-A worker hosting no channel prints none of the lines that describe a run, since it has no model, no queue, no worker
-count and no session store to report. [Serving tools](../a2a/) shows that banner.
+A worker hosting no channel has no model, no queue, no worker count and no session store, and prints none of those
+lines. [Serving tools](../a2a/) shows that banner.
 
 ## Shared resources
 
@@ -126,7 +126,7 @@ A second interrupt stops it at once. Anything still running is left for a later 
 journal rather than starting again.
 
 A drain stops every surface, so a worker also [serving tools](../a2a/#shutdown) stops answering peers at the same
-point. A worker with no channel has nothing to resume and says so instead:
+point. A worker with no channel has nothing to resume:
 
 ```nohighlight
 draining: the surfaces stop answering. Interrupt again to stop now
@@ -146,7 +146,7 @@ incumbent notices before its next tool call, which bounds double execution to a 
 
 ## What a served run does not inherit
 
-Two settings that narrow the other serving surfaces do not narrow a run served over a channel:
+These narrow the other serving surfaces and not a run served over a channel:
 
 * `expose.agent.tools` selects what is served over MCP and a2a. A channel runs the whole agent loop, so it uses the
   agent's own `include` and `exclude` instead
