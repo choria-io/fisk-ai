@@ -3,7 +3,7 @@
 Fisk AI exports OpenTelemetry traces and metrics over OTLP/HTTP, following the GenAI semantic conventions. One run is
 one trace: how long it took, which model calls it made, which tools it ran, and where the tokens went. It applies to
 `fisk run`, to the runs `fisk serve` hosts, and to knowledge searches served by `fisk mcp`. The a2a surface, which
-serves tools to other agents without running the loop, exports nothing.
+serves tools to other agents without running the loop, exports a span per served call and joins the caller's trace.
 
 > [!info] Note
 > Traces and metrics go only to the collector configured below. The Fisk project receives
@@ -97,7 +97,8 @@ invoke_workflow <identity>
     └── chat <model>
 ```
 
-A resumed session is a new trace, not a continuation: no trace spans two processes. Group by `gen_ai.conversation.id`
+A resumed session is a new trace, not a continuation. A trace spans two processes only across an a2a call, where the
+request carries the caller's trace context. Group by `gen_ai.conversation.id`
 to see a session's whole history. A resumed run's first `chat` span continues the iteration numbering, so
 `fisk.llm.iteration` starting at 17 is expected.
 
@@ -200,9 +201,13 @@ It covers the a2a call.
 | `canceled`, `timeout` | this run stopped, not the peer |
 | `other` | anything else |
 
-The trace ends at this process. The a2a surface serving the far side exports nothing, and trace context is not put on
-the wire, so whatever the remote agent did is a separate trace with no link to this one. A slow remote call shows only
-as a slow span here.
+The request carries this span's trace context, so a peer running Fisk AI puts its own span for the call in this trace
+and a slow remote call shows where the time went. A peer that exports nothing, or one that is not Fisk AI, still shows
+only as a slow span here.
+
+The two sides can disagree about when the call ended. The callee bounds a served call with its own
+`expose.agent.a2a.tool_timeout` and the caller waits `llm.budget.call_timeout`, so a trace can show the server's span
+still open after the caller's closed as `remote_unavailable`.
 
 ### Knowledge
 
