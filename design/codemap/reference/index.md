@@ -26,6 +26,7 @@ mean here".
 | `fisk knowledge stats` | Prints the tier banner and index counts and sizes |
 | `fisk mcp` | Serves the tools over MCP on streamable HTTP |
 | `fisk a2a` | Serves the tools to other agents over NATS |
+| `fisk serve` | Hosts the agent behind the surfaces its configuration enables, taking queued work: `--config`, `--workers`, `--state-dir`, `--work-dir`, `--api-key`, `--base-url`, `--no-telemetry`, `--verbose` |
 | `fisk discover <agent>` | Discovers a remote agent and prints its tools |
 
 The `knowledge` command carries `rag` and `k` as aliases.

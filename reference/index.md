@@ -1,8 +1,8 @@
 # Reference
 
 A Fisk AI agent is described by a single YAML configuration file. It names the application to drive, selects which of
-its commands become tools, and sets the model, the prompt, and how the harness behaves. The `run`, `mcp`, and `a2a`
-commands all read the same file; each uses the parts it needs and ignores the rest.
+its commands become tools, and sets the model, the prompt, and how the harness behaves. The `run`, `mcp`, `a2a`, and
+`serve` commands all read the same file; each uses the parts it needs and ignores the rest.
 
 The `--config` flag selects the file, defaulting to `agent.yaml` in the working directory:
 
@@ -480,6 +480,48 @@ Imported tools keep their own name where it is unambiguous, and take the `<alias
 would collide. A `run` is strict: an unreachable or unimportable remote agent fails the run. `fisk info` is lenient
 and reports each remote host's reachability instead.
 
+## Queued jobs
+
+`expose.agent.jobs` opts the agent in to taking whole units of work off a Choria asyncjobs work queue. Its presence is
+the switch for `fisk serve`: without the block, the command refuses to start. Every field under it defaults, so an empty
+block is a working worker.
+
+```yaml
+expose:
+  agent:
+    jobs:
+      # The work queue to consume. It must already exist: the worker binds
+      # to it and creates nothing, so its run time, retry cap and
+      # concurrency stay with whoever owns the queue. Default "FISK_AI".
+      queue: FISK_AI
+
+      # The asyncjobs task type this worker handles. A task of another
+      # type on the same queue is not this worker's and is left alone, so
+      # a submitter and a worker that disagree produce a job nobody runs.
+      # Default "fisk-ai:run".
+      task_type: fisk-ai:run
+
+      # How many jobs this process runs at once, default 1. The --workers
+      # flag overrides it. It cannot raise throughput past the queue's own
+      # concurrency, which bounds every worker on that queue together.
+      workers: 1
+
+      # The NATS context the queue is reached over, defaulting to the
+      # top-level nats_context. It is dialed separately from the shared
+      # connection, so the queue may live on a different cluster from the
+      # session store and remote tools.
+      nats_context: production
+
+      # Bounds a task payload in bytes before anything decodes it, default
+      # 524288. It is the only bound on a third party's input to a surface
+      # whose sole access control is permission to write to the queue.
+      max_payload: 524288
+```
+
+A job runs the whole agent loop, so it uses the agent's own `include` and `exclude` rather than `expose.agent.tools`,
+which selects only what is served over MCP and a2a. The `mcpOnly` waiver does not apply either: a job needs `identity`
+and `system_prompt` like any other run. The [Queued jobs](../channels/asyncjobs/) guide covers submitting work and reading answers.
+
 ## Telemetry
 
 `telemetry` exports OpenTelemetry traces and metrics over OTLP/HTTP. It applies to `fisk run`, and to knowledge
@@ -598,9 +640,14 @@ overlap, except for the hard off switches (`harness.no_tui`), which the command 
 | `--resume`     |                      | Resume a checkpointed session by id instead of starting a new run.                                                                                                         |
 | `--state-dir`  |                      | Override where sessions are stored, default `$XDG_STATE_HOME/fisk-ai/runs`.                                                                                                |
 | `--no-telemetry` | `NO_TELEMETRY`     | Suppress OpenTelemetry export, whatever `telemetry.enabled` says. On `fisk-ai run` it covers the run, on `fisk-ai serve` the whole worker. The credential scrub still applies. |
+| `--workers`    |                      | On `fisk serve`, how many jobs to run at once, overriding `expose.agent.jobs.workers`.                                                                                      |
+| `--work-dir`   |                      | On `fisk serve`, the directory command tools run in. Must be an absolute path that exists. Defaults to the worker's own working directory.                                  |
 
 The MCP server port also reads `FISK_AI_MCP_PORT`, which `--port` overrides and which in turn overrides
 `expose.agent.mcp.port`. Sessions, chat, and their durability semantics are covered in the [Agents guide](../agents/).
+
+`--workers` overriding the file is the opposite of how `harness.tool_timeout` works, where a configured value beats the
+built-in default. The worker count is a property of the process; the tool bound is a property of the agent.
 
 ## Safety
 
