@@ -7,12 +7,15 @@ cheaper than handing that peer a job and gives it a different security posture.
 Nothing it does produces work for the agent, so none of the settings that govern a run apply to it.
 
 > [!info] Note
-> The surface is opt-in. The configuration must set `expose.agent.agent_to_agent: true`, otherwise `fisk serve` serves
+> The surface is opt-in. The configuration must set `expose.agent.a2a.serve_tools: true`, otherwise `fisk serve` serves
 > no tools.
 >
 > Serving tools is a surface of `fisk serve` since
 > {{% badge style="primary" title="Version" %}}0.0.5{{% /badge %}}. It was the `fisk a2a` command before that, and
 > that command is gone.
+>
+> The switch was `expose.agent.agent_to_agent: true` before {{% badge style="primary" title="Version" %}}0.0.6{{% /badge %}},
+> and a configuration still carrying that key is refused at startup.
 
 ## Serving a set of tools
 
@@ -25,7 +28,8 @@ include:
     - ^stream_
 expose:
   agent:
-    agent_to_agent: true
+    a2a:
+      serve_tools: true
 ```
 
 A worker serving only tools needs no `system_prompt` and no `llm.model`, since nothing it does calls a model. It does
@@ -90,8 +94,8 @@ configuration that enables some has them listed as withheld on the startup banne
 ```yaml
 expose:
   agent:
-    agent_to_agent: true
     a2a:
+      serve_tools: true
       max_concurrent_tools: 2
       tool_timeout: 30s
 ```
@@ -101,9 +105,9 @@ expose:
 
 Intake is back-pressured rather than queued: a full server does not take another request until a slot frees.
 
-## Both surfaces at once
+## Several surfaces at once
 
-A configuration enabling a channel and this surface serves both from one process, over one connection:
+A configuration enabling a channel and this surface hosts both from one process, over one connection:
 
 ```nohighlight
 Serving nats-worker/1.2.0:
@@ -117,7 +121,7 @@ Serving nats-worker/1.2.0:
          Telemetry: disabled
     Tool Directory: /var/lib/fisk-ai
       Tool Timeout: 5m0s
-           Workers: 1 (config)
+     Queue Workers: 1 (config)
 
   Serving tools over a2a:
 
@@ -130,6 +134,10 @@ Serving nats-worker/1.2.0:
 ```
 
 A file shared between deployments serves tools from every worker that reads it.
+
+Adding a `prompts` block to the same `a2a` block also answers prompts, covered in
+[Answering prompts](../prompts/). Both use one transport and one identity, so a drain takes the whole of it out of the
+queue group at once.
 
 ## Shutdown
 

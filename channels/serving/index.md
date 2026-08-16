@@ -4,8 +4,9 @@ The `fisk serve` command hosts an agent behind the surfaces its configuration en
 taking work as it arrives, and it is the same agent as [`fisk run`](../../agents/): the tool set, the prompt, the model
 and the harness settings all come from the same configuration file.
 
-A channel supplies work the agent runs, which is [queued jobs](../asyncjobs/) today. [Serving tools](../a2a/) answers
-another agent's tool call directly, running one tool and no agent loop.
+A channel supplies work the agent runs: [queued jobs](../asyncjobs/) takes it off a work queue with nobody waiting, and
+[answering prompts](../prompts/) takes a prompt from another agent that is waiting for the answer. [Serving
+tools](../a2a/) answers another agent's tool call directly, running one tool and no agent loop.
 
 > [!info] Note
 > At least one surface must be enabled. A configuration enabling none leaves `fisk serve` with nothing to serve and it
@@ -47,14 +48,17 @@ Serving worker/1.2.0:
          Telemetry: disabled
     Tool Directory: /var/lib/fisk-ai
       Tool Timeout: 5m0s
-           Workers: 1 (config)
+     Queue Workers: 1 (config)
 ```
 
 An `Agent Context` line joins them when the agent's own `nats_context` differs from the queue's, since the queue and the
 stores may be on different clusters.
 
-A worker hosting no channel has no model, no queue, no worker count and no session store, and prints none of those
-lines. [Serving tools](../a2a/) shows that banner.
+Each surface adds a section of its own below these, with the addresses it answers on and the bounds it applies:
+[answering prompts](../prompts/) and [serving tools](../a2a/) both show one.
+
+A worker hosting no channel has no model, no tool directory and no session store, and prints none of those lines.
+[Serving tools](../a2a/) shows that banner.
 
 ## Shared resources
 
@@ -73,17 +77,19 @@ shared at all, so each run opens its own until one exists.
 
 ## Concurrency
 
-`--workers` sets how many units of work run at once, overriding the value in the configuration:
+Each channel bounds its own runs, so a process serving two channels at two runs each is running four.
+
+`--workers` sets how many queued jobs run at once, overriding `expose.agent.jobs.workers`:
 
 ```nohighlight
 $ fisk serve --config nats.yaml --workers 4
 ```
 
-The bound is per channel rather than a total for the process. A channel that has an opinion of its own states it and
-gets that instead, so a process serving two channels at two runs each is running four.
+It reaches the queued-jobs intake and nothing else. The prompt channel takes its count from
+`expose.agent.a2a.prompts.workers`, which is also the number above which it refuses a caller.
 
-Raising the number above a channel's own limit does not raise throughput. A work queue, for example, bounds every
-worker on it together, so a process above that bound holds slots it never fills.
+Raising a number above a channel's own limit does not raise throughput. A work queue, for example, bounds every worker
+on it together, so a process above that bound holds slots it never fills.
 
 ## Timeouts
 

@@ -34,7 +34,7 @@ running.
 A worker started before either exists fails:
 
 ```nohighlight
-fisk: error: building the jobs channel: connecting to queue "FISK_AI": storage not ready: stream CHORIA_AJ_TASKS does not exist, create it with 'ajc tasks initialize'
+fisk: error: building the jobs surface: connecting to queue "FISK_AI": storage not ready: stream CHORIA_AJ_TASKS does not exist, create it with 'ajc tasks initialize'
 ```
 
 ## Submitting work

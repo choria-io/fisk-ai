@@ -78,7 +78,7 @@ identity: nats
 # command tree and per-command JSON schemas. Leave it out to run an agent
 # on the built-in tools (knowledge, memory, human_in_the_loop) and any
 # remote tools alone, with no wrapped application. Required only when
-# expose.agent.agent_to_agent serves the wrapped application's tools.
+# expose.agent.a2a.serve_tools serves the wrapped application's tools.
 application_path: /usr/local/bin/nats
 
 # The system prompt describing what the agent should do. REQUIRED for a
@@ -93,7 +93,7 @@ system_prompt: |
 [agent-to-agent](#agent-to-agent), and the default memory directory is `memory/<identity>`. Keep it to the safe
 character set so those uses stay valid.
 
-`application_path` is optional for `run` and `mcp` modes and required only when `expose.agent.agent_to_agent` is set,
+`application_path` is optional for `run` and `mcp` modes and required only when `expose.agent.a2a.serve_tools` is set,
 because no built-in is offered over a2a today and such a surface would have nothing to serve. When set, the target must
 be built with a current [Fisk](https://github.com/choria-io/fisk) (v0.9.0 or newer) that supports `--fisk-introspect`
 and precomputed per-command schemas. When it is left out, Fisk AI skips introspection entirely and the agent runs on its built-in and
@@ -440,25 +440,38 @@ nats_context: ngs
 
 expose:
   agent:
-    # When true, "fisk serve" serves this agent's tools over NATS. Opt-in:
-    # without it nothing is served. Like MCP mode, serving needs only
-    # application_path, identity, nats_context, and the tool selection: no
-    # prompt and no model, since serving a tool runs no agent loop.
-    # Confirmation-gated commands are never served, since there is no
-    # operator to approve them.
-    agent_to_agent: true
-
-    # Optional per-server tuning, a sibling of the agent_to_agent switch.
-    # agent_to_agent alone still serves with defaults. Its knobs are
-    # separate from the mcp block's because the two servers bound different
-    # trust boundaries (NATS peers vs anything reaching a TCP port).
+    # What this agent answers for other agents over NATS. Opt-in: without
+    # the block nothing answers, and a block asking for neither of the two
+    # surfaces below is rejected. Both use one connection under one
+    # identity. Its knobs are separate from the mcp block's because the two
+    # servers bound different trust boundaries (NATS peers vs anything
+    # reaching a TCP port).
     a2a:
+      # When true, "fisk serve" answers tool calls from peers, serving one
+      # tool per call and running no agent loop. It needs only
+      # application_path, identity, nats_context and the tool selection: no
+      # prompt and no model. Confirmation-gated commands are never served,
+      # since there is no operator to approve them.
+      serve_tools: true
+
       # Maximum tool calls run at once. 0 or unset uses the default 2, a
       # negative value is rejected, and the ceiling is 1024.
       max_concurrent_tools: 2
       # Duration bounding a single served tool call, e.g. 60s. Unset uses
       # the default 30s. Config-only, no flag or environment override.
       tool_timeout: 30s
+
+      # Answers prompts from peers by running the agent loop over each one
+      # and streaming the run back. Its presence enables the surface and an
+      # empty block works. Answering a prompt runs the whole loop, so
+      # identity, system_prompt and llm.model are all required, and the run
+      # reaches every tool include and exclude selected, not the served set.
+      prompts:
+        # How many prompts this process answers at once, and the number
+        # above which a caller is refused rather than made to wait.
+        # Default 1. The --workers flag does not reach it: that sizes the
+        # queue.
+        workers: 2
 
 # Import tools from one or more remote fisk agents over NATS and expose
 # them to this agent alongside its local tools.

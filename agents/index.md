@@ -566,7 +566,7 @@ nats --context production stream add FISK_SESSIONS \
   --discard=new --discard-per-subject
 ```
 
-The stream keeps messages forever by default, which is what sessions want; do not set a max age or they would silently
+The stream keeps messages forever by default, which suits sessions; do not set a max age or they would silently
 expire. The subject prefix (`fisk.sessions` above) is yours to choose; the backend derives it from the stream's single
 wildcard subject when it binds, so it is not set in the config. The backend fails at run start, rather than degrading silently, if
 the stream does not exist or its configuration does not match this shape. Sessions are never namespaced by identity, so a

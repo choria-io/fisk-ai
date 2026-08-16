@@ -252,7 +252,7 @@ else `fisk mcp` serves is uninstrumented, so a config that exposes no knowledge 
 `fisk.session.append.duration` times each write to the run journal, and is recorded only for a checkpointed run. It is
 a metric rather than a span because a run appends once per record, so a span each would outnumber every other span in
 the trace. The `file` backend writes locally and sits in the lowest buckets; the `jetstream` backend makes a network
-round trip per append, which is what this exists to show. A failed append is recorded with its `error.type`, so the
+round trip per append, and this metric shows that difference. A failed append is recorded with its `error.type`, so the
 time spent before a failure is visible rather than missing.
 
 `fisk.knowledge.degraded_searches` counts searches that fell back to lexical. It is a metric rather than a span

@@ -12,8 +12,8 @@ policy layer for importing another agent's tools, and `internal/conns` owns conn
 
 ## Both modes are opt-in, and the switch is config presence
 
-The presence of `expose.agent.mcp` enables MCP. `expose.agent.agent_to_agent: true` enables A2A. An agent that says
-nothing serves nothing, and each command refuses to start with an error naming the exact key to add.
+The presence of `expose.agent.mcp` enables MCP. `expose.agent.a2a.serve_tools: true` enables A2A tool serving. An agent
+that says nothing serves nothing, and each command refuses to start with an error naming the exact key to add.
 
 <figure class="cm-diagram">
   <svg viewBox="0 0 760 360" role="img" aria-label="One tool selection feeding two serving modes with different confirmation policies">

@@ -11,7 +11,7 @@ one polls a queue, another might answer a request on a subject, and the agent th
 directly, running one tool and no agent loop, so it is not a channel and nothing about a run applies to it.
 
 > [!info] Note
-> Channels are a young part of Fisk AI. The queued-jobs channel is the only one that ships today, and the shape of the
+> Channels are a young part of Fisk AI. Two ship today, queued jobs and prompts from other agents, and the shape of the
 > configuration around them will grow as more arrive.
 >
 > Channels and the `fisk serve` command are available since {{% badge style="primary" title="Version" %}}0.0.5{{% /badge %}}.
@@ -27,16 +27,24 @@ Channels differ in what they can offer a run:
 | Follow-up turns     | whether a conversation continues after the first answer            |
 | Caller identity     | what the channel knows about who asked                             |
 
-A queue offers none of the first three. Nobody is waiting on the other end, so there is no one to stream to, no one to
-answer a question, and no second turn. A run served over a queue is therefore one shot: it starts with a prompt, and it
-ends with an answer.
+What each shipped channel offers:
+
+| Channel      | Streaming | Elicitation | Follow-up turns | Caller identity         |
+|--------------|-----------|-------------|-----------------|-------------------------|
+| Queued jobs  | no        | no          | no              | the request's own claim |
+| a2a prompts  | yes       | no          | no              | the request's own claim |
+
+A queue has nobody waiting on the other end, so there is no one to stream to and no second turn. A prompt from another
+agent has a caller waiting, so the run's output is sent back as it is produced, and the run still ends with its first
+answer.
 
 Confirmation-gated tools are dropped at the start of a run on any channel that cannot reach a person. There is no
 operator to approve them, so a run that would need one is told the tool is unavailable rather than left waiting for an
-approval that cannot arrive.
+approval that cannot arrive. Neither shipped channel can reach a person.
 
 ## Where to go next
 
 * [Serving](serving/) covers the `fisk serve` command and the settings every channel shares
 * [Queued jobs](asyncjobs/) covers the asyncjobs channel: submitting work, reading answers, and its own configuration
+* [Answering prompts](prompts/) covers taking prompts from other agents and streaming the run back to them
 * [Serving tools](a2a/) covers offering this agent's tools to other agents, which runs no agent loop

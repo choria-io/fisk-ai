@@ -4,7 +4,7 @@ Fisk AI turns any [fisk](https://github.com/choria-io/fisk)-based command-line a
 
 No glue code. If your CLI is built with Fisk, Fisk AI can turn it into a purpose-built agentic harness.
 
-The main focus is on safety and determinism. What sets this harness apart is what it does not have rather than a long list of features.
+The main focus is on safety and determinism. This harness sets itself apart by what it leaves out rather than by a long list of features.
 
 It is designed in particular to complement [Choria App Builder](https://choria-io.github.io/appbuilder/). App Builder lets you define a command line application declaratively in YAML, and because it is built on fisk, any App Builder application can be introspected and driven by fisk-ai. Together they let you define a strict, purpose-built set of tools in a YAML file and expose exactly those to an agent, without writing or compiling any code: App Builder describes the commands, fisk-ai's configuration selects which of them the agent may use and how it should behave.
 
