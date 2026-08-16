@@ -315,8 +315,10 @@ These change what Fisk AI does with a command.
 
 `ai:confirm` denies by default: no interactive terminal, or a prompt that cannot be shown, declines rather than runs. An
 interrupt or an end-of-input at the prompt ends the run instead of declining, since the operator did not answer; on a
-checkpointed run the session survives and `fisk run --resume` puts the question again. An "allow for the session" answer
-is remembered by command regardless of its arguments, for the rest of that run only.
+checkpointed run the session survives and `fisk run --resume` puts the question again. An "allow for the conversation"
+answer is remembered by command regardless of its arguments: a checkpointed session records it and honors it on every
+resume, an un-checkpointed run holds it for the life of the process. `/clear` and a `--force` resume across a changed
+configuration drop it, and a resume with no terminal attached declines a gated command rather than honoring it.
 `harness.confirm_tags` extends the same gate to any other tag your application already uses. Over MCP these gates are
 requested through elicitation instead of a local operator prompt; over agent-to-agent, confirmation-gated commands are
 not served at all. The full behavior is documented under [Command Tags](../agents/#command-tags) in the Agents guide.

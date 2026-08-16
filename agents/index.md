@@ -628,7 +628,7 @@ control how a command is exposed to the model are:
 |---------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `ai:deny`     | Never expose the command to the model; it is dropped before include/exclude and can never be added back.                                                              |
 | `ai:no_defer` | Always send the command directly instead of deferring it behind the tool-search tool.                                                                                 |
-| `ai:confirm`  | Require the operator to approve the command at the terminal before it runs; an "allow for the session" answer is remembered for that command for the rest of the run. |
+| `ai:confirm`  | Require the operator to approve the command at the terminal before it runs; an "allow for the conversation" answer is remembered for that command for the rest of the conversation, across resumes of a checkpointed session. |
 
 The behavior tags (`ai:read_only`, `ai:destructive`, `ai:additive`,
 `ai:idempotent`) describe what a command does rather than controlling it. They
@@ -646,13 +646,18 @@ than discoverable only through tool search.
 model calls a command tagged `ai:confirm`, fisk pauses before running it and
 prompts the operator at the terminal, showing the resolved command line with its
 arguments, and offers three choices: run it once, run it and stop asking for that
-command for the rest of the session, or decline. Declining returns an
+command for the rest of the conversation, or decline. Declining returns an
 authoritative result to the model (the command is not run and the model is told
 the decision is final), so it stops rather than working around the refusal. An
-"allow for the session" answer is remembered **by command, regardless of its
+"allow for the conversation" answer is remembered **by command, regardless of its
 arguments**: once you bless `stream rm`, every later `stream rm` call runs without
 asking again, so reserve that choice for a command you trust the agent to repeat.
-It applies for the rest of that run only; nothing is persisted across runs. The
+
+A checkpointed session records the answer, so a resume honors it rather than asking
+again, and `fisk-ai session show` lists what it holds. Without `--checkpoint` the
+approvals last as long as the process. They are dropped by `/clear` and by a
+`--force` resume across a changed configuration, and a resume with no terminal
+attached declines a gated command rather than honoring one. The
 prompt is rendered on stderr (so a piped final answer stays clean), the displayed
 command line is stripped of terminal control sequences so model-supplied argument
 values cannot spoof what you see, and it denies by default: no interactive terminal,
