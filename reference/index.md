@@ -224,10 +224,9 @@ harness:
     - ai:destructive
     - impact:rw
 
-  # Bounds a single tool call. Unset, or 0s, leaves tool execution
-  # unbounded, which is the default: at a terminal you can interrupt a
-  # command that will never answer. A host serving work with nobody
-  # watching applies a default of its own when this is unset.
+  # Bounds a single tool call, at a terminal and on a worker alike.
+  # Unset uses the default of 5m; set 0s for no bound at all, which is
+  # what a command that legitimately runs for hours needs.
   #
   # The bound cancels the call. A command is killed along with its
   # process group; an in-process tool stops only if it checks. A call
@@ -440,9 +439,10 @@ nats_context: ngs
 
 expose:
   agent:
-    # What this agent answers for other agents over NATS. Opt-in: without
-    # the block nothing answers, and a block asking for neither of the two
-    # surfaces below is rejected. Both use one connection under one
+    # What this agent answers for other agents over NATS, and how long it
+    # waits on the calls it makes to them. Opt-in: without the block nothing
+    # answers, and a block asking for neither surface is rejected unless it
+    # sets request_timeout alone. Both surfaces use one connection under one
     # identity. Its knobs are separate from the mcp block's because the two
     # servers bound different trust boundaries (NATS peers vs anything
     # reaching a TCP port).
@@ -454,12 +454,27 @@ expose:
       # since there is no operator to approve them.
       serve_tools: true
 
-      # Maximum tool calls run at once. 0 or unset uses the default 2, a
+      # Maximum tool calls run at once. A call arriving with every slot in
+      # use is refused at once with a "capacity" code and no command is
+      # started for it. 0 or unset uses the machine's CPU count clamped to
+      # between 2 and 8 (a container's own limit, not the host's), a
       # negative value is rejected, and the ceiling is 1024.
-      max_concurrent_tools: 2
+      max_concurrent_tools: 4
       # Duration bounding a single served tool call, e.g. 60s. Unset uses
       # the default 30s. Config-only, no flag or environment override.
       tool_timeout: 30s
+
+      # How long this agent waits for a peer to say anything, e.g. 30s,
+      # where tool_timeout bounds a call it answers. A served call is
+      # answered with an acknowledgement, a message every ten seconds
+      # while the tool runs, and then the reply, so this bounds the gap
+      # between messages while harness.tool_timeout bounds the call. A
+      # card fetch is one message, so for discovery the
+      # two are the same number. Unset uses the default 120s; 0s and a
+      # negative are rejected, and a value under 30s is raised to it. An
+      # agent that imports remote tools and answers nothing sets this on
+      # its own, which is the one case an a2a block needs no surface.
+      request_timeout: 120s
 
       # Answers prompts from peers by running the agent loop over each one
       # and streaming the run back. Its presence enables the surface and an
@@ -497,6 +512,11 @@ remote_tools:
 Imported tools keep their own name where it is unambiguous, and take the `<alias>_<name>` form only when the bare name
 would collide. A `run` is strict: an unreachable or unimportable remote agent fails the run. `fisk info` is lenient
 and reports each remote host's reachability instead.
+
+The timeouts around a2a bound one thing each. `expose.agent.a2a.tool_timeout` bounds a call this agent answers for a
+peer. `expose.agent.a2a.request_timeout` bounds how long it waits for a peer to say anything before treating it as gone.
+`harness.tool_timeout` bounds any tool call the loop makes, remote ones included, so it is the whole of what a remote
+call may take. `llm.budget.call_timeout` bounds a model call and reaches nothing on the network.
 
 ## Queued jobs
 

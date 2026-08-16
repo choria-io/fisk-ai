@@ -1,16 +1,15 @@
 # Answering prompts
 
-This channel takes a prompt from another agent over NATS, runs the agent loop over it, and streams the run back to the
-caller as it happens. The caller waits: it receives an acknowledgement, then the events the run produces, then the
-answer or the failure.
+The prompts channel takes a prompt from another agent over NATS and runs the agent loop over it. The caller waits and
+receives an acknowledgement, then the events the run produces, then the answer or the failure.
 
 > [!info] Note
 > The channel is opt-in. The configuration must carry an `expose.agent.a2a.prompts` block, otherwise `fisk serve`
 > answers no prompts.
 >
-> Answering prompts is available since {{% badge style="primary" title="Version" %}}0.0.6{{% /badge %}}.
+> Answering prompts is available since {{% badge style="primary" title="Version" %}}0.0.5{{% /badge %}}.
 
-## Answering prompts
+## Configuration
 
 ```yaml
 identity: nats-worker
@@ -32,9 +31,9 @@ expose:
         workers: 2
 ```
 
-Answering a prompt runs the whole agent loop, so the worker needs everything a run needs: an `identity`, a
-`system_prompt`, an `llm.model` and a `nats_context`. It does not need an application: an agent whose tools are all
-built-in, or one with no tools at all, answers prompts perfectly well.
+Answering a prompt runs the whole agent loop, so the configuration needs `identity`, `system_prompt`, `llm.model` and
+`nats_context`. `application_path` is optional: an agent with only built-in tools, or with none, still answers
+prompts.
 
 ```nohighlight
 $ fisk serve --config prompts.yaml
@@ -64,14 +63,14 @@ Serving nats-worker/1.2.0:
 
            Discovery: choria.fisk-ai.discovery.nats-worker
                Tools: choria.fisk-ai.tool.nats-worker
-         Concurrency: 2
+         Concurrency: 4
         Tool Timeout: 1m0s
              Exposed: stream_ls
                       stream_info
 ```
 
-`workers` is how many prompts the process answers at once. The `--workers` flag does not change it: that flag sizes the
-queued-jobs intake.
+`workers` is how many prompts the process answers at once. `--workers` does not change it; that flag applies to the
+queued-jobs channel.
 
 ## What a caller sends
 
@@ -91,9 +90,15 @@ queued-jobs channel takes as a payload:
 }
 ```
 
-`prompt` is required. `context` adds supporting material, `budget` lowers this worker's limits for the one run, and
-`stream: false` asks for the answer without the events on the way to it. A request may only lower a limit: a budget
-above the worker's own configuration is ignored.
+`prompt` is required. The optional fields are:
+
+| Field     | Description                                                     |
+|-----------|-----------------------------------------------------------------|
+| `context` | supporting material offered alongside the prompt                 |
+| `budget`  | lowers this worker's token and model-call limits for the one run |
+| `stream`  | `false` asks for the answer without the event stream             |
+
+A budget above the worker's own configuration is ignored.
 
 The reply set arrives on the request's own inbox, in order:
 
@@ -104,7 +109,7 @@ The reply set arrives on the request's own inbox, in order:
 | `result`  | the answer, with its stop reason and token usage         |
 | `error`   | instead of a result when the run did not produce one     |
 
-The acknowledgement comes first, so a plain request-reply sees it and nothing else:
+The acknowledgement comes first, so a plain `nats req` receives it and stops there:
 
 ```nohighlight
 $ nats req choria.fisk-ai.task.nats-worker "$(cat request.json)"
@@ -116,14 +121,14 @@ $ nats req choria.fisk-ai.task.nats-worker "$(cat request.json)"
  "sender":{"name":"nats-worker"},"recipient":{"name":"peer1"},"accepted":true}
 ```
 
-Every message of the set carries `sequence`, numbered from the acknowledgement without gaps, so a caller can tell a lost
-event from a quiet run. Events are advisory: the answer is in the terminal message, and the worker's own run journal is
-the authoritative transcript.
+Every message of the set carries `sequence`, numbered from the acknowledgement without gaps, so a caller can tell a
+lost event from a quiet run. Events are advisory. The answer is in the terminal message, and the worker's run journal
+is the authoritative transcript.
 
 ## Refusals and endings
 
-A request the worker cannot read at all is refused before anything is acknowledged, as a NATS service error with no
-reply set behind it:
+The worker refuses a request it cannot parse with a NATS service error, before any acknowledgement, and sends nothing
+further:
 
 ```nohighlight
 $ nats req choria.fisk-ai.task.nats-worker '{"protocol":"io.choria.fisk-ai.v1.request", ...}'
@@ -136,7 +141,7 @@ Nats-Service-Error-Code: 400
 ```
 
 Everything the worker refuses after that is an `ack` with `accepted: false` and a reason, followed by an `error` that
-closes the set. The `error` carries a `code` a caller can decide on:
+closes the set. The `error` carries a `code` the caller can branch on:
 
 | Code                | Meaning                                                            |
 |---------------------|--------------------------------------------------------------------|
@@ -150,11 +155,10 @@ closes the set. The `error` carries a `code` a caller can decide on:
 | `suspended`         | the run stopped at a resumable point                                |
 | `deferred`          | a tool will answer later, so the run is parked                      |
 
-A capacity refusal is immediate rather than a queue. The caller is waiting, so being told now that the worker is full is
-worth more than an acknowledgement it cannot see the depth behind.
+The worker refuses at capacity rather than queueing the prompt.
 
-A `deferred` run is parked and nothing resumes it: the message names the session and the tool calls it is waiting on,
-and an operator supplies the answer with `fisk session` on the worker that holds the journal.
+A `deferred` run has stopped waiting for a tool answer. The `error` names the session and the outstanding tool calls.
+An operator supplies the answer with `fisk session` on the worker holding the journal. No caller action resumes it.
 
 ## Canceling
 
@@ -162,41 +166,40 @@ A caller cancels by publishing an `io.choria.fisk-ai.v1.cancel` on
 `choria.fisk-ai.cancel.<identity>.<request>`, where `request` is the correlation id it sent. Only the one worker running
 that prompt subscribes there, so the message reaches it and no sibling hears it. It answers with an `ack`.
 
-No responder means nothing is running there: never accepted, already finished, or running on another instance.
+A no-responder error means this instance is not running that request: it was never accepted, it already finished, or
+another instance took it.
 
 ## Concurrency and shutdown
 
-Each prompt holds a worker slot from the moment it is acknowledged until the run ends, and nothing bounds how long a run
-may take beyond `harness.tool_timeout` and `llm.budget.call_timeout`. With `workers: 1` a single long run makes the
-worker refuse every other caller until it finishes, so size `workers` for the traffic and cancel a run you no longer
-want.
+Each prompt holds a worker slot from acknowledgement until the run ends. No setting bounds total run time;
+`harness.tool_timeout` bounds a tool call and `llm.budget.call_timeout` bounds a model call. With `workers: 1`, one
+long run makes the worker refuse every other caller until it finishes.
 
-A drain takes the identity out of its queue group, so a peer sending during the drain reaches a sibling. Runs already
-under way are waited for and answer their callers; a prompt acknowledged but not yet started ends with `draining`. A
-second interrupt cancels the runs in flight, and each caller is told the run failed.
+A drain takes the identity out of its queue group, so a peer sending during the drain reaches a sibling. The worker
+waits for runs already under way and answers their callers. A prompt acknowledged but not started ends with
+`draining`. A second interrupt cancels the runs in flight and answers each caller with `failed`.
 
 ## What a run reaches
 
 A run started this way reaches every tool the top-level `include` and `exclude` selected, exactly as a queued job does.
-`expose.agent.tools` narrows what peers may invoke directly and narrows neither.
+`expose.agent.tools` selects what peers may invoke directly over MCP and a2a, and does not affect a run.
 
-Confirmation-gated commands are refused inside the run. There is nobody to ask on this channel, so a command carrying
-`ai:confirm` or a configured confirm tag is unavailable to the model rather than approved. The caller is not told this
-on the event stream; the worker's log carries the advisory.
+The prompts channel cannot reach a person, so the worker removes commands tagged `ai:confirm`, or a configured confirm
+tag, from the tool set. The model never sees them. The event stream does not report this; the worker's log does.
 
 ## Sessions
 
-Every run is journaled under a session id the worker mints, so a crash leaves a resumable run and a deferred call has
-somewhere for its answer to land. The id is the worker's, not the caller's: `conversation` on a request is echoed back
-on every reply and never names a journal, so no caller can reach another's session.
+The worker mints a session id and journals every run under it, so a crash leaves a resumable run and a deferred tool
+call has a journal to answer into. `conversation` on a request is echoed on every reply and never names a journal, so
+no caller can reach another caller's session.
 
-Nothing resumes such a session in this release. A caller that wants the work done again sends the prompt again.
+No caller can resume that session. A caller that wants the work redone sends the prompt again.
 
-## Permissions
+## Safety
 
-Whoever can publish to `choria.fisk-ai.task.<identity>` can make this agent run its tools against a prompt of their
-choosing. NATS permissions are the whole of the access control: a request carries no verified caller, and the `sender`
-in the body is an unverified claim the worker records and logs.
+NATS publish permission on `choria.fisk-ai.task.<identity>` is the only access control: anyone holding it runs this
+agent's tools against a prompt of their choosing. A request carries no verified caller identity, and `sender` is an
+unverified claim the worker records and logs.
 
 A caller needs publish on the request subject, publish on `choria.fisk-ai.cancel.<identity>.>` to cancel, and its own
 inbox to receive the reply set. Anyone holding that cancel permission who learns a request id can cancel a run they did
@@ -210,6 +213,4 @@ level=INFO msg=Running channel=a2a/prompts work=3Hzq5OghUNlK8SnoBgVjfE6MKvx call
 level=INFO msg="Ending a run" channel=a2a/prompts request=docs1 caller=peer1 session=3Hzq5OghUNlK8SnoBgVjfE6MKvx code=failed reason="llm call: 401 Unauthorized"
 ```
 
-The tool safety rules described in the [Reference](../../reference/#safety) hold here as everywhere else: commands run
-as an argument vector rather than through a shell, arguments are bound to each command's schema, and credentials are
-stripped from tool environments.
+The tool safety rules in the [Reference](../../reference/#safety) apply here as everywhere else.

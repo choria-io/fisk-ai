@@ -1,21 +1,16 @@
 # Serving tools
 
-The a2a surface serves the wrapped application's commands to other agents over NATS. A peer discovers a card and
-invokes a tool, and that is the whole exchange: no prompt is involved and the agent loop never runs, which makes it
-cheaper than handing that peer a job and gives it a different security posture.
-
-Nothing it does produces work for the agent, so none of the settings that govern a run apply to it.
+The a2a surface serves the wrapped application's commands to other agents over NATS. A peer reads the agent's card and
+invokes a tool from it. No prompt is sent and the agent loop does not run, so the model, budget and session settings do
+not apply.
 
 > [!info] Note
 > The surface is opt-in. The configuration must set `expose.agent.a2a.serve_tools: true`, otherwise `fisk serve` serves
 > no tools.
 >
 > Serving tools is a surface of `fisk serve` since
-> {{% badge style="primary" title="Version" %}}0.0.5{{% /badge %}}. It was the `fisk a2a` command before that, and
-> that command is gone.
->
-> The switch was `expose.agent.agent_to_agent: true` before {{% badge style="primary" title="Version" %}}0.0.6{{% /badge %}},
-> and a configuration still carrying that key is refused at startup.
+> {{% badge style="primary" title="Version" %}}0.0.5{{% /badge %}}. The `fisk a2a` command is gone, and a configuration
+> carrying the old `expose.agent.agent_to_agent` key is refused at startup.
 
 ## Serving a set of tools
 
@@ -32,9 +27,8 @@ expose:
       serve_tools: true
 ```
 
-A worker serving only tools needs no `system_prompt` and no `llm.model`, since nothing it does calls a model. It does
-need `application_path`: no built-in tool declares a2a exposure, so an agent with no wrapped application would serve
-nothing.
+A worker serving only tools needs no `system_prompt` and no `llm.model`. It does need `application_path`: built-in
+tools are never served, so an agent with no wrapped application serves nothing.
 
 ```nohighlight
 $ fisk serve --config tools.yaml
@@ -51,18 +45,16 @@ Serving nats-tools/1.2.0:
 
           Discovery: choria.fisk-ai.discovery.nats-tools
               Tools: choria.fisk-ai.tool.nats-tools
-        Concurrency: 2
+        Concurrency: 4
        Tool Timeout: 30s
             Exposed: stream_add
                      stream_ls
                      stream_info
 ```
 
-A worker serving only tools has no model, no queue, no worker count and no session store.
-
 ## Reading the card
 
-A peer reads the same card `fisk serve` answers discovery with:
+`fisk discover` fetches the card the worker answers discovery with:
 
 ```nohighlight
 $ fisk discover nats-tools --config peer.yaml
@@ -79,15 +71,14 @@ Importing those tools into another agent is `remote_tools` in that agent's confi
 
 ## What is served
 
-`expose.agent.tools` narrows the served set on top of the agent's own `include` and `exclude`, so one file can run every
-`stream_` tool in a job and offer two of them to peers.
+`expose.agent.tools` applies on top of the agent's `include` and `exclude`. One file can run every `stream_` tool in a
+job and serve two of them to peers.
 
-Confirmation-gated commands are never served. There is no operator behind a served call to approve one, so a tool
-carrying `ai:confirm` or any configured confirm tag is dropped from the card rather than offered and refused. Use
-`ai:deny` to keep a command out entirely.
+A tool carrying `ai:confirm` or a configured confirm tag is left off the card, because no operator is behind a served
+call to approve it. Use `ai:deny` to keep a command out entirely.
 
-No built-in tool is served. Knowledge, memory and the human-in-the-loop tools declare no a2a exposure, and a
-configuration that enables some has them listed as withheld on the startup banner.
+Built-in tools are never served. Knowledge, memory and the human-in-the-loop tools declare no a2a exposure, and the
+startup banner lists them as withheld when the configuration enables them.
 
 ## Bounds
 
@@ -96,18 +87,36 @@ expose:
   agent:
     a2a:
       serve_tools: true
-      max_concurrent_tools: 2
+      max_concurrent_tools: 4
       tool_timeout: 30s
+      request_timeout: 120s
 ```
 
-`max_concurrent_tools` is how many calls run at once and `tool_timeout` bounds a single call. Both are separate from
-`--workers` and `harness.tool_timeout`, which pace and bound the agent loop.
+| Setting                      | Description                                                          |
+|------------------------------|----------------------------------------------------------------------|
+| `max_concurrent_tools` (int) | tool calls run at once; default is the CPU count clamped to 2 to 8   |
+| `tool_timeout` (duration)    | bound on one call this agent answers; default `30s`                  |
+| `request_timeout` (duration) | wait for a peer's next message; default `2m`, minimum `30s`          |
 
-Intake is back-pressured rather than queued: a full server does not take another request until a slot frees.
+In a container the concurrency default reads the container's CPU limit, not the host's, and the banner prints the
+concurrency in use. `--workers` sizes the queued-jobs intake and does not reach these. `harness.tool_timeout` bounds a
+tool call inside the agent loop.
+
+`request_timeout` bounds a call this agent makes to a peer. The peer answers with a set of messages: an
+acknowledgement, a keepalive every ten seconds while the tool runs, then the reply. The timeout bounds the gap between
+those messages, so a peer that keeps sending keepalives is waited for and `harness.tool_timeout` ends the call. A card
+fetch is a single message, so there the same value bounds the whole request.
+
+An agent that imports `remote_tools` and serves nothing sets `request_timeout` in an `a2a` block with no surface
+enabled. That is the only configuration in which a surface-less `a2a` block is accepted.
+
+The server refuses a call that arrives with every slot in use rather than queueing it. The acknowledgement says no and
+the reply carries a `capacity` code and a message saying nothing ran. The identity is a NATS queue group, so a peer
+that tries again reaches whichever member takes the message next.
 
 ## Several surfaces at once
 
-A configuration enabling a channel and this surface hosts both from one process, over one connection:
+One process hosts a channel and this surface together, over one NATS connection:
 
 ```nohighlight
 Serving nats-worker/1.2.0:
@@ -127,23 +136,26 @@ Serving nats-worker/1.2.0:
 
            Discovery: choria.fisk-ai.discovery.nats-worker
                Tools: choria.fisk-ai.tool.nats-worker
-         Concurrency: 2
+         Concurrency: 4
         Tool Timeout: 30s
              Exposed: stream_ls
                       stream_info
 ```
 
-A file shared between deployments serves tools from every worker that reads it.
-
 Adding a `prompts` block to the same `a2a` block also answers prompts, covered in
-[Answering prompts](../prompts/). Both use one transport and one identity, so a drain takes the whole of it out of the
-queue group at once.
+[Answering prompts](../prompts/).
 
-## Shutdown
+## Shutdown and faults
 
-A drain stops the surface answering, which takes the identity out of its queue group, so a peer calling during the
-drain reaches a sibling rather than waiting on a worker that is going away. A tool call already running is not waited
-for: it keeps running with nowhere to reply to, and a command it started may outlive the worker.
+A drain stops the surface answering and removes the identity from its queue group, so a peer calling during the drain
+reaches a sibling. Prompts stop with it, both surfaces using one transport and one identity.
+
+A drain does not wait for a call that is already running. The call runs to completion with nowhere to reply to, and a
+command it started may outlive the worker. `tool_timeout` stops a call that does not finish.
+
+An error on any of the service's subscriptions stops the whole micro service, taking discovery, tools and prompts for
+that identity down together. `fisk serve` logs it, drains the runs in flight and exits non-zero, so a supervisor
+restarts the worker. A drain stops the service by the same path, and is logged rather than reported as a fault.
 
 ## Safety
 

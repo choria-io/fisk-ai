@@ -27,9 +27,9 @@ The work queue holds the jobs waiting to be taken:
 $ ajc queue add FISK_AI --run-time 10m --tries 3 --concurrent 10
 ```
 
-The queue's run time, retry cap and concurrency stay with the queue. They are read from the bound consumer at startup
-and reported on the banner. The run time must be longer than a job takes, or the queue redelivers work that is still
-running.
+Run time, retry cap and concurrency are properties of the queue, not of the agent configuration. The worker reads them
+from the consumer at startup and prints them on the banner. The run time must be longer than a job takes, or the queue
+redelivers work that is still running.
 
 A worker started before either exists fails:
 
@@ -39,8 +39,8 @@ fisk: error: building the jobs surface: connecting to queue "FISK_AI": storage n
 
 ## Submitting work
 
-A caller enqueues a task with the queue engine's own client. No Fisk AI code sits in that path, so the contract is the
-queue name, the task type, and a payload that is a v1 `request` message:
+A caller enqueues a task with the queue engine's own client. The task must name the configured queue and task type,
+and carry a v1 `request` message as its payload:
 
 | Item      | Value                                                |
 |-----------|------------------------------------------------------|
@@ -65,16 +65,16 @@ The request carries the prompt and the framing every v1 message needs:
 }
 ```
 
-On a request, `request` and `id` are the same value. A one-shot job has nothing to group, so `conversation` takes that
-value too. `sender.name` is limited to letters, digits, `-` and `_`.
+On a request, `id`, `request` and `conversation` all carry the same value. `sender.name` is limited to letters,
+digits, `-` and `_`.
 
 ```nohighlight
 $ ajc tasks add fisk-ai:run --payload-file request.json --queue FISK_AI
 Enqueued task 3Hwxl119ZbwKHCKPzWlslXZYnB0
 ```
 
-The task id is chosen by the submitter or minted by the engine. It also names the session the run journals under, so it
-must be letters, digits, `-` or `_`, which is stricter than what the queue itself accepts.
+The submitter supplies the task id, or the engine mints one. It also names the session the run journals under, so it
+must be letters, digits, `-` or `_`. The queue itself accepts more.
 
 Optional fields narrow what one job may do:
 
@@ -84,11 +84,15 @@ Optional fields narrow what one job may do:
 | `budget.max_tokens`     | lowers the token budget for this job                |
 | `budget.max_iterations` | lowers the model-call cap for this job              |
 
-A budget may only lower what the configuration allows. A value above the configured limit is clamped down to it.
+A budget may only lower what the configuration allows. A value above the configured limit is ignored.
 
-A payload the worker cannot run is refused once rather than retried. An oversized payload, one that is not a valid v1
-request, one carrying no prompt, and a task id that cannot name a session all fail this way, with the reason on the
-task's `LastErr`.
+The worker refuses a payload it cannot run and does not retry it, recording the reason in the task's `LastErr`. This
+covers:
+
+* an oversized payload
+* a payload that is not a valid v1 request
+* a request carrying no prompt
+* a task id that cannot name a session
 
 ## Reading the answer
 
@@ -120,13 +124,12 @@ $ ajc tasks view 3Hwxl119ZbwKHCKPzWlslXZYnB0 --json
 }
 ```
 
-The `request` field echoes the id the caller submitted, and `recipient` names the caller that asked. `input_tokens` is
-every input token the job consumed, cached and uncached together, with `cache_read_tokens` and `cache_create_tokens`
-breaking it down rather than adding to it.
+The `request` field echoes the id the caller submitted, and `recipient` names the caller that asked. `input_tokens`
+counts every input token the job consumed. `cache_read_tokens` and `cache_create_tokens` are subsets of that total, not
+additions to it.
 
-A run that failed is a completed job whose answer says it failed. It is stored as a v1 `error` message carrying a
-`stop_reason`, and the task is acknowledged rather than retried, since a model refusal or an exhausted budget does not
-become true on redelivery.
+A failed run is still a completed job. The worker stores a v1 `error` message with a `stop_reason` and acknowledges the
+task. It is not retried: a model refusal or an exhausted budget fails the same way on redelivery.
 
 | Stop reason         | Meaning                                          |
 |---------------------|--------------------------------------------------|
@@ -138,11 +141,11 @@ become true on redelivery.
 
 ## Redelivery
 
-Every run is journaled under the task id, so a worker that dies mid-job leaves a session behind and the redelivery
-resumes it rather than starting again.
+The worker journals every run under the task id. When a worker dies mid-job, the redelivery resumes that journal
+instead of starting again.
 
-A job whose session already completed is answered from the journal. Nothing runs and no model is called, which covers a
-worker that finished its work and died before its acknowledgement landed.
+A job whose session already completed is answered from the journal, without running the agent or calling the model.
+This is the case when a worker finished a job and died before acknowledging the task.
 
 > [!info] Note
 > Deploying a changed tool set while jobs are in flight fails their resume check, and those jobs are retried until the
@@ -180,16 +183,12 @@ expose:
 | `nats_context`      | NATS context for the queue, defaulting to the top-level `nats_context`   |
 | `max_payload` (int) | payload cap in bytes before decoding, default `524288`                   |
 
-A task of another type on the same queue is not this worker's and is left alone. A submitter and a worker that disagree
-on the type produce a job nobody runs and nobody reports.
+A submitter and a worker that disagree on the task type produce a job nobody runs and nobody reports.
 
 ## Safety
 
-Permission to write to the queue is the whole of the access control. Behind it is a full agent loop driven by
-caller-supplied prompt text, running every tool the configuration allows.
+Publish permission on the queue is the only access control. Anyone who can enqueue a task of the configured type runs
+the full agent loop with prompt text of their choosing, against every tool the configuration allows. Restrict publish
+permission on the queue's subjects the way any other NATS resource is restricted.
 
-Anyone who can enqueue a task of the right type can therefore run the agent. Restrict publish permission on the queue's
-subjects to the callers that should have it, the way any other NATS resource is restricted.
-
-`max_payload` bounds a caller's input before anything decodes it. The rest of what applies to any served run is covered
-in [Serving](../serving/#safety).
+The rest of what applies to any served run is covered in [Serving](../serving/#safety).

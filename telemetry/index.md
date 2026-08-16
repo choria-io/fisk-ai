@@ -119,7 +119,7 @@ ones use a `fisk.` prefix.
 | `fisk.session.usage.*`, `.llm_calls` | root | session totals including the resumed prefix, resumed runs only |
 | `fisk.turn.index` | turn | one-based turn number |
 | `fisk.tool.kind` | execute_tool | which provider supplied the tool |
-| `fisk.tool.outcome` | execute_tool | `executed`, `error`, `unknown_tool`, `policy_denied`, `missing_arguments`, `confirm_denied` |
+| `fisk.tool.outcome` | execute_tool | `executed`, `error`, `unknown_tool`, `capacity`, `policy_denied`, `missing_arguments`, `confirm_denied`, `deferred` |
 | `fisk.tool.arg_keys` | execute_tool | the argument key names, never their values |
 | `fisk.tool.requested_name` | execute_tool | the name the model asked for, unknown tools only |
 | `fisk.tool.confirm_wait_ms` | execute_tool | how long the call waited on the operator |
@@ -197,6 +197,7 @@ It covers the a2a call.
 | Value | Meaning |
 |---|---|
 | `remote_unavailable` | no agent answered, or the deadline passed first |
+| `remote_capacity` | the agent answered and refused: it is at its concurrency limit and ran nothing |
 | `tool_error` | the call was answered and the tool failed on the far side |
 | `canceled`, `timeout` | this run stopped, not the peer |
 | `other` | anything else |
@@ -205,9 +206,10 @@ The request carries this span's trace context, so a peer running Fisk AI puts it
 and a slow remote call shows where the time went. A peer that exports nothing, or one that is not Fisk AI, still shows
 only as a slow span here.
 
-The two sides can disagree about when the call ended. The callee bounds a served call with its own
-`expose.agent.a2a.tool_timeout` and the caller waits `llm.budget.call_timeout`, so a trace can show the server's span
-still open after the caller's closed as `remote_unavailable`.
+The two sides can still disagree about when the call ended. A served call reports that it is running every ten seconds,
+so a caller gives up only when those stop or when `harness.tool_timeout` bounds the whole call, and a span closed as
+`remote_unavailable` under a server span that is still open means the caller stopped hearing from a peer that kept
+working.
 
 ### Knowledge
 

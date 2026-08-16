@@ -1,50 +1,47 @@
 # Channels
 
-A channel is a calling surface an agent is hosted behind. A work queue, a NATS binding, an HTTP listener and a caller
-in the same process are all channels, and they differ in what they can do rather than in kind.
+A channel supplies work to an agent and returns the answer. A work queue and a NATS request subject are channels
+today; an HTTP listener or a caller in the same process would be channels too.
 
-The `fisk serve` command hosts an agent behind whatever surfaces its configuration enables. Each channel supplies work,
-the agent runs it, and the outcome goes back the way it came. How work reaches a channel is the channel's own business:
-one polls a queue, another might answer a request on a subject, and the agent that runs it never learns which.
+The `fisk serve` command hosts an agent behind the channels its configuration enables. The queued-jobs channel polls a
+work queue. The prompts channel answers a request on a NATS subject. The agent loop is the same either way and does
+not see the difference.
 
-`fisk serve` also hosts surfaces that produce no work. [Serving tools](../a2a/) answers another agent's tool call
-directly, running one tool and no agent loop, so it is not a channel and nothing about a run applies to it.
+`fisk serve` also hosts surfaces that produce no work. [Serving tools](a2a/) answers another agent's tool call
+directly, running one tool. It starts no agent loop, so the behavior on this page does not apply to it.
 
 > [!info] Note
-> Channels are a young part of Fisk AI. Two ship today, queued jobs and prompts from other agents, and the shape of the
-> configuration around them will grow as more arrive.
+> Queued jobs and prompts from other agents are the channels that ship today.
 >
-> Channels and the `fisk serve` command are available since {{% badge style="primary" title="Version" %}}0.0.5{{% /badge %}}.
+> Channels and `fisk serve` are available since {{% badge style="primary" title="Version" %}}0.0.5{{% /badge %}}.
 
-## What a channel decides
+## Channel capabilities
 
 Channels differ in what they can offer a run:
 
-| Capability          | Description                                                      |
-|---------------------|-------------------------------------------------------------------|
-| Streaming           | whether a caller sees output as it is produced                     |
-| Elicitation         | whether a run can put a question to a person part way through      |
-| Follow-up turns     | whether a conversation continues after the first answer            |
-| Caller identity     | what the channel knows about who asked                             |
+| Capability      | Description                                                 |
+|-----------------|-------------------------------------------------------------|
+| Streaming       | whether a caller sees output as it is produced               |
+| Elicitation     | whether a run can ask a person a question mid-run            |
+| Follow-up turns | whether a conversation continues after the first answer      |
+| Caller identity | what the channel reports about the caller                    |
 
 What each shipped channel offers:
 
-| Channel      | Streaming | Elicitation | Follow-up turns | Caller identity         |
-|--------------|-----------|-------------|-----------------|-------------------------|
-| Queued jobs  | no        | no          | no              | the request's own claim |
-| a2a prompts  | yes       | no          | no              | the request's own claim |
+| Channel     | Streaming | Elicitation | Follow-up turns | Caller identity          |
+|-------------|-----------|-------------|-----------------|--------------------------|
+| Queued jobs | no        | no          | no              | unverified `sender` field |
+| a2a prompts | yes       | no          | no              | unverified `sender` field |
 
-A queue has nobody waiting on the other end, so there is no one to stream to and no second turn. A prompt from another
-agent has a caller waiting, so the run's output is sent back as it is produced, and the run still ends with its first
-answer.
+Nobody waits on a queued job, so the queued-jobs channel neither streams nor takes a second turn. The prompts channel
+streams output to the waiting caller as the worker produces it, then ends the run after the first answer.
 
-Confirmation-gated tools are dropped at the start of a run on any channel that cannot reach a person. There is no
-operator to approve them, so a run that would need one is told the tool is unavailable rather than left waiting for an
-approval that cannot arrive. Neither shipped channel can reach a person.
+No shipped channel can reach a person, so the worker removes confirmation-gated tools from the tool set at the start of
+every served run. The model never sees them.
 
 ## Where to go next
 
 * [Serving](serving/) covers the `fisk serve` command and the settings every channel shares
 * [Queued jobs](asyncjobs/) covers the asyncjobs channel: submitting work, reading answers, and its own configuration
 * [Answering prompts](prompts/) covers taking prompts from other agents and streaming the run back to them
-* [Serving tools](a2a/) covers offering this agent's tools to other agents, which runs no agent loop
+* [Serving tools](a2a/) covers offering this agent's tools to other agents without running an agent loop
