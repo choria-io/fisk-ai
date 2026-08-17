@@ -54,7 +54,6 @@ Serving nats-worker/1.2.0:
 
             Requests: choria.fisk-ai.task.nats-worker
              Cancels: choria.fisk-ai.cancel.nats-worker.*
-             Answers: choria.fisk-ai.elicit.nats-worker.*
              Workers: 2
     Answering a prompt runs the agent loop and reaches every tool the top-level include and exclude selected.
 
