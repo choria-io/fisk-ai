@@ -4,10 +4,8 @@ The prompts channel takes a prompt from another agent over NATS and runs the age
 receives an acknowledgement, then the events the run produces, then the answer or the failure.
 
 > [!info] Note
-> The channel is opt-in. The configuration must carry an `expose.agent.a2a.prompts` block, otherwise `fisk serve`
-> answers no prompts.
->
-> Answering prompts is available since {{% badge style="primary" title="Version" %}}0.0.5{{% /badge %}}.
+> The channel is opt-in: without an `expose.agent.a2a.prompts` block `fisk serve` answers no prompts. Available since
+> {{% badge style="primary" title="Version" %}}0.0.5{{% /badge %}}.
 
 ## Configuration
 
@@ -100,8 +98,8 @@ queued-jobs channel takes as a payload:
 | `stream`             | `false` asks for the answer without the event stream                     |
 | `conversation_token` | runs the prompt as the next turn of a conversation, see [Follow-up turns](#follow-up-turns) |
 
-A budget above the worker's own configuration is ignored. On a conversation it bounds the conversation rather than the
-turn, since the token count a run measures against it is the whole journal's.
+A budget above the worker's own configuration is ignored. On a conversation it limits the conversation rather than the
+turn, since a run measures the whole journal's token count against it.
 
 The reply set arrives on the request's own inbox, in order:
 
@@ -164,7 +162,7 @@ closes the set. The `error` carries a `code` the caller can branch on:
 The worker refuses at capacity rather than queueing the prompt.
 
 A `deferred` run has stopped waiting for a tool answer. The `error` carries the session id and the outstanding tool calls.
-An operator supplies the answer with `fisk session` on the worker holding the journal. No caller action resumes it.
+An operator supplies the answer with `fisk session` on the worker holding the journal. Only an operator resumes it.
 
 ## Canceling
 
@@ -201,27 +199,24 @@ A caller can send another turn of the same conversation. Every `ack` that accept
 }
 ```
 
-Nothing is declared in advance. A caller that answers once and stops ignores the token it was handed; one that wants
-another turn sends the token it already has. A follow-up opens a reply set of its own, with its own `ack`, events,
-cancel address and terminal message, so it is an ordinary request in every respect but which conversation it joins.
+A caller that asks once and stops ignores the token the worker handed it; one that wants another turn sends the token
+it already has. A follow-up opens a reply set of its own, with its own `ack`, events, cancel address and terminal
+message, so it is an ordinary request in every respect but which conversation it joins.
 
 **No worker holds a conversation between turns.** Each turn loads the journal, runs, and stores the result, so any
 instance in the queue group serves any turn. That also means a caller sends one turn at a time: a second turn sent
 while the first is still running is refused with `conversation_busy`, and it must wait for the first turn's terminal
 message rather than try another instance.
 
-A conversation ends by being left alone. Nothing marks one finished, and nothing expires one: the journal stays in the
-session store until an operator removes it.
+A conversation has no end state and no expiry: the journal stays in the session store until an operator removes it.
 
-Two limits are worth knowing before building on this:
-
-- **A turn cannot join a conversation waiting on a deferred tool result.** The worker answers `turn_not_taken` and the
-  prompt is not run. With `elicit` set, a question the caller does not answer within `request_timeout` leaves the
-  conversation in exactly that state, so an approval a human takes minutes over needs an operator to answer it with
+* **A turn cannot join a conversation waiting on a deferred tool result.** The worker answers `turn_not_taken` without
+  running the prompt. With `elicit` set, a human-in-the-loop question the caller neither answers nor holds open within
+  `request_timeout` leaves the conversation waiting on exactly that, so an operator supplies the answer with
   `fisk session` before the conversation continues.
-- **A configuration change ends a conversation.** Every turn is a resume, and a resume is refused when the model, the
-  system prompt or the tool set has changed since the conversation started. The worker answers `failed` and the caller
-  starts a new conversation.
+* **A configuration change ends a conversation.** Every turn is a resume, and the worker refuses a resume when the
+  model, the system prompt or the tool set has changed since the conversation started. It answers `failed` and the
+  caller starts a new conversation.
 
 The `usage` on a `result` counts the whole conversation rather than the turn, since it is read from the journal.
 
@@ -229,6 +224,10 @@ The `usage` on a `result` counts the whole conversation rather than the turn, si
 
 A run puts a question back to the caller when it needs a person: an approval for a confirmation-gated command, or one
 of the three human-in-the-loop questions. A run asks only when `elicit` is set.
+
+> [!info] Warning
+> Anyone who may answer this identity's questions can approve a confirmation-gated command in a run. An answer carries
+> no verified caller identity.
 
 ```yaml
 expose:
@@ -238,10 +237,6 @@ expose:
         workers: 2
         elicit: true
 ```
-
-> [!info] Warning
-> Anyone who may answer this identity's questions can approve a confirmation-gated command in a run. An answer carries
-> no verified caller identity.
 
 The worker sends the question on the reply set, after the `ack` and before the `result` or `error`:
 
@@ -259,7 +254,8 @@ The worker sends the question on the reply set, after the `ack` and before the `
   "kind": "approve",
   "command": "stream rm",
   "display": "stream rm ORDERS --force",
-  "tag": "ai:confirm"
+  "tag": "ai:confirm",
+  "wait_ms": 120000
 }
 ```
 
@@ -295,38 +291,81 @@ $ nats req choria.fisk-ai.elicit.nats-worker.docs1 "$(cat answer.json)"
 
 The `answer` value selects the field to read:
 
-| `answer`      | Field       | Values                       |
-|---------------|-------------|------------------------------|
-| `choice`      | `choice`    | `no`, `once`, `always`       |
-| `confirmed`   | `confirmed` | `true`, `false`              |
-| `index`       | `index`     | a position in `options`      |
-| `value`       | `value`     | any string, empty included   |
-| `no_operator` | none        | no operator is available     |
+| `answer`      | Field       | Values                            |
+|---------------|-------------|-----------------------------------|
+| `choice`      | `choice`    | `no`, `once`, `always`            |
+| `confirmed`   | `confirmed` | `true`, `false`                   |
+| `index`       | `index`     | a position in `options`           |
+| `value`       | `value`     | any string, empty included        |
+| `no_operator` | none        | no operator is available          |
+| `waiting`     | none        | the caller is holding the question open, see [Holding a question open](#holding-a-question-open) |
 
 The worker replies with an `ack`. An answer to a question it is not waiting on gets a `404`, as does an answer sent
-after the run gave up.
+after the question's window closed, and as does a `waiting` sent after the question was answered.
 
 `once` runs the command that one time. `always` stops the worker asking about that tool for the rest of the run. `no`
 and `no_operator` both leave the command unrun and tell the model the refusal is final.
 
-The run waits `expose.agent.a2a.request_timeout` for the answer, holding its worker slot. What an unanswered question
-does depends on what asked it:
+The worker holds the question for `expose.agent.a2a.request_timeout`, and its worker slot with it. The question's
+`wait_ms` carries that number, so the caller knows how long it has. An unanswered question ends the run differently
+depending on what asked it:
 
 * an approval leaves the command unrun, and the run ends with `suspended`
 * a human-in-the-loop tool leaves its call deferred, and the run ends with `deferred`
 
-An operator answers a deferred call with `fisk session` on the worker holding the journal. An approval has no
-out-of-band supply path, so a resume puts the question again.
+An operator answers a deferred call with `fisk session`. No `fisk session` command answers an approval, so a resume
+puts the question again.
+
+### Holding a question open
+
+A person reading a command approval can take longer than two minutes. A caller with the question in front of somebody
+sends an `elicit.reply` with `answer: waiting`, and each one restarts the window:
+
+```json
+{
+  "protocol": "io.choria.fisk-ai.v1.elicit.reply",
+  "id": "3Hzq9UxpYOvW2ZuvFk0njI0QOzb",
+  "request": "docs1",
+  "conversation": "docs1",
+  "sequence": 0,
+  "time": "2026-08-16T11:25:59.104812Z",
+  "sender": {"name": "peer1"},
+  "question_id": "3Hzq7RvnWMtU0XstDiYlhG8OMxz",
+  "answer": "waiting"
+}
+```
+
+The rules a client follows:
+
+* Send a `waiting` every `wait_ms / 3`, starting when the question goes on screen. The window restarts when the worker
+  receives the message, so the remaining two thirds cover the round trip and one lost message. In Go,
+  `a2a.NewWaitingAck(question, sender)` builds the message and `question.AckInterval()` is the interval.
+* Stop before sending the answer. A `waiting` that arrives after the answer is refused, since the worker has finished
+  with the question.
+* A `404` means the question is gone: take it off the screen and send no answer, since that would be refused too.
+* A `400`, or a question with no `wait_ms`, comes from a worker older than this feature. Answer inside the window
+  instead.
+* Send `no_operator` when the person walks away. `waiting` says somebody is there to answer, and `no_operator` ends
+  the question at once. Silence leaves the command unrun too, but only after a whole window.
+* The reply set is silent while the worker holds the question, so a client learns the worker is still there only from
+  the `ack` to each `waiting`.
+
+A caller that sends no `waiting` answers within one window or loses the question.
 
 ## Concurrency and shutdown
 
 Each prompt holds a worker slot from acknowledgement until the run ends. No setting limits total run time;
 `harness.tool_timeout` limits a tool call and `llm.budget.call_timeout` limits a model call. With `workers: 1`, one
-long run makes the worker refuse every other caller until it finishes.
+long run makes the worker refuse every other caller until it finishes. A run whose caller keeps sending `waiting` is
+one such run, and it holds its slot for as long as the caller sends them.
 
-A drain takes the identity out of its queue group, so the worker accepts no further prompts. The worker
-waits for runs already under way and answers their callers. A prompt acknowledged but not started ends with
-`draining`. A second interrupt cancels the runs in flight and answers each caller with `failed`.
+An interrupt starts a drain, which takes the identity out of its queue group, so the worker accepts no further
+prompts. The worker waits for runs already under way and answers their callers. A prompt acknowledged but not started
+ends with `draining`. A second interrupt cancels the runs in flight and answers each caller with `failed`.
+
+A drain stops restarting the window of a question already outstanding, so it ends within one window and the runs
+behind it finish. A caller sending `waiting` at that point still gets an `ack`, but the `ack` no longer restarts the
+window.
 
 ## Tool selection
 
@@ -340,17 +379,16 @@ questions](#answering-questions) describes.
 
 ## Sessions
 
-The worker mints a conversation token and journals every run under the hash of it, so a crash leaves a resumable run
-and a deferred tool call has a journal to answer into. A caller holding the token continues that conversation; a caller
-that wants the work redone from scratch sends the prompt without one.
+The worker mints a conversation token and journals every run under its hash. A crash leaves a resumable run, and a
+deferred tool call has a journal to answer into. A caller holding the token continues that conversation; a caller that
+wants the work redone from scratch sends the prompt without one.
 
 `conversation` on a request is echoed on every reply and never names a journal. It is the caller's own correlation tag,
-free for grouping whatever it likes, and the token is what names the conversation.
+free for grouping whatever it likes, and the token names the conversation.
 
-The token is not the session id. Journals from this channel are named `t-` and a hash, which is what tells an operator
-reading `fisk session ls` that a journal came from a prompt rather than a queued job. A session listing shows the last
-run's outcome, so a conversation resting between turns reads as `completed`, and the prompt column stays the
-conversation's first prompt.
+Journals from this channel are named `t-` and a hash, so an operator reading `fisk session ls` can tell a prompt's
+journal from a queued job's. A session listing shows the last run's outcome, so a conversation resting between turns
+reads as `completed`, and the prompt column shows the conversation's first prompt.
 
 ## Safety
 
@@ -364,10 +402,10 @@ inbox.
 
 Anyone holding the cancel permission who learns a request id can cancel a run they did not start. Anyone holding the
 answer permission who learns a request id and a question id can approve a confirmation-gated command in a run they did
-not start.
+not start, and can hold that run's worker slot for as long as they keep sending `waiting`.
 
 A `conversation_token` is a credential on the same terms: holding it is the authorization to add a turn to that
-conversation, and nothing checks that the caller continuing a conversation is the one that started it. It carries more
+conversation, and any holder can continue a conversation, whoever started it. It carries more
 than a fresh prompt does, because a standing approval an earlier turn recorded is restored with the conversation, so
 with `elicit` set a turn can reach a confirmation-gated command that somebody else approved. Tokens carry 128 bits of
 randomness and cannot be guessed, so treat one as a secret: this agent neither logs it nor puts it in an error message,
@@ -377,12 +415,20 @@ The session store is shared with the other channels of this identity. The queued
 submitter names, so a party holding queue-submit rights who learns one of these journal ids can resume a conversation
 started here. Restrict queue submission accordingly.
 
-The worker logs one line per prompt with the caller, the request id and the session:
+The worker logs the caller, the request id and the session as a prompt is accepted, runs and ends:
 
 ```nohighlight
 level=INFO msg="Accepted a prompt" channel=a2a/prompts request=docs1 caller=peer1 session=3Hzq5OghUNlK8SnoBgVjfE6MKvx prompt_bytes=26
 level=INFO msg=Running channel=a2a/prompts work=3Hzq5OghUNlK8SnoBgVjfE6MKvx caller=peer1 caller_verified=false resume=3Hzq5OghUNlK8SnoBgVjfE6MKvx
 level=INFO msg="Ending a run" channel=a2a/prompts request=docs1 caller=peer1 session=3Hzq5OghUNlK8SnoBgVjfE6MKvx code=failed reason="llm call: 401 Unauthorized"
+```
+
+The worker logs the window it gave a question and, when the question closes, how long it held it and how many
+`waiting` messages the caller sent. An operator reads from these which caller is holding a worker, and for how long:
+
+```nohighlight
+level=INFO msg="Asked the caller a question" channel=a2a/prompts request=docs1 caller=peer1 question=3Hzq7RvnWMtU0XstDiYlhG8OMxz kind=approve wait_ms=120000
+level=INFO msg="A question was answered" channel=a2a/prompts request=docs1 caller=peer1 question=3Hzq7RvnWMtU0XstDiYlhG8OMxz held=14m32s acks=21
 ```
 
 The tool safety rules in the [Reference](../../reference/#safety) apply here as everywhere else.

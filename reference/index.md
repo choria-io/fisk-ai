@@ -507,8 +507,10 @@ expose:
         # human-in-the-loop question. Default false: the worker refuses
         # every gated command. Anyone permitted to answer this identity's
         # questions can approve a gated command, and an answer carries no
-        # verified caller identity. The run waits request_timeout for an
-        # answer, holding its worker slot.
+        # verified caller identity. The worker holds a question for
+        # request_timeout, and its worker slot with it. A caller answers
+        # waiting before the window runs out to restart it, for as long as
+        # somebody is reading the question.
         elicit: true
 
 # Import tools from one or more remote fisk agents over NATS and expose

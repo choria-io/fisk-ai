@@ -104,8 +104,11 @@ tool call inside the agent loop.
 
 `request_timeout` limits a call this agent makes to a peer. The peer answers with a set of messages: an
 acknowledgement, a keepalive every ten seconds while the tool runs, then the reply. The timeout applies to the gap
-between those messages, so a peer that keeps sending keepalives is waited for and `harness.tool_timeout` ends the call.
-A card fetch is a single message, so there the same value covers the whole request.
+between those messages, so this agent waits for as long as the keepalives arrive, and `harness.tool_timeout` ends the
+call. A card fetch is a single message, so the same value covers a whole card fetch.
+
+The same value is how long the prompts endpoint holds a question it put to a caller, see
+[Answering questions](../prompts/#answering-questions). Raising it for a slow peer raises that window too.
 
 An agent that only calls other agents still needs `request_timeout`, so a block holding nothing else is valid:
 
