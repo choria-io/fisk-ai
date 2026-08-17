@@ -184,6 +184,18 @@ llm:
     # would otherwise reason unaided.
     enabled: true
 
+  # How hard the model works, which governs how deeply it reasons and how many
+  # tokens it spends overall. Unset asks for nothing and the model uses its own
+  # default. It sits beside the thinking block rather than inside it, so an
+  # effort can be set without sending a thinking parameter.
+  #
+  # The value is passed to the provider as written and is not checked against a
+  # list of levels, because the levels belong to the model: Anthropic takes low,
+  # medium, high, xhigh and max, other providers name their own, and a model
+  # released after this build may take one Fisk AI has never heard of. A level
+  # the model does not take is refused at the first model call, naming it.
+  reasoning_effort: high
+
   # When true, disables Anthropic prompt caching for the run. Left off,
   # Fisk AI caches the stable prefix of each request to lower cost and
   # latency on multi-turn runs.
