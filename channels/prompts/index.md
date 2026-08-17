@@ -93,13 +93,15 @@ queued-jobs channel takes as a payload:
 
 `prompt` is required. The optional fields are:
 
-| Field     | Description                                                     |
-|-----------|-----------------------------------------------------------------|
-| `context` | supporting material offered alongside the prompt                 |
-| `budget`  | lowers this worker's token and model-call limits for the one run |
-| `stream`  | `false` asks for the answer without the event stream             |
+| Field                | Description                                                             |
+|----------------------|-------------------------------------------------------------------------|
+| `context`            | supporting material offered alongside the prompt                         |
+| `budget`             | lowers this worker's token and model-call limits                         |
+| `stream`             | `false` asks for the answer without the event stream                     |
+| `conversation_token` | runs the prompt as the next turn of a conversation, see [Follow-up turns](#follow-up-turns) |
 
-A budget above the worker's own configuration is ignored.
+A budget above the worker's own configuration is ignored. On a conversation it bounds the conversation rather than the
+turn, since the token count a run measures against it is the whole journal's.
 
 The reply set arrives on the request's own inbox, in order:
 
@@ -155,6 +157,9 @@ closes the set. The `error` carries a `code` the caller can branch on:
 | `canceled`          | the caller canceled it                                              |
 | `suspended`         | the run stopped at a resumable point                                |
 | `deferred`          | a tool will answer later, so the run is parked                      |
+| `unknown_conversation` | the `conversation_token` names no conversation here; send the prompt without one |
+| `conversation_busy` | a turn of this conversation is running here; wait for its terminal message |
+| `turn_not_taken`    | the conversation could not take the turn, and the prompt did not run |
 
 The worker refuses at capacity rather than queueing the prompt.
 
@@ -169,6 +174,56 @@ the subject, so only the worker running that prompt is subscribed to it. It answ
 
 A no-responder error means this instance is not running that request: it was never accepted, it already finished, or
 another instance took it.
+
+## Follow-up turns
+
+A caller can send another turn of the same conversation. Every `ack` that accepts a prompt carries a
+`conversation_token`, and a later request carrying that token runs its prompt as the conversation's next turn:
+
+```nohighlight
+{"protocol":"io.choria.fisk-ai.v1.ack","id":"3Hzmp3SCMH824UgPUV6bKqBUSh3","request":"docs1",
+ "conversation":"docs1","sequence":1,"time":"2026-08-16T11:24:10.749134Z",
+ "sender":{"name":"nats-worker"},"recipient":{"name":"peer1"},"accepted":true,
+ "conversation_token":"3Hzmp8VqrKL42NmXcPd7bTgWfR1"}
+```
+
+```json
+{
+  "protocol": "io.choria.fisk-ai.v1.request",
+  "id": "docs2",
+  "request": "docs2",
+  "conversation": "docs1",
+  "sequence": 0,
+  "time": "2026-08-16T11:26:00Z",
+  "sender": {"name": "peer1"},
+  "prompt": "what is the first one called",
+  "conversation_token": "3Hzmp8VqrKL42NmXcPd7bTgWfR1"
+}
+```
+
+Nothing is declared in advance. A caller that answers once and stops ignores the token it was handed; one that wants
+another turn sends the token it already has. A follow-up opens a reply set of its own, with its own `ack`, events,
+cancel address and terminal message, so it is an ordinary request in every respect but which conversation it joins.
+
+**No worker holds a conversation between turns.** Each turn loads the journal, runs, and stores the result, so any
+instance in the queue group serves any turn. That also means a caller sends one turn at a time: a second turn sent
+while the first is still running is refused with `conversation_busy`, and it must wait for the first turn's terminal
+message rather than try another instance.
+
+A conversation ends by being left alone. Nothing marks one finished, and nothing expires one: the journal stays in the
+session store until an operator removes it.
+
+Two limits are worth knowing before building on this:
+
+- **A turn cannot join a conversation waiting on a deferred tool result.** The worker answers `turn_not_taken` and the
+  prompt is not run. With `elicit` set, a question the caller does not answer within `request_timeout` leaves the
+  conversation in exactly that state, so an approval a human takes minutes over needs an operator to answer it with
+  `fisk session` before the conversation continues.
+- **A configuration change ends a conversation.** Every turn is a resume, and a resume is refused when the model, the
+  system prompt or the tool set has changed since the conversation started. The worker answers `failed` and the caller
+  starts a new conversation.
+
+The `usage` on a `result` counts the whole conversation rather than the turn, since it is read from the journal.
 
 ## Answering questions
 
@@ -285,11 +340,17 @@ questions](#answering-questions) describes.
 
 ## Sessions
 
-The worker mints a session id and journals every run under it, so a crash leaves a resumable run and a deferred tool
-call has a journal to answer into. `conversation` on a request is echoed on every reply and never names a journal, so
-no caller can reach another caller's session.
+The worker mints a conversation token and journals every run under the hash of it, so a crash leaves a resumable run
+and a deferred tool call has a journal to answer into. A caller holding the token continues that conversation; a caller
+that wants the work redone from scratch sends the prompt without one.
 
-No caller can resume that session. A caller that wants the work redone sends the prompt again.
+`conversation` on a request is echoed on every reply and never names a journal. It is the caller's own correlation tag,
+free for grouping whatever it likes, and the token is what names the conversation.
+
+The token is not the session id. Journals from this channel are named `t-` and a hash, which is what tells an operator
+reading `fisk session ls` that a journal came from a prompt rather than a queued job. A session listing shows the last
+run's outcome, so a conversation resting between turns reads as `completed`, and the prompt column stays the
+conversation's first prompt.
 
 ## Safety
 
@@ -304,6 +365,17 @@ inbox.
 Anyone holding the cancel permission who learns a request id can cancel a run they did not start. Anyone holding the
 answer permission who learns a request id and a question id can approve a confirmation-gated command in a run they did
 not start.
+
+A `conversation_token` is a credential on the same terms: holding it is the authorization to add a turn to that
+conversation, and nothing checks that the caller continuing a conversation is the one that started it. It carries more
+than a fresh prompt does, because a standing approval an earlier turn recorded is restored with the conversation, so
+with `elicit` set a turn can reach a confirmation-gated command that somebody else approved. Tokens carry 128 bits of
+randomness and cannot be guessed, so treat one as a secret: this agent neither logs it nor puts it in an error message,
+and a caller should not either.
+
+The session store is shared with the other channels of this identity. The queued-jobs channel resumes the journal its
+submitter names, so a party holding queue-submit rights who learns one of these journal ids can resume a conversation
+started here. Restrict queue submission accordingly.
 
 The worker logs one line per prompt with the caller, the request id and the session:
 
