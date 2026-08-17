@@ -2,7 +2,7 @@
 
 Fisk AI exports OpenTelemetry traces and metrics over OTLP/HTTP, following the GenAI semantic conventions. One run is
 one trace: how long it took, which model calls it made, which tools it ran, and where the tokens went. It applies to
-`fisk run`, to the runs `fisk serve` hosts, and to knowledge searches served by `fisk mcp`. The a2a surface, which
+`fisk run`, to the runs `fisk serve` hosts, and to knowledge searches served by `fisk mcp`. The a2a endpoint, which
 serves tools to other agents without running the loop, exports a span per served call and joins the caller's trace.
 
 > [!info] Note
@@ -30,7 +30,7 @@ Every setting is in the [reference](../reference/#telemetry). Transport credenti
 standard `OTEL_EXPORTER_OTLP_HEADERS` and friends configure the connection, so the same configuration sends to a
 collector, Grafana Tempo, Honeycomb or any OTLP/HTTP endpoint.
 
-`--no-telemetry` suppresses export: for one run on `fisk-ai run`, and for the whole process on `fisk-ai serve`,
+`--no-telemetry` suppresses export: for one run on `fisk run`, and for the whole process on `fisk serve`,
 which reports whether telemetry is on in its startup banner.
 
 ## A local collector
@@ -119,7 +119,7 @@ ones use a `fisk.` prefix.
 | `fisk.session.usage.*`, `.llm_calls` | root | session totals including the resumed prefix, resumed runs only |
 | `fisk.turn.index` | turn | one-based turn number |
 | `fisk.tool.kind` | execute_tool | which provider supplied the tool |
-| `fisk.tool.outcome` | execute_tool | `executed`, `error`, `unknown_tool`, `capacity`, `policy_denied`, `missing_arguments`, `confirm_denied`, `deferred` |
+| `fisk.tool.outcome` | execute_tool | `executed`, `error`, `unknown_tool`, `capacity`, `policy_denied`, `missing_arguments`, `confirm_denied`, `confirm_unanswered`, `deferred` |
 | `fisk.tool.arg_keys` | execute_tool | the argument key names, never their values |
 | `fisk.tool.requested_name` | execute_tool | the name the model asked for, unknown tools only |
 | `fisk.tool.confirm_wait_ms` | execute_tool | how long the call waited on the operator |
@@ -127,7 +127,7 @@ ones use a `fisk.` prefix.
 | `fisk.tool.exit_code` | execute_tool | the exit status of the command the tool ran, absent when it ran none |
 | `fisk.tools.application`, `.builtin`, `.remote`, `.custom`, `.deferred` | startup | the resolved tool inventory |
 | `fisk.remote_hosts` | startup | configured remote tool hosts |
-| `fisk.memory.backend`, `.location` | startup, memory_index, execute_tool | the memory store this run bound |
+| `fisk.memory.backend`, `.location` | startup, memory_index, execute_tool | the memory store this run used |
 | `fisk.memory.entries` | memory_index | memories the start-of-run listing returned, absent when it failed |
 | `fisk.knowledge.tier.configured` | retrieval | `hybrid` or `lexical`, as configured |
 | `fisk.knowledge.tier.effective` | retrieval | the tier that ran, absent when neither retriever did |
@@ -207,7 +207,7 @@ and a slow remote call shows where the time went. A peer that exports nothing, o
 only as a slow span here.
 
 The two sides can still disagree about when the call ended. A served call reports that it is running every ten seconds,
-so a caller gives up only when those stop or when `harness.tool_timeout` bounds the whole call, and a span closed as
+so a caller gives up only when those stop or when `harness.tool_timeout` ends the whole call, and a span closed as
 `remote_unavailable` under a server span that is still open means the caller stopped hearing from a peer that kept
 working.
 
@@ -315,7 +315,7 @@ telemetry:
 > Whoever can read the traces can read the conversation, and an export cannot be recalled. Tool results are the
 > verbatim output of whatever command the model ran, and the system prompt includes the memory index. Nothing is
 > redacted: content capture bypasses the `error.type` reduction and every other limit described above. Use it for a
-> bounded investigation against a collector you control, not as a fleet default.
+> short investigation against a collector you control, not as a fleet default.
 
 A run with capture on shows `OTEL Enabled + content` on the full-screen startup card and marks its summary line:
 

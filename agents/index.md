@@ -231,7 +231,7 @@ As a debug or learning aid, all the HTTP requests can be logged to `http-debug.l
 
 ## Model and run settings
 
-The `agent.yaml` sets which model runs the agent, the budget that bounds a run, and whether the model exposes its
+The `agent.yaml` sets which model runs the agent, the budget a run may spend, and whether the model exposes its
 reasoning. The [Basic agent](#basic-agent) example above shows these together. The full set of configuration fields is in
 the [configuration reference](../reference/).
 
@@ -252,7 +252,7 @@ tools are being sent directly. The [configuration reference](../reference/) list
 
 ### Budget
 
-`llm.budget` bounds a single run so the agent loop cannot spend without limit:
+`llm.budget` limits a single run so the agent loop cannot spend without end:
 
 ```yaml
 llm:
@@ -597,10 +597,13 @@ The model decides when to call the HITL tools, shaped through the prompt. They s
 alone: confirming a destructive action, choosing between options that depend on operator intent, or supplying a value it
 cannot derive. The question is rendered on the terminal (stderr, so a piped final answer stays clean), and the
 model-supplied text is stripped of terminal control sequences first so it cannot spoof what is shown. Each tool denies
-by default: an interrupt, an end-of-input, or no terminal at all yields a negative answer (no confirmation, no
-selection, no value) rather than a guess. They require an interactive terminal: without one the call is declined with a
+by default: with no terminal attached the call returns a negative answer (no confirmation, no selection, no value) and a
 reason rather than hanging on a prompt no one can answer, and they are never exposed over MCP, where there is no
 operator. Tool calls within a turn run one at a time, so a prompt has the terminal to itself.
+
+An interrupt or an end-of-input at one of these questions is not an answer. The run ends there, checkpointed sessions
+stay resumable, and the resume asks the same question again. Nothing is recorded, so a run you interrupt does not carry
+a decision you never made.
 
 ### Required tool use confirmations
 
@@ -654,7 +657,7 @@ arguments**: once you bless `stream rm`, every later `stream rm` call runs witho
 asking again, so reserve that choice for a command you trust the agent to repeat.
 
 A checkpointed session records the answer, so a resume honors it rather than asking
-again, and `fisk-ai session show` lists what it holds. Without `--checkpoint` the
+again, and `fisk session show` lists what it holds. Without `--checkpoint` the
 approvals last as long as the process. They are dropped by `/clear` and by a
 `--force` resume across a changed configuration, and a resume with no terminal
 attached declines a gated command rather than honoring one. The
@@ -812,7 +815,7 @@ memory was not read or has changed since it was read. The model then reads the
 current value and retries. This is the same read-before-edit discipline that keeps
 an editor from clobbering a file it has not seen.
 
-Because the check rides on the KV entry's revision, it is an atomic
+The check uses the KV entry's revision, which makes it an atomic
 compare-and-swap: when two agents share a bucket and both try to update the same
 memory, the second write is rejected rather than silently overwriting the first.
 The file backend's last-writer-wins overwrite would quietly drop that change, so a

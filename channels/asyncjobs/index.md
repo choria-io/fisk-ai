@@ -1,8 +1,8 @@
 # Queued jobs
 
 The queued-jobs channel takes whole units of work off a [Choria asyncjobs](https://github.com/choria-io/asyncjobs) work
-queue, runs the agent loop against each one, and stores the answer back on the task. Nobody waits: a caller enqueues a
-job and reads the result whenever it is ready.
+queue, runs the agent loop against each one, and stores the answer back on the task. The submitter holds no connection
+to the worker: it enqueues a task, and reads the answer off the task record once a worker has written it.
 
 > [!info] Note
 > The channel is opt-in. The configuration must carry an `expose.agent.jobs` block, otherwise `fisk serve` has no queue
@@ -34,7 +34,7 @@ redelivers work that is still running.
 A worker started before either exists fails:
 
 ```nohighlight
-fisk: error: building the jobs surface: connecting to queue "FISK_AI": storage not ready: stream CHORIA_AJ_TASKS does not exist, create it with 'ajc tasks initialize'
+fisk: error: building the jobs endpoint: connecting to queue "FISK_AI": storage not ready: stream CHORIA_AJ_TASKS does not exist, create it with 'ajc tasks initialize'
 ```
 
 ## Submitting work
@@ -153,7 +153,7 @@ This is the case when a worker finished a job and died before acknowledging the 
 
 ## Configuration
 
-Every field under `expose.agent.jobs` has a default, so an empty block is a working channel.
+Every field under `expose.agent.jobs` has a default, so an empty block is valid.
 
 ```yaml
 expose:
@@ -183,7 +183,8 @@ expose:
 | `nats_context`      | NATS context for the queue, defaulting to the top-level `nats_context`   |
 | `max_payload` (int) | payload cap in bytes before decoding, default `524288`                   |
 
-A submitter and a worker that disagree on the task type produce a job nobody runs and nobody reports.
+A worker only claims tasks of its configured `task_type`. Submit a different type and the task stays in the queue until
+it expires, with no error logged at either end.
 
 ## Safety
 

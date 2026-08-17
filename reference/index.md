@@ -1,6 +1,6 @@
 # Reference
 
-A Fisk AI agent is described by a single YAML configuration file. It names the application to drive, selects which of
+A Fisk AI agent is described by a single YAML configuration file. It has the path to the application, selects which of
 its commands become tools, and sets the model, the prompt, and how the harness behaves. The `run`, `mcp`, and `serve`
 commands all read the same file; each uses the parts it needs and ignores the rest.
 
@@ -78,12 +78,12 @@ identity: nats
 # command tree and per-command JSON schemas. Leave it out to run an agent
 # on the built-in tools (knowledge, memory, human_in_the_loop) and any
 # remote tools alone, with no wrapped application. Required only when
-# expose.agent.a2a.serve_tools serves the wrapped application's tools.
+# expose.agent.a2a.serve_tools exposes the wrapped application's tools.
 application_path: /usr/local/bin/nats
 
 # The system prompt describing what the agent should do. REQUIRED for a
 # "run" and for a channel that runs one, ignored by "mcp" mode and by the
-# a2a surface. Think of it as a one-file SKILL: describe the goals and
+# a2a endpoint. Think of it as a one-file SKILL: describe the goals and
 # give broad guidance.
 system_prompt: |
   You manage NATS JetStream Streams using tools.
@@ -94,7 +94,7 @@ system_prompt: |
 character set so those uses stay valid.
 
 `application_path` is optional for `run` and `mcp` modes and required only when `expose.agent.a2a.serve_tools` is set,
-because no built-in is offered over a2a today and such a surface would have nothing to serve. When set, the target must
+because no built-in is offered over a2a today and such an endpoint would have nothing to serve. When set, the target must
 be built with a current [Fisk](https://github.com/choria-io/fisk) (v0.9.0 or newer) that supports `--fisk-introspect`
 and precomputed per-command schemas. When it is left out, Fisk AI skips introspection entirely and the agent runs on its built-in and
 remote tools alone; see [a knowledge-only agent](#a-knowledge-only-agent) below.
@@ -137,7 +137,7 @@ Run `fisk info` to preview the resulting tool set before a run.
 
 ## Model and run budget
 
-The `llm` block selects the model and bounds a single run. `llm.model` is the only required field in it:
+The `llm` block selects the model and limits a single run. `llm.model` is the only required field in it:
 
 ```yaml
 llm:
@@ -205,7 +205,7 @@ support and older ones do not; see [Models](#models).
 
 The `harness` block governs how the agent harness behaves during a run, as distinct from the model (`llm`) or the tool
 selection. Everything in it is optional and the whole block can be omitted to leave every setting at its default. These
-settings apply to the agent loop only; `mcp` mode and the a2a surface ignore them.
+settings apply to the agent loop only; `mcp` mode and the a2a endpoint ignore them.
 
 ```yaml
 harness:
@@ -224,15 +224,15 @@ harness:
     - ai:destructive
     - impact:rw
 
-  # Bounds a single tool call, at a terminal and on a worker alike.
-  # Unset uses the default of 5m; set 0s for no bound at all, which is
+  # Limits a single tool call, at a terminal and on a worker alike.
+  # Unset uses the default of 5m; set 0s for no limit at all, which is
   # what a command that legitimately runs for hours needs.
   #
-  # The bound cancels the call. A command is killed along with its
+  # The timeout cancels the call. A command is killed along with its
   # process group; an in-process tool stops only if it checks. A call
-  # waiting on your answer is never bounded. Separate from
+  # waiting on your answer runs as long as it needs. Separate from
   # expose.agent.mcp.tool_timeout and expose.agent.a2a.tool_timeout,
-  # which bound a served call.
+  # which limit a served call.
   tool_timeout: 5m
 
   # A hard off switch for the full-screen terminal UI: the agent always
@@ -301,7 +301,7 @@ Treat what a memory contains as data the model saved, not as trusted instruction
 Fisk commands can carry tags, set in their fisk definition or, for App Builder applications, in YAML. Any tag can be
 matched by `include`/`exclude`. The `ai:` prefix is reserved for the tags Fisk AI interprets; a tag under that prefix
 that is not one of the tags below does nothing and is reported as a warning at startup, by `fisk info`, by the MCP
-server and by the a2a surface.
+server and by the a2a endpoint.
 
 ### Control tags
 
@@ -400,9 +400,9 @@ expose:
       # (address 0.0.0.0), a wider trust boundary than a2a's NATS peers.
       max_concurrent_tools: 2
 
-      # Duration bounding a single served tool call, e.g. 60s. Unset uses
+      # How long a single served tool call may run, e.g. 60s. Unset uses
       # the default 30s. Named tool_timeout, not call_timeout, to avoid
-      # colliding with llm.budget.call_timeout, which bounds a different
+      # colliding with llm.budget.call_timeout, which limits a different
       # unit of work. Config-only; there is no flag or environment override.
       tool_timeout: 30s
 
@@ -427,8 +427,8 @@ boundary; for a command that must never be reachable over MCP, use `ai:deny` rat
 ## Agent-to-agent
 
 Fisk AI agents can also serve tools to, and import tools from, one another over NATS with no LLM on the serving side.
-Both sides use a named [NATS context](https://github.com/nats-io/jsm.go), given as `nats_context`. Serving is a surface
-of `fisk serve`; the [Serving tools](../channels/a2a/) guide covers it end to end.
+Both sides use a named [NATS context](https://github.com/nats-io/jsm.go), given as `nats_context`. Serving is an
+endpoint of `fisk serve`; the [Serving tools](../channels/a2a/) guide covers it end to end.
 
 > [!info] Note
 > A2A capabilities are under development, this is included here for completeness but subject to radical change
@@ -443,10 +443,10 @@ expose:
   agent:
     # What this agent answers for other agents over NATS, and how long it
     # waits on the calls it makes to them. Opt-in: without the block nothing
-    # answers, and a block asking for neither surface is rejected unless it
-    # sets request_timeout alone. Both surfaces use one connection under one
+    # answers, and a block must set serve_tools or prompts unless it holds
+    # request_timeout and nothing else. Both endpoints use one connection under one
     # identity. Its knobs are separate from the mcp block's because the two
-    # servers bound different trust boundaries (NATS peers vs anything
+    # servers sit on different trust boundaries (NATS peers vs anything
     # reaching a TCP port).
     a2a:
       # When true, "fisk serve" answers tool calls from peers, serving one
@@ -462,24 +462,24 @@ expose:
       # between 2 and 8 (a container's own limit, not the host's), a
       # negative value is rejected, and the ceiling is 1024.
       max_concurrent_tools: 4
-      # Duration bounding a single served tool call, e.g. 60s. Unset uses
+      # How long a single served tool call may run, e.g. 60s. Unset uses
       # the default 30s. Config-only, no flag or environment override.
       tool_timeout: 30s
 
       # How long this agent waits for a peer to say anything, e.g. 30s,
-      # where tool_timeout bounds a call it answers. A served call is
+      # where tool_timeout limits a call it answers. A served call is
       # answered with an acknowledgement, a message every ten seconds
-      # while the tool runs, and then the reply, so this bounds the gap
-      # between messages while harness.tool_timeout bounds the call. A
+      # while the tool runs, and then the reply, so this applies to the
+      # gap between messages while harness.tool_timeout limits the call. A
       # card fetch is one message, so for discovery the
       # two are the same number. Unset uses the default 120s; 0s and a
       # negative are rejected, and a value under 30s is raised to it. An
-      # agent that imports remote tools and answers nothing sets this on
-      # its own, which is the one case an a2a block needs no surface.
+      # agent that only calls other agents sets this with nothing else in
+      # the block, which is valid.
       request_timeout: 120s
 
       # Answers prompts from peers by running the agent loop over each one
-      # and streaming the run back. Its presence enables the surface and an
+      # and streaming the run back. Its presence enables the endpoint and an
       # empty block works. Answering a prompt runs the whole loop, so
       # identity, system_prompt and llm.model are all required, and the run
       # reaches every tool include and exclude selected, not the served set.
@@ -489,6 +489,15 @@ expose:
         # Default 1. The --workers flag does not reach it: that sizes the
         # queue.
         workers: 2
+
+        # Lets a run put its questions to the caller that sent the prompt:
+        # an approval for a confirmation-gated command, or a
+        # human-in-the-loop question. Default false: the worker refuses
+        # every gated command. Anyone permitted to answer this identity's
+        # questions can approve a gated command, and an answer carries no
+        # verified caller identity. The run waits request_timeout for an
+        # answer, holding its worker slot.
+        elicit: true
 
 # Import tools from one or more remote fisk agents over NATS and expose
 # them to this agent alongside its local tools.
@@ -515,10 +524,10 @@ Imported tools keep their own name where it is unambiguous, and take the `<alias
 would collide. A `run` is strict: an unreachable or unimportable remote agent fails the run. `fisk info` is lenient
 and reports each remote host's reachability instead.
 
-The timeouts around a2a bound one thing each. `expose.agent.a2a.tool_timeout` bounds a call this agent answers for a
-peer. `expose.agent.a2a.request_timeout` bounds how long it waits for a peer to say anything before treating it as gone.
-`harness.tool_timeout` bounds any tool call the loop makes, remote ones included, so it is the whole of what a remote
-call may take. `llm.budget.call_timeout` bounds a model call and reaches nothing on the network.
+The timeouts around a2a each cover one thing. `expose.agent.a2a.tool_timeout` limits a call this agent answers for a
+peer. `expose.agent.a2a.request_timeout` sets how long it waits for a peer to say anything before treating it as gone.
+`harness.tool_timeout` limits any tool call the loop makes, remote ones included, so it is how long a remote call may
+take in total. `llm.budget.call_timeout` limits a model call and reaches nothing on the network.
 
 ## Queued jobs
 
@@ -536,14 +545,14 @@ expose:
       queue: FISK_AI
 
       # The asyncjobs task type this worker handles. A task of another
-      # type on the same queue is not this worker's and is left alone, so
-      # a submitter and a worker that disagree produce a job nobody runs.
-      # Default "fisk-ai:run".
+      # type on the same queue is left alone, so a task submitted under a
+      # type no worker handles stays queued until it expires, with no
+      # error logged at either end. Default "fisk-ai:run".
       task_type: fisk-ai:run
 
       # How many jobs this process runs at once, default 1. The --workers
       # flag overrides it. It cannot raise throughput past the queue's own
-      # concurrency, which bounds every worker on that queue together.
+      # concurrency, which limits every worker on that queue together.
       workers: 1
 
       # The NATS context the queue is reached over, defaulting to the
@@ -552,8 +561,8 @@ expose:
       # session store and remote tools.
       nats_context: production
 
-      # Bounds a task payload in bytes before anything decodes it, default
-      # 524288. It is the only bound on a third party's input to a surface
+      # Caps a task payload in bytes before anything decodes it, default
+      # 524288. It is the only limit on a third party's input to an endpoint
       # whose sole access control is permission to write to the queue.
       max_payload: 524288
 ```
@@ -566,7 +575,7 @@ submitting work and reading answers.
 ## Telemetry
 
 `telemetry` exports OpenTelemetry traces and metrics over OTLP/HTTP. It applies to `fisk run`, to the runs `fisk serve`
-hosts, and to knowledge searches served by `fisk mcp`. The a2a surface exports nothing. Nothing is exported unless
+hosts, and to knowledge searches served by `fisk mcp`. The a2a endpoint exports nothing. Nothing is exported unless
 `enabled` is true.
 
 ```yaml
@@ -683,7 +692,7 @@ overlap, except for the hard off switches (`harness.no_tui`), which the command 
 | `--state-dir`  |                      | Override where sessions are stored, default `$XDG_STATE_HOME/fisk-ai/runs`.                                                                                                |
 | `--result`     |                      | On `fisk session answer`, the result to give the model. Read from standard input when the flag is absent.                                                                  |
 | `--error`      |                      | On `fisk session answer`, mark the supplied result the way a tool's own failure would be marked.                                                                            |
-| `--no-telemetry` | `NO_TELEMETRY`     | Suppress OpenTelemetry export, whatever `telemetry.enabled` says. On `fisk-ai run` it covers the run, on `fisk-ai serve` the whole worker. The credential scrub still applies. |
+| `--no-telemetry` | `NO_TELEMETRY`     | Suppress OpenTelemetry export, whatever `telemetry.enabled` says. On `fisk run` it covers the run, on `fisk serve` the whole worker. The credential scrub still applies. |
 | `--workers`    |                      | On `fisk serve`, how many jobs to run at once, overriding `expose.agent.jobs.workers`.                                                                                      |
 | `--work-dir`   |                      | On `fisk serve`, the directory command tools run in. Must be an absolute path that exists. Defaults to the worker's own working directory.                                  |
 
@@ -691,14 +700,14 @@ The MCP server port also reads `FISK_AI_MCP_PORT`, which `--port` overrides and 
 `expose.agent.mcp.port`. Sessions, chat, and their durability semantics are covered in the [Agents guide](../agents/).
 
 `--workers` overriding the file is the opposite of how `harness.tool_timeout` works, where a configured value beats the
-built-in default. The worker count is a property of the process; the tool bound is a property of the agent.
+built-in default. The worker count is a property of the process; the tool timeout is a property of the agent.
 
 ## Safety
 
 The configuration is the boundary on what the model can reach: `application_path` fixes the one binary it can drive
 (and with no `application_path` set the agent can drive no external binary at all), `include`/`exclude` and `ai:deny`
 fix which of its commands become tools, and nothing outside that set is callable.
-Commands run as an argument vector rather than through a shell, their arguments are bound to each command's schema, the
+Commands run as an argument vector rather than through a shell, each argument is checked against the command's schema, the
 `ANTHROPIC_API_KEY` is stripped from their environment, output is capped at 64 KiB, and `LLMFORMAT=1` is set. The
 [Agents](../agents/#safety) and [MCP](../mcp/#safety) guides describe the full threat model for each mode.
 

@@ -79,7 +79,7 @@ agent-only harness settings are ignored.
 | `expose.agent.mcp.instructions`         | free-text guidance sent to clients on connect                                                                                                      |
 | `expose.agent.mcp.confirm_over_mcp`     | how confirmation-gated commands behave when a client cannot be asked                                                                               |
 | `expose.agent.mcp.max_concurrent_tools` | maximum tool calls run at once; `0` or unset uses the default `2`, negative is rejected, capped at `1024`                                          |
-| `expose.agent.mcp.tool_timeout`         | duration bounding a single served tool call, for example `60s`; unset uses the default `30s`                                                       |
+| `expose.agent.mcp.tool_timeout`         | how long a single served tool call may run, for example `60s`; unset uses the default `30s`                                                        |
 | `include` / `exclude`                   | select which commands become tools, matched on tool name (regex) or tag                                                                            |
 | `expose.agent.tools`                    | narrow the exposed set further within the `include`/`exclude` selection                                                                            |
 | `identity`                              | the MCP server name; optional                                                                                                                      |
@@ -128,7 +128,7 @@ under [Command tags over MCP](#command-tags-over-mcp) below.
 The served tools are the agent's `include`/`exclude` selection, narrowed further by `expose.agent.tools` when it is set.
 With neither, every command is served, subject to the tag rules below. Tool selection uses the same regular expressions
 over the tool name as the [agent](../agents/#tool-selection). A tool call runs the command and returns its result,
-bounded by `tool_timeout` per call and `max_concurrent_tools` in flight at once.
+limited by `tool_timeout` per call and `max_concurrent_tools` in flight at once.
 
 ## Command tags over MCP
 
@@ -187,15 +187,15 @@ MCP path:
 ## Safety
 
 Every served command gets the same per-command protections as the [agent](../agents/#safety): it runs as an argument
-vector rather than through a shell, its arguments are bound to the command's schema, its `ANTHROPIC_API_KEY` is stripped,
+vector rather than through a shell, its arguments are checked against the command's schema, its `ANTHROPIC_API_KEY` is stripped,
 its output combines stdout and stderr and is capped at 64 KiB, and `LLMFORMAT=1` is set.
 
 The threat model is wider than an agent run:
 
 * Any client that can reach the server's port can invoke every exposed tool with any schema-valid arguments.
   `ai:deny` and `include`/`exclude` are the gate on what is reachable, so scope the exposed set deliberately.
-* There is no agent loop, prompt, or token budget bounding aggregate use. `tool_timeout` and `max_concurrent_tools`
-  bound a single call and how many run at once, but not the total number of calls, so do not expose the server on an
+* There is no agent loop, prompt, or token budget limiting total use. `tool_timeout` and `max_concurrent_tools` limit a
+  single call and how many run at once. Neither limits how many calls a client makes, so do not expose the server on an
   untrusted network.
 * Command output is returned to the connected client rather than to Anthropic, so whoever connects sees whatever the
   commands print.

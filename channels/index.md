@@ -3,11 +3,10 @@
 A channel supplies work to an agent and returns the answer. A work queue and a NATS request subject are channels
 today; an HTTP listener or a caller in the same process would be channels too.
 
-The `fisk serve` command hosts an agent behind the channels its configuration enables. The queued-jobs channel polls a
-work queue. The prompts channel answers a request on a NATS subject. The agent loop is the same either way and does
-not see the difference.
+The `fisk serve` command hosts an agent behind the channels. The queued-jobs channel polls a work queue. The prompts 
+channel answers a request on a NATS subject. The agent loop is the same either way and does not see the difference.
 
-`fisk serve` also hosts surfaces that produce no work. [Serving tools](a2a/) answers another agent's tool call
+`fisk serve` also hosts endpoints that produce no work. [Serving tools](a2a/) answers another agent's tool call
 directly, running one tool. It starts no agent loop, so the behavior on this page does not apply to it.
 
 > [!info] Note
