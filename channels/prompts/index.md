@@ -88,7 +88,8 @@ queued-jobs channel takes as a payload:
 }
 ```
 
-`prompt` is required. The optional fields are:
+Send a `prompt` to ask for something, or an `answer` to answer a question this agent is still waiting on, see
+[Answering after the run ended](#answering-after-the-run-ended). Not both. The optional fields are:
 
 | Field                | Description                                                             |
 |----------------------|-------------------------------------------------------------------------|
@@ -136,7 +137,9 @@ $ nats req choria.fisk-ai.task.nats-worker '{"protocol":"io.choria.fisk-ai.v1.re
 
 ```nohighlight
 Nats-Service-Error: the request is not a valid v1 message: jsonschema validation failed with
-'https://choria.io/schemas/io.choria.fisk-ai.v1/request.json#' - at '': missing property 'prompt'
+'https://choria.io/schemas/io.choria.fisk-ai.v1/request.json#' - at '': 'anyOf' failed
+  - at '': missing property 'prompt'
+  - at '': missing property 'answer'
 Nats-Service-Error-Code: 400
 ```
 
@@ -157,11 +160,15 @@ closes the set. The `error` carries a `code` the caller can branch on:
 | `unknown_conversation` | the `conversation_token` names no conversation here; send the prompt without one |
 | `conversation_busy` | a turn of this conversation is running here; wait for its terminal message |
 | `turn_not_taken`    | the conversation could not take the turn, and the prompt did not run |
+| `unknown_call`      | no such call is waiting for an answer                                |
+| `already_answered`  | the call already has an answer                                       |
+| `answer_too_large`  | the answer is over 256KB                                             |
 
-The worker refuses at capacity rather than queueing the prompt.
+The worker refuses at capacity rather than queueing the prompt. `unknown_call`, `already_answered` and
+`answer_too_large` are permanent: sending the same answer again reaches the same reply.
 
-A `deferred` run has stopped waiting for a tool answer. The `error` carries the session id and the outstanding tool calls.
-An operator supplies the answer with `fisk session` on the worker holding the journal. Only an operator resumes it.
+A `deferred` run is waiting for a tool answer. The `error` lists the calls. Answer one on a request carrying the
+conversation token, or with `fisk session` on the worker holding the journal.
 
 ## Canceling
 
@@ -211,8 +218,7 @@ A conversation has no end state and no expiry: the journal stays in the session 
 
 * **A turn cannot join a conversation waiting on a deferred tool result.** The worker answers `turn_not_taken` without
   running the prompt. With `elicit` set, a human-in-the-loop question the caller neither answers nor holds open within
-  `request_timeout` leaves the conversation waiting on exactly that, so an operator supplies the answer with
-  `fisk session` before the conversation continues.
+  `request_timeout` leaves the conversation waiting on a deferred call. Answer the question and it takes turns again.
 * **A configuration change ends a conversation.** Every turn is a resume, and the worker refuses a resume when the
   model, the system prompt or the tool set has changed since the conversation started. It answers `failed` and the
   caller starts a new conversation.
@@ -250,6 +256,7 @@ The worker sends the question on the reply set, after the `ack` and before the `
   "sender": {"name": "nats-worker"},
   "recipient": {"name": "peer1"},
   "question_id": "3Hzq7RvnWMtU0XstDiYlhG8OMxz",
+  "tool_use_id": "toolu_01A9bK2mNpQr",
   "kind": "approve",
   "command": "stream rm",
   "display": "stream rm ORDERS --force",
@@ -312,8 +319,8 @@ depending on what asked it:
 * an approval leaves the command unrun, and the run ends with `suspended`
 * a human-in-the-loop tool leaves its call deferred, and the run ends with `deferred`
 
-An operator answers a deferred call with `fisk session`. No `fisk session` command answers an approval, so a resume
-puts the question again.
+Both can be answered later, see [Answering after the run ended](#answering-after-the-run-ended). An operator on the
+worker holding the journal answers a deferred call with `fisk session` instead.
 
 ### Holding a question open
 
@@ -349,7 +356,53 @@ The rules a client follows:
 * The reply set is silent while the worker holds the question, so a client learns the worker is still there only from
   the `ack` to each `waiting`.
 
-A caller that sends no `waiting` answers within one window or loses the question.
+A caller that sends no `waiting` either answers within the window or answers later, on a request of its own.
+
+### Answering after the run ended
+
+A person closes a laptop with a question on screen. The `waiting` messages stop, the window runs out, and the run ends
+`suspended` or `deferred`. The worker unsubscribes from `choria.fisk-ai.elicit.<identity>.<request>` with the task, so
+an hour later their answer reaches no responder.
+
+They answer on a request instead, with the conversation token and no prompt:
+
+```json
+{
+  "protocol": "io.choria.fisk-ai.v1.request",
+  "id": "docs3",
+  "request": "docs3",
+  "conversation": "docs1",
+  "sequence": 0,
+  "time": "2026-08-16T12:40:03Z",
+  "sender": {"name": "peer1"},
+  "conversation_token": "3Hzmp8VqrKL42NmXcPd7bTgWfR1",
+  "answer": {
+    "tool_use_id": "toolu_01A9bK2mNpQr",
+    "kind": "approve",
+    "answer": "choice",
+    "choice": "once"
+  }
+}
+```
+
+Copy `tool_use_id` and `kind` from the question. A resumed run mints a new `question_id`, so the answer names the call
+instead.
+
+| Field         | Value                                                                    |
+|---------------|--------------------------------------------------------------------------|
+| `tool_use_id` | the call the question named                                               |
+| `kind`        | `approve`, `confirm`, `select` or `input`                                 |
+| `answer`      | `choice` for approve, `confirmed` for confirm, `value` for select and input, or `no_operator` |
+| `choice`      | `no`, `once` or `always`                                                  |
+| `confirmed`   | `true` or `false`                                                         |
+| `value`       | the text for input, and the chosen option for select                      |
+
+A selection names the option, not its position.
+
+You get back the usual `ack`, events, and a `result` or an `error`. The conversation gains no turn. A deferred call
+takes the answer as its result; an approval is asked again by the resume and answered from the request.
+
+A `400` means the answer does not fit its `kind`, has no token, or came with a prompt.
 
 ## Concurrency and shutdown
 
@@ -389,6 +442,11 @@ Journals from this channel are named `t-` and a hash, so an operator reading `fi
 journal from a queued job's. A session listing shows the last run's outcome, so a conversation resting between turns
 reads as `completed`, and the prompt column shows the conversation's first prompt.
 
+The worker records the token and the caller's claimed name with the journal, so a caller that lost a token can ask an
+operator for it instead of losing the conversation. Find the conversation with `fisk session ls`, which lists the first
+prompt and the time each journal was last touched, then read both values with `fisk session show <id>`. The listing has
+no token column, because a token is a credential and `ls` output is often pasted into tickets.
+
 ## Safety
 
 NATS publish permission on `choria.fisk-ai.task.<identity>` is the only access control: anyone holding it runs this
@@ -413,6 +471,11 @@ and a caller should not either.
 The session store is shared with the other channels of this identity. The queued-jobs channel resumes the journal its
 submitter names, so a party holding queue-submit rights who learns one of these journal ids can resume a conversation
 started here. Restrict queue submission accordingly.
+
+The worker records the token in the conversation's journal, so anyone who can read the session store can read the token
+and continue that conversation. This gives away no access that reading the store did not already give, since the same
+access reads and writes those journals directly, but the store needs the same protection the tokens do. The caller's
+name is recorded beside the token, and it is the unverified claim from the `sender` field.
 
 The worker logs the caller, the request id and the session as a prompt is accepted, runs and ends:
 
