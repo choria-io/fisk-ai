@@ -85,7 +85,7 @@ invoke_agent <identity>            the whole run
 `retrieval` covers `knowledge_search`. `knowledge_enumerate` gets its own span of that name, since it never ranks and
 never uses vectors.
 
-An interactive `--chat` run wraps the same work in a workflow, one agent invocation per turn:
+A full-screen run wraps the same work in a workflow, one agent invocation per turn:
 
 ```nohighlight
 invoke_workflow <identity>

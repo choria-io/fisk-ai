@@ -30,7 +30,7 @@ application_path: /usr/local/bin/nats
 llm:
   model: claude-sonnet-4-6
   budget:
-    max_tokens: 200000
+    max_tokens: 500000
     max_iterations: 50
     call_timeout: 120s
 
@@ -135,9 +135,9 @@ any of this runs and can never be added back.
 
 Run `fisk info` to preview the resulting tool set before a run.
 
-## Model and run budget
+## Model and budget
 
-The `llm` block selects the model and limits a single run. `llm.model` is the only required field in it:
+The `llm` block selects the model and limits what the loop may do. `llm.model` is the only required field in it:
 
 ```yaml
 llm:
@@ -151,18 +151,23 @@ llm:
   # list of providers that are.
   provider: anthropic
 
-  # Bounds on a single run so the agent loop cannot spend without limit.
-  # The run stops with a summary once any of these is reached, whether or
-  # not the task is complete.
+  # Limits on the agent loop so it cannot run without end. The two caps
+  # have different scopes: max_iterations is per turn, max_tokens is
+  # cumulative over a conversation.
   budget:
-    # Cumulative token spend cap for the run. Default 200000.
-    max_tokens: 200000
+    # Tokens a whole conversation may process, counted across every turn
+    # of it. Default 500000. A conversation that reaches it takes no
+    # further turn; start a new conversation or raise this. It counts
+    # tokens rather than money: cache reads weigh the same as uncached
+    # input here and are priced at a fraction of it.
+    max_tokens: 500000
     # Cap on the tokens a single response may generate, distinct from the
     # cumulative max_tokens. Left unset it uses a built-in default that is
     # raised when thinking is on. Set it only to fit an endpoint whose
     # per-response limit is lower than that default; an explicit value wins.
     max_output_tokens: 0
-    # Maximum agent loop iterations. Default 50.
+    # Agent loop iterations one turn may take, a fresh allowance per
+    # turn. Default 50.
     max_iterations: 50
     # Per-call timeout as a Go duration string, for example "60s" or
     # "2m". Default "120s".
@@ -285,9 +290,9 @@ harness:
     options:
       directory: memory
 
-  # Where checkpointed run journals are stored (the --checkpoint and
-  # --resume sessions). Optional; absent it uses the "file" backend under
-  # the XDG state directory. Sessions cannot be disabled.
+  # Where run journals are stored, which is what --resume continues.
+  # Optional; absent it uses the "file" backend under the XDG state
+  # directory. Sessions cannot be disabled: every run is a conversation.
   sessions:
     # The store implementation. "file" (the default) keeps each session as a
     # JSON-lines journal under a directory. "jetstream" keeps them on a NATS
@@ -327,9 +332,9 @@ These change what Fisk AI does with a command.
 
 `ai:confirm` denies by default: no interactive terminal, or a prompt that cannot be shown, declines rather than runs. An
 interrupt or an end-of-input at the prompt ends the run instead of declining, since the operator did not answer; on a
-checkpointed run the session survives and `fisk run --resume` puts the question again. An "allow for the conversation"
-answer is remembered by command regardless of its arguments: a checkpointed session records it and honors it on every
-resume, an un-checkpointed run holds it for the life of the process. `/clear` and a `--force` resume across a changed
+the conversation survives and `fisk run --resume` puts the question again. An "allow for the conversation"
+answer is remembered by command regardless of its arguments: the conversation records it and honors it on every
+resume. `/clear` and a `--force` resume across a changed
 configuration drop it, and a resume with no terminal attached declines a gated command rather than honoring it.
 `harness.confirm_tags` extends the same gate to any other tag your application already uses. Over MCP these gates are
 requested through elicitation instead of a local operator prompt; over agent-to-agent, confirmation-gated commands are
@@ -362,8 +367,8 @@ the reliable controls.
 
 All of a command's tags, reserved and free-form alike, are appended to the tool description Fisk AI sends the model as a
 trailing `Tags: ...` line, so a prompt can reference them. Adding or changing a tag changes that description, which
-changes the tool-set fingerprint a checkpointed session is keyed on: a session suspended before the change refuses to
-resume after it.
+changes the tool-set fingerprint a conversation is keyed on: one stopped before the change refuses to continue after
+it.
 
 ## Serving over MCP
 
@@ -696,14 +701,15 @@ overlap, except for the hard off switches (`harness.no_tui`), which the command 
 | `--base-url`   | `ANTHROPIC_BASE_URL` | Anthropic API base URL to use, for example a local Anthropic-compatible runner. A non-loopback host must use `https`; plain `http` is allowed only for a loopback address. |
 | `--http-debug` | `HTTP_DEBUG`         | Dump Anthropic API request and response bodies to `http-debug.log`. The file holds the full conversation and is created mode 0600.                                         |
 | `--no-color`   | `NO_COLOR`           | Disable markdown rendering of the final answer, emitting raw text.                                                                                                         |
-| `--no-tui`     | `NO_TUI`             | Disable the full-screen terminal UI for this run and use line-by-line output.                                                                                              |
-| `--chat`       |                      | Keep the full-screen UI open for interactive follow-ups after each turn.                                                                                                   |
+| `--no-tui`     | `NO_TUI`             | Disable the full-screen terminal UI and answer one prompt with line-by-line output. The full-screen view holds a conversation of many turns; this answers one.              |
 | `--verbose`    | `VERBOSE`            | Show more verbose output.                                                                                                                                                  |
 | `--thinking`   | `THINKING`           | Show the model's reasoning, which is hidden by default. On `fisk session show --transcript` it includes reasoning in the transcript. The `thinking=N` token counter is reported either way. |
 | `--trace`      |                      | Write a JSON-lines trace of every LLM request and response to a file.                                                                                                      |
-| `--checkpoint` |                      | Journal the run to a session that can be suspended and resumed.                                                                                                            |
-| `--resume`     |                      | Resume a checkpointed session by id instead of starting a new run.                                                                                                         |
-| `--state-dir`  |                      | Override where sessions are stored, default `$XDG_STATE_HOME/fisk-ai/runs`.                                                                                                |
+| `--resume`     |                      | Continue a stored conversation, by the session id `fisk session ls` shows or by a conversation token.                                                                       |
+| `--force`      |                      | Continue a stored conversation whose configuration has changed since it started. Standing approvals are dropped.                                                            |
+| `--state-dir`  |                      | Override where the sessions of the agent this process hosts are stored, default `$XDG_STATE_HOME/fisk-ai/runs`. Refused with `--nats-context`, where the agent is elsewhere and keeps its own. |
+| `--nats-context` |                    | On `fisk run`, talk to an agent on this NATS context instead of running one in this process. The configuration's `identity` names the agent and must be set.                 |
+| `--a2a-debug`  |                      | Dump every a2a message between this terminal and the agent to `a2a-debug.log`. The file holds the conversation token, your prompts and all tool output; it is created mode 0600. |
 | `--result`     |                      | On `fisk session answer`, the result to give the model. Read from standard input when the flag is absent.                                                                  |
 | `--error`      |                      | On `fisk session answer`, mark the supplied result the way a tool's own failure would be marked.                                                                            |
 | `--no-telemetry` | `NO_TELEMETRY`     | Suppress OpenTelemetry export, whatever `telemetry.enabled` says. On `fisk run` it covers the run, on `fisk serve` the whole worker. The credential scrub still applies. |

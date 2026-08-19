@@ -197,8 +197,9 @@ In the TUI press the `?` key to get interactive help.
 
 #### Chat after turn
 
-In the TUI mode the `--chat` flag keeps a Chat bar usable once the prompt is processed, instead of exiting, for follow
-up questions related to the session.
+In the TUI mode the chat bar opens once the prompt is processed, instead of exiting, for follow up questions related to
+the session. Every full-screen run works this way; `--no-tui` answers one prompt and exits, since it has no bar to
+open.
 
 Type a follow-up and press Enter to send it; `Ctrl-D` ends the session, `Ctrl-C` aborts it. Up/Down recall this
 session's earlier follow-ups. Alt-Enter (Option-Enter) moves to the next line rather than send.
@@ -252,23 +253,37 @@ tools are being sent directly. The [configuration reference](../reference/) list
 
 ### Budget
 
-`llm.budget` limits a single run so the agent loop cannot spend without end:
+`llm.budget` limits the agent loop so it cannot run without end:
 
 ```yaml
 llm:
   budget:
-    max_tokens: 200000
+    max_tokens: 500000
     max_iterations: 50
     call_timeout: 120s
 ```
 
-| Setting          | Description                                            |
-|------------------|--------------------------------------------------------|
-| `max_tokens`     | cumulative token spend cap for the run, default 200000 |
-| `max_iterations` | maximum agent loop iterations, default 50              |
-| `call_timeout`   | per-call timeout as a duration string, default `120s`  |
+| Setting          | Description                                                       |
+|------------------|-------------------------------------------------------------------|
+| `max_tokens`     | tokens a whole conversation may process, default 500000           |
+| `max_iterations` | agent loop iterations one turn may take, default 50               |
+| `call_timeout`   | per-call timeout as a duration string, default `120s`             |
 
-The run stops with a summary once a budget is reached, whether or not the task is complete.
+**The two caps have different scopes.** `max_iterations` applies to a single turn, and
+every turn of a conversation gets the same allowance. `max_tokens` applies to the whole
+conversation, so every turn draws on one allowance. Start a new conversation to get a
+fresh one.
+
+When a turn reaches the iteration cap, it stops, says so, and you can carry on with
+another prompt. When a conversation reaches its token cap, it is finished: the next prompt
+is refused before it runs. Start a new conversation, or raise `llm.budget.max_tokens` on
+the machine running the agent.
+
+**`max_tokens` counts tokens, not money.** It adds up the uncached input, the output, and
+both prompt-cache tiers. A cache read counts the same as an uncached input token here even
+though it costs a fraction as much, so two conversations with the same token count can
+cost very different amounts. Set this value against your own usage rather than treating it
+as a spending limit.
 
 ### Thinking
 
@@ -406,49 +421,66 @@ have allowlisted.
 
 ## Session snapshots and resumption
 
-By default a run is ephemeral: its conversation lives only in memory and is lost when the process exits. `--checkpoint`
-instead journals the run to a session so it can be suspended and resumed later, in a fresh process or on another
-machine. Sessions are the foundation for longer-running work where the agent may need to pause, for example while a slow
-external step completes.
+Every run is a conversation, and every conversation is journaled. You do not turn this on. Leave a run and continue it
+later, in a fresh process or on another machine, using the id it prints when it ends.
 
-### Creating and resuming a snapshot
+### Continuing a conversation
 
-Start a checkpointed run. fisk prints the session id at startup; it is generated unless `--name` sets it:
+Ask something. fisk prints the id of the conversation when the run ends:
 
 ```nohighlight
-$ fisk run --checkpoint "report on the ORDERS stream"
-$ fisk run --checkpoint --name orders-report "report on the ORDERS stream"
+$ fisk run "report on the ORDERS stream"
 ```
 
-Resume a session by id. No prompt is given, since the original prompt is restored from the session; passing one is an
+Continue it by that id. No prompt is given, since the conversation is restored from the journal; passing one is an
 error:
 
 ```nohighlight
-$ fisk run --resume orders-report
+$ fisk run --resume t-3f2a9c...
 ```
 
-On resume fisk replays the conversation so far to stderr, so the run continues in context rather than from a blank
-screen, then carries on from where it left off.
+fisk reads the conversation back before it goes on, so you continue in context rather than from a blank screen.
+
+Against an agent somewhere else, see [remote agents](#remote-agents), the journal is on the worker
+rather than here, so `--resume` takes the conversation token instead of the id. `fisk session show` on the worker prints
+it.
 
 ### Chat sessions
 
-`--chat` and `--checkpoint` combine into a durable, resumable conversation.
+Every full-screen run is a durable, resumable conversation.
 
-Each follow-up is journaled, so the whole conversation survives a suspend or a crash. Leaving the input bar with
-`Ctrl-D` suspends the session rather than ending it (the status bar reads `ctrl-d suspend`): it stays resumable, and
-fisk prints how to resume it on exit. `Ctrl-C` aborts; the journal is kept, so an aborted chat is still resumable
-from its last completed turn.
+Each turn is journaled, so the whole conversation survives leaving, a stop or a crash. Press `Ctrl-D` to leave the input
+bar when you are finished for now; the status bar reads `ctrl-d done`. This does not end the conversation. fisk prints
+how to continue it as it exits. `Ctrl-C` asks the current turn to stop at its next safe point. The conversation is kept
+either way.
 
-Resuming a chat session reopens the input bar automatically; re-passing `--chat` is not needed (it is ignored on resume,
-since the session already knows what it is), and fisk first replays the conversation into the viewport. Because the
-input bar needs a real terminal, a chat session can only be resumed in the full-screen UI, not with `--no-tui` or over a
-pipe. A checkpointed chat has no "completed" state; remove it with `session rm` once it is no longer needed.
+Resuming reads the conversation back into the viewport before the input bar opens, so you continue in context rather
+than from a blank screen. Because the bar needs a real terminal, a conversation can only be continued in the full-screen
+UI, not with `--no-tui` or over a pipe, where a run answers one prompt. A conversation has no "completed" state; remove
+it with `session rm` once it is no longer needed.
 
-### Suspending
+### Stopping
 
-For a checkpointed run the first `Ctrl-C`, or a SIGTERM, requests a graceful suspend: the current step finishes, the
-session is checkpointed, and the process exits printing how to resume it. A second `Ctrl-C` aborts immediately. A run
-started without `--checkpoint` keeps the usual behavior, where `Ctrl-C` cancels it.
+The first `Ctrl-C`, or a SIGTERM, asks the run to stop where the conversation can be continued: the current step
+finishes, the turn is journaled, and fisk prints how to continue it. A second gives up on the run and leaves.
+
+Both keep the conversation. The difference is that the first lets the turn reach a safe point, so the work it had
+already done is recorded rather than lost part way.
+
+## Remote agents
+
+`--nats-context` points a terminal at an agent somebody else is running rather than starting one in this process:
+
+```nohighlight
+$ fisk run --nats-context production "how many streams are there"
+```
+
+`identity` in the configuration names which agent to talk to, and you must set it. A default or a name derived from the
+application binary is shared by every agent built the same way, so the run could reach any of them.
+
+The worker calls the model, runs the tools and writes the journal. Flags that describe that work are refused rather than
+ignored: `--api-key`, `--base-url`, `--trace`, `--http-debug`, `--verbose`, `--state-dir` and `--no-telemetry`. Setting
+one of these through an environment variable is ignored without an error, since you did not type it.
 
 ### Durability
 
@@ -464,7 +496,8 @@ happens.
 Resume a session against the same agent configuration it started with. A session can be resumed from anywhere, including
 a machine that no longer has the original `agent.yaml`, so care is required: continuing a conversation against a
 different model, tool set, or system prompt can make the replayed transcript incoherent. fisk fingerprints the
-configuration at checkpoint time and refuses a resume when it no longer matches, naming what changed. `--force`
+configuration when the conversation started and refuses to continue it when that no longer matches, naming what
+changed. `--force`
 overrides it, except for the provider: a session started against one `llm.provider` can never be resumed against
 another. A session that already completed cannot be resumed.
 
@@ -601,9 +634,9 @@ by default: with no terminal attached the call returns a negative answer (no con
 reason rather than hanging on a prompt no one can answer, and they are never exposed over MCP, where there is no
 operator. Tool calls within a turn run one at a time, so a prompt has the terminal to itself.
 
-An interrupt or an end-of-input at one of these questions is not an answer. The run ends there, checkpointed sessions
-stay resumable, and the resume asks the same question again. Nothing is recorded, so a run you interrupt does not carry
-a decision you never made.
+If you interrupt a question, or close the input, fisk does not treat that as a reply. The run stops there and the
+conversation is kept, and when you continue it the same question is asked again. No answer is recorded, so a run you
+interrupt never carries a decision you did not make.
 
 ### Required tool use confirmations
 
@@ -631,7 +664,7 @@ control how a command is exposed to the model are:
 |---------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `ai:deny`     | Never expose the command to the model; it is dropped before include/exclude and can never be added back.                                                              |
 | `ai:no_defer` | Always send the command directly instead of deferring it behind the tool-search tool.                                                                                 |
-| `ai:confirm`  | Require the operator to approve the command at the terminal before it runs; an "allow for the conversation" answer is remembered for that command for the rest of the conversation, across resumes of a checkpointed session. |
+| `ai:confirm`  | Require the operator to approve the command at the terminal before it runs; an "allow for the conversation" answer is remembered for that command for the rest of the conversation, across resumes of the conversation. |
 
 The behavior tags (`ai:read_only`, `ai:destructive`, `ai:additive`,
 `ai:idempotent`) describe what a command does rather than controlling it. They
@@ -656,17 +689,16 @@ the decision is final), so it stops rather than working around the refusal. An
 arguments**: once you bless `stream rm`, every later `stream rm` call runs without
 asking again, so reserve that choice for a command you trust the agent to repeat.
 
-A checkpointed session records the answer, so a resume honors it rather than asking
-again, and `fisk session show` lists what it holds. Without `--checkpoint` the
-approvals last as long as the process. They are dropped by `/clear` and by a
-`--force` resume across a changed configuration, and a resume with no terminal
-attached declines a gated command rather than honoring one. The
+The conversation records the answer, so continuing it honors the answer rather than
+asking again, and `fisk session show` lists what it holds. They are dropped by
+`/clear` and by a `--force` resume across a changed configuration, and a resume with
+no terminal attached declines a gated command rather than honoring one. The
 prompt is rendered on stderr (so a piped final answer stays clean), the displayed
 command line is stripped of terminal control sequences so model-supplied argument
 values cannot spoof what you see, and it denies by default: no interactive terminal,
 or a prompt that cannot be shown, declines rather than runs. An interrupt or an
 end-of-input at the prompt ends the run rather than declining, since the operator did
-not answer; a checkpointed run stays resumable and asks again. Unlike
+not answer; the conversation stays continuable and asks again. Unlike
 `human_in_the_loop`, the tag is always active: there is no configuration flag to
 enable it.
 

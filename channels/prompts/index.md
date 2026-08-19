@@ -33,6 +33,10 @@ Answering a prompt runs the whole agent loop, so the configuration needs `identi
 `nats_context`. `application_path` is optional: an agent with only built-in tools, or with none, still answers
 prompts.
 
+`identity` must be one you wrote. It is the subject peers reach this worker on and the queue group it joins, so a name
+taken from the application binary or left at the default would put unrelated agents into one group, sharing each
+other's work.
+
 ```nohighlight
 $ fisk serve --config prompts.yaml
 ```
@@ -88,8 +92,13 @@ queued-jobs channel takes as a payload:
 }
 ```
 
-Send a `prompt` to ask for something, or an `answer` to answer a question this agent is still waiting on, see
-[Answering after the run ended](#answering-after-the-run-ended). Not both. The optional fields are:
+A request carries a `prompt` to ask the agent for something, or an `answer` to reply to a question it is still waiting
+on, described in [Answering after the run ended](#answering-after-the-run-ended). It must not carry both.
+
+A request that carries a `conversation_token` and neither of them either reads the conversation back or continues a run
+that stopped part way, described in [Reading a conversation](#reading-a-conversation).
+
+The optional fields are:
 
 | Field                | Description                                                             |
 |----------------------|-------------------------------------------------------------------------|
@@ -97,6 +106,12 @@ Send a `prompt` to ask for something, or an `answer` to answer a question this a
 | `budget`             | lowers this worker's token and model-call limits                         |
 | `stream`             | `false` asks for the answer without the event stream                     |
 | `conversation_token` | runs the prompt as the next turn of a conversation, see [Follow-up turns](#follow-up-turns) |
+| `replay`             | opens the reply set with this many blocks of the stored conversation, see [Reading a conversation](#reading-a-conversation) |
+| `force`              | continues a conversation whose configuration has changed since it started |
+
+`force` is a caller's decision about its own conversation. Without it a worker refuses a resume across a changed model,
+system prompt or tool set; with it the run continues under the current configuration and drops the standing approvals it
+can no longer vouch for.
 
 A budget above the worker's own configuration is ignored. On a conversation it limits the conversation rather than the
 turn, since a run measures the whole journal's token count against it.
@@ -127,6 +142,41 @@ Every message of the set carries `sequence`, numbered from the acknowledgement w
 lost event from a quiet run. Events are advisory. The answer is in the terminal message, and the worker's run journal
 is the authoritative transcript.
 
+## Event blocks
+
+Each `event` holds one block. The `type` field selects which of the blocks below it is. If your client does not
+recognize a type, keep the block and render what you can rather than rejecting the message, because a newer worker can
+send types this one does not define.
+
+| Type          | Fields                                     | What it is                                              |
+|---------------|--------------------------------------------|----------------------------------------------------------|
+| `text`        | `text`, `final`                            | the model's prose                                        |
+| `thinking`    | `text`                                     | the model's reasoning, when it produces any              |
+| `tool_call`   | `id`, `name`, `input`                      | a tool the run is about to invoke                        |
+| `tool_result` | `call_id`, `output`, `is_error`            | what that call returned                                  |
+| `agent_call`  | `id`, `name`, `task`                       | a question delegated to a peer agent                     |
+| `warning`     | `kind`, `name`, `count`, `params`, `error` | an advisory the run raised                               |
+| `prompt`      | `text`                                     | a turn somebody asked for; sent only in a replay         |
+| `status`      | `iteration`, `usage`, `phase`, `count`, `truncated` | progress, and the markers around a replay       |
+
+**`final` marks the answer.** Only the run knows which message ended the turn, so without the flag a caller cannot tell
+the answer from the narration on the way to it, and would render it twice when the same text arrives again in the
+`result`.
+
+**A `warning` names its kind and gives you the values, not a finished sentence.** Your client chooses the wording, and
+a client that does not recognize a kind can still display the fields.
+
+**A `tool_call` is not answered twice.** A call the caller was asked to approve carries the same `tool_use_id` as the
+`elicit.request` that asked, so a caller that drew the question knows it has already shown that call.
+
+Not every call produces a result: a denied confirmation, a tool called without its required arguments, a tool that
+answers later and an aborted run each end without one, so a caller pairing the two tolerates a call that is never
+answered.
+
+A `status` block reports progress, and its `usage` is what one model call consumed. The call that ends a turn sends no
+status of its own, so a caller keeping a running total takes the totals from the terminal message rather than summing
+these. The replay markers use the same block and are described below.
+
 ## Refusals and endings
 
 The worker refuses a request it cannot parse with a NATS service error, before any acknowledgement:
@@ -154,18 +204,30 @@ closes the set. The `error` carries a `code` the caller can branch on:
 | `not_started`       | the prompt was taken and the worker stopped before running it       |
 | `failed`            | the run ran and failed; the message says how                        |
 | `crashed`           | a bug in this software; the detail stays in the worker's log        |
-| `canceled`          | the caller canceled it                                              |
-| `suspended`         | the run stopped at a resumable point                                |
+| `canceled`          | the run was stopped before it finished, by the worker rather than by the caller |
+| `suspended`         | the run stopped at a resumable point, which is what a caller's own cancel reaches |
 | `deferred`          | a tool will answer later, so the run is parked                      |
 | `unknown_conversation` | the `conversation_token` names no conversation here; send the prompt without one |
 | `conversation_busy` | a turn of this conversation is running here; wait for its terminal message |
 | `turn_not_taken`    | the conversation could not take the turn, and the prompt did not run |
+| `budget_exhausted`  | the conversation has used its whole token allowance and is finished  |
 | `unknown_call`      | no such call is waiting for an answer                                |
 | `already_answered`  | the call already has an answer                                       |
 | `answer_too_large`  | the answer is over 256KB                                             |
 
 The worker refuses at capacity rather than queueing the prompt. `unknown_call`, `already_answered` and
 `answer_too_large` are permanent: sending the same answer again reaches the same reply.
+
+`budget_exhausted` ends the conversation, not just this request. The allowance belongs to the conversation, so every
+later turn is refused no matter who sends it. Your prompt did not run and was not recorded. To carry on, send a prompt
+with no `conversation_token` to start a new conversation. Only an operator on the machine running the agent can raise
+`llm.budget.max_tokens`.
+
+You can also hit this straight away, on a conversation that answered a moment earlier, by lowering `budget` on your own
+request below what the conversation has already used.
+
+Every `error` also has a `stop_reason` beside its `code`. `budget_exhausted` appears there when a run hit the cap part
+way through a turn instead of before it started.
 
 A `deferred` run is waiting for a tool answer. The `error` lists the calls. Answer one on a request carrying the
 conversation token, or with `fisk session` on the worker holding the journal.
@@ -175,6 +237,18 @@ conversation token, or with `fisk session` on the worker holding the journal.
 A caller cancels by publishing an `io.choria.fisk-ai.v1.cancel` on
 `choria.fisk-ai.cancel.<identity>.<request>`, where `request` is the correlation id it sent. The request id is part of
 the subject, so only the worker running that prompt is subscribed to it. It answers with an `ack`.
+
+**A cancel asks the run to stop where the conversation can be continued.** It does not end the run where it stands: the
+loop polls for it at each boundary and parks there, so the terminal message is `suspended` with the usage the turn
+spent, and the conversation takes another turn whenever the caller sends one. A run blocked on a question is included,
+since a cancel closes the question rather than leaving it asked with nobody to answer.
+
+What that costs is the ability to stop a model call in flight. A run inside a tool that never returns reaches no
+boundary, and a cancel will not move it; that escape hatch belongs to whoever operates the worker. A caller asks and an
+operator compels.
+
+Because the id is part of the subject, a caller mints it rather than being told it: set `id` and `request` on the
+request before sending, so the tag is in hand before there is anything to cancel.
 
 A no-responder error means this instance is not running that request: it was never accepted, it already finished, or
 another instance took it.
@@ -223,7 +297,70 @@ A conversation has no end state and no expiry: the journal stays in the session 
   model, the system prompt or the tool set has changed since the conversation started. It answers `failed` and the
   caller starts a new conversation.
 
-The `usage` on a `result` counts the whole conversation rather than the turn, since it is read from the journal.
+The `usage` on a `result` counts the whole conversation rather than the turn, since it is read from the journal. An
+`error` that ran and stopped carries it too, so a caller can tell what it owes for a turn it is about to continue.
+Both also carry `trace_id`, the trace the worker recorded, which is empty when it exports no telemetry, and
+`content_exported`, which says whether this turn's conversation itself reached that collector.
+
+## Asking what an agent is
+
+Ask an agent what it is before you send it anything. Run `fisk discover <identity>` to make that request. Every agent
+that answers prompts also answers discovery, whether or not it serves tools as well. An agent that serves no tools to
+peers answers with a card that lists none.
+
+Two fields on the card describe what the agent does with a conversation:
+
+| Field               | Meaning                                                                        |
+|---------------------|--------------------------------------------------------------------------------|
+| `telemetry`         | the agent exports traces of what it does                                        |
+| `telemetry_content` | those traces carry the conversation itself, so a prompt sent here reaches the operator's collector |
+
+They are published because a caller should know before it sends a prompt, and they are read off the worker's resolved
+telemetry provider rather than its configuration, so a rejected endpoint does not leave the card promising an export
+that will not happen. The card says what the agent is configured to do; `content_exported` on a terminal message says
+what a turn actually did.
+
+## Reading a conversation
+
+To read a conversation back, send a request with a `conversation_token` and a `replay` count, and neither a prompt nor
+an answer. The worker sends that many blocks of the stored conversation and then ends the reply set. It takes no turn
+and calls no model:
+
+```json
+{
+  "protocol": "io.choria.fisk-ai.v1.request",
+  "id": "docs3",
+  "request": "docs3",
+  "conversation": "docs1",
+  "sequence": 0,
+  "time": "2026-08-16T11:30:00Z",
+  "sender": {"name": "peer1"},
+  "conversation_token": "3Hzmp8VqrKL42NmXcPd7bTgWfR1",
+  "replay": 200
+}
+```
+
+Use this to show a conversation your client did not see live, such as one started on another machine. A finished turn
+leaves a completed journal, and a plain resume will not continue one, so reading it is the only request such a
+conversation accepts until you send the next prompt.
+
+You get back the same blocks the run sent the first time, between two `status` blocks:
+
+* `phase: "replay_start"` opens the history.
+* `phase: "replay_end"` closes it, with `count` blocks sent, `truncated` when older ones were left behind, and `usage`
+  for what the conversation has consumed so far. That `usage` is the whole conversation rather than one call, which is
+  what lets a caller seed a running total before this turn's own calls arrive.
+
+Set `replay` on each request that needs it. Leave it off a follow-up turn, which usually wants only the new blocks. The
+worker sends at most 200 blocks whatever you ask for, and rounds up to a whole turn so that a result never arrives
+without the call it answers. The largest useful value is therefore 200; ask for more and you get 200.
+
+Some of what the journal holds never leaves the worker: thinking signatures, the fingerprint, the caller, the
+conversation token, the standing approvals, and the notes and handles of deferred calls. Long values are trimmed to fit
+a block.
+
+**A `conversation_token` on its own, with no `replay`, is a plain resume**: continue a run that stopped part way, which
+is what a caller sends after a `suspended` ending. The two are separate operations, and one message cannot be both.
 
 ## Answering questions
 
