@@ -27,16 +27,23 @@ Channels differ in what they can offer a run:
 
 What each shipped channel offers:
 
-| Channel     | Streaming | Elicitation | Follow-up turns | Caller identity          |
-|-------------|-----------|-------------|-----------------|--------------------------|
+| Channel     | Streaming | Elicitation | Follow-up turns | Caller identity           |
+|-------------|-----------|-------------|-----------------|---------------------------|
 | Queued jobs | no        | no          | no              | unverified `sender` field |
-| a2a prompts | yes       | no          | no              | unverified `sender` field |
+| a2a prompts | yes       | optional    | yes             | unverified `sender` field |
 
-Nobody waits on a queued job, so the queued-jobs channel neither streams nor takes a second turn. The prompts channel
-streams output to the waiting caller as the worker produces it, then ends the run after the first answer.
+No caller waits for a queued job, so that channel does not stream output and does not take a second turn.
 
-No shipped channel can reach a person, so the worker removes confirmation-gated tools from the tool set at the start of
-every served run. The model never sees them.
+The prompts channel sends output to the caller as the worker produces it. It returns a conversation token with every
+prompt it accepts. Send that token on a later request to continue the conversation.
+
+To let a run ask the caller a question, set `expose.agent.a2a.prompts.elicit`. Leave it unset and the agent asks
+nobody.
+
+### Confirmation-gated tools
+
+An agent with nobody to ask still offers every tool to the model, including the confirmation-gated ones. The model can
+call one. The confirm gate then refuses the call and tells the model why.
 
 ## Where to go next
 
