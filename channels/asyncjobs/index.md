@@ -40,19 +40,22 @@ fisk: error: building the jobs endpoint: connecting to queue "FISK_AI": storage 
 ## Submitting work
 
 A caller enqueues a task with the queue engine's own client. The task must name the configured queue and task type,
-and carry a v1 `request` message as its payload:
+and its payload is a v1 prompt request:
 
-| Item      | Value                                                |
-|-----------|------------------------------------------------------|
-| Queue     | `expose.agent.jobs.queue`, default `FISK_AI`          |
-| Task type | `expose.agent.jobs.task_type`, default `fisk-ai:run`  |
-| Payload   | an `io.choria.fisk-ai.v1.request` message             |
+| Item      | Value                                                       |
+|-----------|-------------------------------------------------------------|
+| Queue     | `expose.agent.jobs.queue`, default `FISK_AI`                 |
+| Task type | `expose.agent.jobs.task_type`, default `fisk-ai:run`         |
+| Payload   | an `io.choria.fisk-ai.v1.request.prompt` message             |
 
-The request carries the prompt and the framing every v1 message needs:
+A queue has nobody waiting on it, so the three other kinds of request are refused here: they act on a conversation
+somebody is watching.
+
+The request holds the prompt and the framing every v1 message needs:
 
 ```json
 {
-  "protocol": "io.choria.fisk-ai.v1.request",
+  "protocol": "io.choria.fisk-ai.v1.request.prompt",
   "id": "2fT8kMxQ1aBcDeFgHiJkLmNoPqR",
   "request": "2fT8kMxQ1aBcDeFgHiJkLmNoPqR",
   "conversation": "2fT8kMxQ1aBcDeFgHiJkLmNoPqR",
@@ -65,7 +68,7 @@ The request carries the prompt and the framing every v1 message needs:
 }
 ```
 
-On a request, `id`, `request` and `conversation` all carry the same value. `sender.name` is limited to letters,
+On a request, `id`, `request` and `conversation` all hold the same value. `sender.name` is limited to letters,
 digits, `-` and `_`.
 
 ```nohighlight

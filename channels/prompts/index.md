@@ -76,12 +76,11 @@ queued-jobs channel.
 
 ## Making requests
 
-A caller publishes an `io.choria.fisk-ai.v1.request` message on `choria.fisk-ai.task.<identity>`, the same message the
-queued-jobs channel takes as a payload:
+A caller publishes a request on `choria.fisk-ai.task.<identity>`:
 
 ```json
 {
-  "protocol": "io.choria.fisk-ai.v1.request",
+  "protocol": "io.choria.fisk-ai.v1.request.prompt",
   "id": "docs1",
   "request": "docs1",
   "conversation": "docs1",
@@ -92,22 +91,20 @@ queued-jobs channel takes as a payload:
 }
 ```
 
-A request carries a `prompt` to ask the agent for something, or an `answer` to reply to a question it is still waiting
-on, described in [Answering after the run ended](#answering-after-the-run-ended). It must not carry both.
+| Protocol                                 | Asks for                                    | Required                        | Also takes                                                             |
+|------------------------------------------|---------------------------------------------|---------------------------------|------------------------------------------------------------------------|
+| `io.choria.fisk-ai.v1.request.prompt`     | a turn: the agent runs the prompt            | `prompt`                        | `context`, `tool_hints`, `budget`, `stream`, `conversation_token`, `replay`, `force` |
+| `io.choria.fisk-ai.v1.request.answer`     | a question answered and the run resumed      | `conversation_token`, `answer`  | `budget`, `stream`, `replay`, `force`                                  |
+| `io.choria.fisk-ai.v1.request.resume`     | a run that stopped part way continued        | `conversation_token`            | `budget`, `stream`, `force`                                            |
+| `io.choria.fisk-ai.v1.request.read`       | the conversation read back, no turn taken    | `conversation_token`, `replay`  | nothing                                                                |
 
-A request that carries a `conversation_token` and neither of them either reads the conversation back or continues a run
-that stopped part way, described in [Reading a conversation](#reading-a-conversation).
+The queued-jobs channel takes a `request.prompt` as its payload and none of the other three.
 
-The optional fields are:
+`request.answer` is described in [Answering after the run ended](#answering-after-the-run-ended), and `request.read`
+in [Reading a conversation](#reading-a-conversation).
 
-| Field                | Description                                                             |
-|----------------------|-------------------------------------------------------------------------|
-| `context`            | supporting material offered alongside the prompt                         |
-| `budget`             | lowers this worker's token and model-call limits                         |
-| `stream`             | `false` asks for the answer without the event stream                     |
-| `conversation_token` | runs the prompt as the next turn of a conversation, see [Follow-up turns](#follow-up-turns) |
-| `replay`             | opens the reply set with this many blocks of the stored conversation, see [Reading a conversation](#reading-a-conversation) |
-| `force`              | continues a conversation whose configuration has changed since it started |
+`context` is supporting material offered alongside the prompt, `stream: false` asks for the answer without the event
+stream, and `conversation_token` joins an existing conversation, see [Follow-up turns](#follow-up-turns).
 
 `force` is a caller's decision about its own conversation. Without it a worker refuses a resume across a changed model,
 system prompt or tool set; with it the run continues under the current configuration and drops the standing approvals it
@@ -120,11 +117,11 @@ The reply set arrives on the request's own inbox, in order:
 
 | Message           | When                                                        |
 |-------------------|-------------------------------------------------------------|
-| `ack`             | once, first, saying whether the prompt was taken             |
-| `event`           | zero or more, carrying the run's output as it is produced    |
-| `elicit.request`  | a question the run puts to the caller, only when `elicit` is set |
-| `result`          | the answer, with its stop reason and token usage             |
-| `error`           | instead of a result when the run did not produce one         |
+| `ack`                    | once, first, saying whether the prompt was taken             |
+| `event.<kind>`           | zero or more, carrying the run's output as it is produced    |
+| `elicit.request.<kind>`  | a question the run puts to the caller, only when `elicit` is set |
+| `result`                 | the answer, with its stop reason and token usage             |
+| `error`                  | instead of a result when the run did not produce one         |
 
 The acknowledgement comes first, so a plain `nats req` receives it and stops there:
 
@@ -144,20 +141,27 @@ is the authoritative transcript.
 
 ## Event blocks
 
-Each `event` holds one block. The `type` field selects which of the blocks below it is. If your client does not
-recognize a type, keep the block and render what you can rather than rejecting the message, because a newer worker can
-send types this one does not define.
+Each event holds one block. Where an id under `io.choria.fisk-ai.v1.event.` is one your client does not recognize, keep
+the message and render what you can rather than rejecting it: a newer worker sends kinds this one does not define.
 
-| Type          | Fields                                     | What it is                                              |
-|---------------|--------------------------------------------|----------------------------------------------------------|
-| `text`        | `text`, `final`                            | the model's prose                                        |
-| `thinking`    | `text`                                     | the model's reasoning, when it produces any              |
-| `tool_call`   | `id`, `name`, `input`                      | a tool the run is about to invoke                        |
-| `tool_result` | `call_id`, `output`, `is_error`            | what that call returned                                  |
-| `agent_call`  | `id`, `name`, `task`                       | a question delegated to a peer agent                     |
-| `warning`     | `kind`, `name`, `count`, `params`, `error` | an advisory the run raised                               |
-| `prompt`      | `text`                                     | a turn somebody asked for; sent only in a replay         |
-| `status`      | `iteration`, `usage`, `phase`, `count`, `truncated` | progress, and the markers around a replay       |
+| Protocol                                | Fields                                     | What it is                              |
+|-----------------------------------------|--------------------------------------------|------------------------------------------|
+| `io.choria.fisk-ai.v1.event.text`        | `text`, `final`                            | the model's prose                        |
+| `io.choria.fisk-ai.v1.event.thinking`    | `text`                                     | the model's reasoning, when it produces any |
+| `io.choria.fisk-ai.v1.event.tool_call`   | `id`, `name`, `input`                      | a tool the run is about to invoke        |
+| `io.choria.fisk-ai.v1.event.tool_result` | `call_id`, `output`, `is_error`            | what that call returned                  |
+| `io.choria.fisk-ai.v1.event.agent_call`  | `id`, `name`, `task`                       | a question delegated to a peer agent     |
+| `io.choria.fisk-ai.v1.event.warning`     | `kind`, `name`, `count`, `params`, `error` | an advisory the run raised               |
+| `io.choria.fisk-ai.v1.event.prompt`      | `text`                                     | a turn somebody asked for; sent only in a replay |
+| `io.choria.fisk-ai.v1.event.status`      | `iteration`, `usage`, `phase`, `count`, `truncated` | progress, and the markers around a replay |
+
+A text event in full:
+
+```nohighlight
+{"protocol":"io.choria.fisk-ai.v1.event.text","id":"3Hzmp8kRt1BqA4dQ2v9XnLcYm2T","request":"docs1",
+ "conversation":"docs1","sequence":2,"time":"2026-08-16T11:24:11.104217Z",
+ "sender":{"name":"nats-worker"},"block":{"text":"the stream is gone","final":true}}
+```
 
 **`final` marks the answer.** Only the run knows which message ended the turn, so without the flag a caller cannot tell
 the answer from the narration on the way to it, and would render it twice when the same text arrives again in the
@@ -167,7 +171,7 @@ the answer from the narration on the way to it, and would render it twice when t
 a client that does not recognize a kind can still display the fields.
 
 **A `tool_call` is not answered twice.** A call the caller was asked to approve carries the same `tool_use_id` as the
-`elicit.request` that asked, so a caller that drew the question knows it has already shown that call.
+`elicit.request.approve` that asked, so a caller that drew the question knows it has already shown that call.
 
 Not every call produces a result: a denied confirmation, a tool called without its required arguments, a tool that
 answers later and an aborted run each end without one, so a caller pairing the two tolerates a call that is never
@@ -182,16 +186,17 @@ these. The replay markers use the same block and are described below.
 The worker refuses a request it cannot parse with a NATS service error, before any acknowledgement:
 
 ```nohighlight
-$ nats req choria.fisk-ai.task.nats-worker '{"protocol":"io.choria.fisk-ai.v1.request", ...}'
+$ nats req choria.fisk-ai.task.nats-worker '{"protocol":"io.choria.fisk-ai.v1.request.resume","prompt":"...", ...}'
 ```
 
 ```nohighlight
 Nats-Service-Error: the request is not a valid v1 message: jsonschema validation failed with
-'https://choria.io/schemas/io.choria.fisk-ai.v1/request.json#' - at '': 'anyOf' failed
-  - at '': missing property 'prompt'
-  - at '': missing property 'answer'
+'https://choria.io/schemas/io.choria.fisk-ai.v1/request.resume.json#'
+  - at '/prompt': false schema
 Nats-Service-Error-Code: 400
 ```
+
+A resume takes no prompt. Send `io.choria.fisk-ai.v1.request.prompt` to run one.
 
 Everything the worker refuses after that is an `ack` with `accepted: false` and a reason, followed by an `error` that
 closes the set. The `error` carries a `code` the caller can branch on:
@@ -267,7 +272,7 @@ A caller can send another turn of the same conversation. Every `ack` that accept
 
 ```json
 {
-  "protocol": "io.choria.fisk-ai.v1.request",
+  "protocol": "io.choria.fisk-ai.v1.request.prompt",
   "id": "docs2",
   "request": "docs2",
   "conversation": "docs1",
@@ -322,13 +327,12 @@ what a turn actually did.
 
 ## Reading a conversation
 
-To read a conversation back, send a request with a `conversation_token` and a `replay` count, and neither a prompt nor
-an answer. The worker sends that many blocks of the stored conversation and then ends the reply set. It takes no turn
-and calls no model:
+To read a conversation back, send an `io.choria.fisk-ai.v1.request.read` with a `conversation_token` and a `replay`
+count. The worker sends that many blocks of the stored conversation and ends the reply set:
 
 ```json
 {
-  "protocol": "io.choria.fisk-ai.v1.request",
+  "protocol": "io.choria.fisk-ai.v1.request.read",
   "id": "docs3",
   "request": "docs3",
   "conversation": "docs1",
@@ -353,14 +357,15 @@ You get back the same blocks the run sent the first time, between two `status` b
 
 Set `replay` on each request that needs it. Leave it off a follow-up turn, which usually wants only the new blocks. The
 worker sends at most 200 blocks whatever you ask for, and rounds up to a whole turn so that a result never arrives
-without the call it answers. The largest useful value is therefore 200; ask for more and you get 200.
+without the call it answers. The largest useful value is therefore 200; ask for more and you get 200. A `read` asks for
+at least 1.
 
 Some of what the journal holds never leaves the worker: thinking signatures, the fingerprint, the caller, the
 conversation token, the standing approvals, and the notes and handles of deferred calls. Long values are trimmed to fit
 a block.
 
-**A `conversation_token` on its own, with no `replay`, is a plain resume**: continue a run that stopped part way, which
-is what a caller sends after a `suspended` ending. The two are separate operations, and one message cannot be both.
+**`io.choria.fisk-ai.v1.request.resume` continues a run that stopped part way**, which is what a caller sends after a
+`suspended` ending. Send it with the token and no `replay`.
 
 ## Answering questions
 
@@ -384,7 +389,7 @@ The worker sends the question on the reply set, after the `ack` and before the `
 
 ```json
 {
-  "protocol": "io.choria.fisk-ai.v1.elicit.request",
+  "protocol": "io.choria.fisk-ai.v1.elicit.request.approve",
   "id": "3Hzq6PkmVLsT9WqrChXkgF7NLwy",
   "request": "docs1",
   "conversation": "docs1",
@@ -394,7 +399,6 @@ The worker sends the question on the reply set, after the `ack` and before the `
   "recipient": {"name": "peer1"},
   "question_id": "3Hzq7RvnWMtU0XstDiYlhG8OMxz",
   "tool_use_id": "toolu_01A9bK2mNpQr",
-  "kind": "approve",
   "command": "stream rm",
   "display": "stream rm ORDERS --force",
   "tag": "ai:confirm",
@@ -402,14 +406,16 @@ The worker sends the question on the reply set, after the `ack` and before the `
 }
 ```
 
-Each `kind` carries its own fields:
+Every question has `question_id`, and may have `tool_use_id` and `wait_ms`:
 
-| Kind      | Asks                            | Fields                      |
-|-----------|---------------------------------|-----------------------------|
-| `approve` | whether a gated command may run | `command`, `display`, `tag` |
-| `confirm` | a yes or no question            | `question`                  |
-| `select`  | one of a list                   | `question`, `options`       |
-| `input`   | a free text value               | `question`, `default`       |
+| Protocol                                        | Asks                            | Fields                                     |
+|-------------------------------------------------|---------------------------------|--------------------------------------------|
+| `io.choria.fisk-ai.v1.elicit.request.approve`    | whether a gated command may run | `command`, `display`, and usually `tag`    |
+| `io.choria.fisk-ai.v1.elicit.request.confirm`    | a yes or no question            | `question`                                 |
+| `io.choria.fisk-ai.v1.elicit.request.select`     | one of a list                   | `question`, `options`                      |
+| `io.choria.fisk-ai.v1.elicit.request.input`      | a free text value               | `question`, and `default` when it pre-fills |
+
+`tag` is absent when the gate could name no trigger, which is a command rewritten to a tool that has none.
 
 The caller answers on `choria.fisk-ai.elicit.<identity>.<request>`, where `request` is the correlation id it sent:
 
@@ -419,7 +425,7 @@ $ nats req choria.fisk-ai.elicit.nats-worker.docs1 "$(cat answer.json)"
 
 ```json
 {
-  "protocol": "io.choria.fisk-ai.v1.elicit.reply",
+  "protocol": "io.choria.fisk-ai.v1.elicit.reply.approve",
   "id": "3Hzq8TwoXNuV1YtuEjZmiH9PNya",
   "request": "docs1",
   "conversation": "docs1",
@@ -427,21 +433,25 @@ $ nats req choria.fisk-ai.elicit.nats-worker.docs1 "$(cat answer.json)"
   "time": "2026-08-16T11:24:19.310422Z",
   "sender": {"name": "peer1"},
   "question_id": "3Hzq7RvnWMtU0XstDiYlhG8OMxz",
-  "answer": "choice",
   "choice": "once"
 }
 ```
 
-The `answer` value selects the field to read:
+Reply under the id you were asked under, with `request` swapped for `reply`:
 
-| `answer`      | Field       | Values                            |
-|---------------|-------------|-----------------------------------|
-| `choice`      | `choice`    | `no`, `once`, `always`            |
-| `confirmed`   | `confirmed` | `true`, `false`                   |
-| `index`       | `index`     | a position in `options`           |
-| `value`       | `value`     | any string, empty included        |
-| `no_operator` | none        | no operator is available          |
-| `waiting`     | none        | the caller is holding the question open, see [Holding a question open](#holding-a-question-open) |
+| Protocol                                            | Field       | Values                     |
+|-----------------------------------------------------|-------------|----------------------------|
+| `io.choria.fisk-ai.v1.elicit.reply.approve`          | `choice`    | `no`, `once`, `always`     |
+| `io.choria.fisk-ai.v1.elicit.reply.confirm`          | `confirmed` | `true`, `false`            |
+| `io.choria.fisk-ai.v1.elicit.reply.select`           | `index`     | a position in `options`    |
+| `io.choria.fisk-ai.v1.elicit.reply.input`            | `value`     | any string, empty included |
+| `io.choria.fisk-ai.v1.elicit.reply.no_operator`      | none        | no operator is available   |
+
+Send the field even when its value is the zero one. `confirmed: false`, `index: 0` and `value: ""` are each an answer
+somebody gave.
+
+`io.choria.fisk-ai.v1.elicit.waiting` arrives on the same subject and is not an answer. It says the caller is holding
+the question open, see [Holding a question open](#holding-a-question-open).
 
 The worker replies with an `ack`. An answer to a question it is not waiting on gets a `404`, as does an answer sent
 after the question's window closed, and as does a `waiting` sent after the question was answered.
@@ -462,19 +472,18 @@ worker holding the journal answers a deferred call with `fisk session` instead.
 ### Holding a question open
 
 A person reading a command approval can take longer than two minutes. A caller with the question in front of somebody
-sends an `elicit.reply` with `answer: waiting`, and each one restarts the window:
+sends an `io.choria.fisk-ai.v1.elicit.waiting`, and each one restarts the window:
 
 ```json
 {
-  "protocol": "io.choria.fisk-ai.v1.elicit.reply",
+  "protocol": "io.choria.fisk-ai.v1.elicit.waiting",
   "id": "3Hzq9UxpYOvW2ZuvFk0njI0QOzb",
   "request": "docs1",
   "conversation": "docs1",
   "sequence": 0,
   "time": "2026-08-16T11:25:59.104812Z",
   "sender": {"name": "peer1"},
-  "question_id": "3Hzq7RvnWMtU0XstDiYlhG8OMxz",
-  "answer": "waiting"
+  "question_id": "3Hzq7RvnWMtU0XstDiYlhG8OMxz"
 }
 ```
 
@@ -501,11 +510,11 @@ A person closes a laptop with a question on screen. The `waiting` messages stop,
 `suspended` or `deferred`. The worker unsubscribes from `choria.fisk-ai.elicit.<identity>.<request>` with the task, so
 an hour later their answer reaches no responder.
 
-They answer on a request instead, with the conversation token and no prompt:
+They send an `io.choria.fisk-ai.v1.request.answer` instead, with the conversation token:
 
 ```json
 {
-  "protocol": "io.choria.fisk-ai.v1.request",
+  "protocol": "io.choria.fisk-ai.v1.request.answer",
   "id": "docs3",
   "request": "docs3",
   "conversation": "docs1",
@@ -525,6 +534,10 @@ They answer on a request instead, with the conversation token and no prompt:
 Copy `tool_use_id` and `kind` from the question. A resumed run mints a new `question_id`, so the answer names the call
 instead.
 
+The `answer` object has `kind` and `answer` of its own. `answer` names the field holding the decision, and `kind` says
+what that decision means where the value alone cannot: `no_operator` looks the same whichever question was asked, and
+`value` serves both input and select.
+
 | Field         | Value                                                                    |
 |---------------|--------------------------------------------------------------------------|
 | `tool_use_id` | the call the question named                                               |
@@ -539,7 +552,7 @@ A selection names the option, not its position.
 You get back the usual `ack`, events, and a `result` or an `error`. The conversation gains no turn. A deferred call
 takes the answer as its result; an approval is asked again by the resume and answered from the request.
 
-A `400` means the answer does not fit its `kind`, has no token, or came with a prompt.
+A `400` means the answer does not fit its `kind`, or the message has no token, or it came with a prompt.
 
 ## Concurrency and shutdown
 
