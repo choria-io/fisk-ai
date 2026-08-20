@@ -510,7 +510,6 @@ subcommands:
 fisk session ls
 fisk session show <id>
 fisk session show <id> --transcript
-fisk session answer <id> <tool-use-id>
 fisk session rm <id>
 ```
 
@@ -525,18 +524,9 @@ A tool can report that its answer arrives later rather than now. The run then su
 resumes once the answer exists. `session show` lists what such a session is waiting on under `Waiting on`, giving the
 `tool_use` id, the tool, and whatever the tool said it is waiting for.
 
-```nohighlight
-fisk session answer <id> <tool-use-id> --result '{"approved":true}'
-cat approval.json | fisk session answer <id> <tool-use-id>
-fisk session answer <id> <tool-use-id> --error --result "the request was rejected"
-```
-
-The result is read from `--result`, or from standard input when that flag is absent. `--error` marks it the way a tool's
-own failure would be marked. The answer is refused unless the call was deferred and is still waiting, and refused while
-another process holds the session.
-
-The tool is never called again: it already started the work, which is why it deferred. Resume the run with
-`fisk run --resume <id>` once the answer is in.
+The answer travels on a request carrying the conversation's token, described in
+[Answering after the run ended](../channels/prompts/#answering-after-the-run-ended). The tool is never called again: it
+already started the work, which is why it deferred.
 
 No tool that ships with fisk defers; the mechanism is for tools a Go program registers through `agent.Options.CustomTools`.
 
@@ -842,10 +832,16 @@ harness:
 #### Read-before-update
 
 The jetstream backend adds a safety guard the file backend cannot: an overwrite
-must follow a read of the current value in the same run, and is refused if the
-memory was not read or has changed since it was read. The model then reads the
-current value and retries. This is the same read-before-edit discipline that keeps
-an editor from clobbering a file it has not seen.
+must follow a read of the current value, and is refused if the memory was not read
+or has changed since it was read. The model then reads the current value and
+retries. This is the same read-before-edit discipline that keeps an editor from
+clobbering a file it has not seen.
+
+The read counts for the whole conversation rather than one turn. A memory read on
+Monday and edited on Friday in the same conversation is overwritten without a fresh
+read, as long as nothing else wrote to it in between; if something did, the write is
+refused and the model reads again before retrying. One conversation's reads never
+authorize another's overwrite.
 
 The check uses the KV entry's revision, which makes it an atomic
 compare-and-swap: when two agents share a bucket and both try to update the same

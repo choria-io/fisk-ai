@@ -204,12 +204,18 @@ NATS before construction without the agent naming any backend.
 
 ### The read-before-update guard
 
-By default the JetStream backend will not overwrite a key the current run has not read. `Read` records the entry
-revision, and `overwrite` requires a known revision and issues a revision-checked update. A wrong-last-sequence error
-maps to `ErrStale`, and the stale revision is dropped so a retry is forced to re-read.
+By default the JetStream backend will not overwrite a key whose current revision it does not know. `Read` records the
+entry revision in the `memory.Scope` on the context, and `overwrite` requires a known revision and issues a
+revision-checked update. A wrong-last-sequence error maps to `ErrStale`, and the stale revision is dropped so a retry is
+forced to re-read.
+
+A scope belongs to a run, and a turn of a checkpointed conversation is a run. The agent journals the scope as each run
+ends and seeds a fresh one from `RunState.MemoryRevisions` on resume, so the revisions follow the conversation across
+turns, processes and a week of wall clock.
 
 `List` deliberately does not grant that authority. Seeing a key in the index is not the same as having read it. A
-successful create or overwrite does carry authority forward, so a sequence of edits within one run costs a single read.
+successful create or overwrite does carry authority forward, so a sequence of edits within one conversation costs a
+single read.
 
 The switch to disable this is spelled `no_require_read_before_update`, one of two negative switches in the memory config.
 Both are phrased as opt-outs so that omitting them leaves the safe behavior in place.
