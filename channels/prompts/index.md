@@ -299,8 +299,10 @@ A conversation has no end state and no expiry: the journal stays in the session 
   running the prompt. With `elicit` set, a human-in-the-loop question the caller neither answers nor holds open within
   `request_timeout` leaves the conversation waiting on a deferred call. Answer the question and it takes turns again.
 * **A configuration change ends a conversation.** Every turn is a resume, and the worker refuses a resume when the
-  model, the system prompt or the tool set has changed since the conversation started. It answers `failed` and the
-  caller starts a new conversation.
+  model, the system prompt, the thinking mode or the reasoning effort has changed since the conversation started. It
+  answers `failed` and the caller starts a new conversation. A changed tool set does not end it: the turn runs, and
+  the standing approvals the conversation held are dropped, since an approval names a tool and that tool may have
+  moved under it.
 
 The `usage` on a `result` counts the whole conversation rather than the turn, since it is read from the journal. An
 `error` that ran and stopped carries it too, so a caller can tell what it owes for a turn it is about to continue.
@@ -618,9 +620,10 @@ with `elicit` set a turn can reach a confirmation-gated command that somebody el
 randomness and cannot be guessed, so treat one as a secret: this agent neither logs it nor puts it in an error message,
 and a caller should not either.
 
-The session store is shared with the other channels of this identity. The queued-jobs channel resumes the journal its
-submitter names, so a party holding queue-submit rights who learns one of these journal ids can resume a conversation
-started here. Restrict queue submission accordingly.
+The session store is shared with the other channels of this identity, and each names its journals in a space of its
+own: a conversation here is a hash of the identity and the token, and a queued job is a hash of the identity and its
+task id. So a queue submitter that learns one of these journal ids and spells it as a task id gets a journal of its
+own rather than this conversation.
 
 The worker records the token in the conversation's journal, so anyone who can read the session store can read the token
 and continue that conversation. This gives away no access that reading the store did not already give, since the same

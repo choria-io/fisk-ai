@@ -76,8 +76,9 @@ $ ajc tasks add fisk-ai:run --payload-file request.json --queue FISK_AI
 Enqueued task 3Hwxl119ZbwKHCKPzWlslXZYnB0
 ```
 
-The submitter supplies the task id, or the engine mints one. It also names the session the run journals under, so it
-must be letters, digits, `-` or `_`. The queue itself accepts more.
+The submitter supplies the task id, or the engine mints one. The worker hashes it with the serving identity to get the
+session the run journals under, so a job creates a session or resumes one an earlier delivery of the same task made,
+and reaches nothing else on the worker. Every id the queue accepts works, a leading dash and a colon included.
 
 Optional fields narrow what one job may do:
 
@@ -94,8 +95,7 @@ covers:
 
 * an oversized payload
 * a payload that is not a valid v1 request
-* a request carrying no prompt
-* a task id that cannot name a session
+* a payload that is not an `io.choria.fisk-ai.v1.request.prompt`, or whose prompt is empty
 
 ## Reading the answer
 
@@ -144,8 +144,8 @@ task. It is not retried: a model refusal or an exhausted budget fails the same w
 
 ## Redelivery
 
-The worker journals every run under the task id. When a worker dies mid-job, the redelivery resumes that journal
-instead of starting again.
+The worker journals every run under the session its task id derives. When a worker dies mid-job, the redelivery
+derives the same session and resumes that journal instead of starting again.
 
 A job whose session already completed is answered from the journal, without running the agent or calling the model.
 This is the case when a worker finished a job and died before acknowledging the task.
