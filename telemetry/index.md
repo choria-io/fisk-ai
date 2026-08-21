@@ -313,9 +313,13 @@ telemetry:
 
 > [!warning] Everything the model saw is exported
 > Whoever can read the traces can read the conversation, and an export cannot be recalled. Tool results are the
-> verbatim output of whatever command the model ran, and the system prompt includes the memory index. Nothing is
-> redacted: content capture bypasses the `error.type` reduction and every other limit described above. Use it for a
-> short investigation against a collector you control, not as a fleet default.
+> verbatim output of whatever command the model ran, and the system prompt includes the memory index. Content capture
+> bypasses the `error.type` reduction and every other limit described above. Use it for a short investigation against
+> a collector you control, not as a fleet default.
+>
+> `harness.pii` is the one thing that reaches this: it scans the prompt and each tool result before the conversation
+> is built, so what it removed was never exported. It does not scan the system prompt or the memory index in it, and
+> its detection is best-effort, so treat what arrives as unredacted.
 
 A run with capture on shows `OTEL Enabled + content` on the full-screen startup card and marks its summary line:
 

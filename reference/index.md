@@ -290,6 +290,16 @@ harness:
     options:
       directory: memory
 
+  # Scans prompts and tool results for personal data before the model, the
+  # session store or telemetry sees them. Alone in this block it acts
+  # without being asked for: leave it out and it redacts.
+  pii:
+    # redact replaces each value found with a placeholder naming its type
+    # and the run continues. reject refuses the text instead: a prompt is
+    # denied and a tool result is withheld from the model. off scans
+    # nothing. Defaults to redact.
+    mode: redact
+
   # Where run journals are stored, which is what --resume continues.
   # Optional; absent it uses the "file" backend under the XDG state
   # directory. Sessions cannot be disabled: every run is a conversation.
@@ -628,8 +638,11 @@ telemetry:
 | `capture.max_bytes`| Cap per content attribute, measured on the encoded JSON. Default `8192`, from `256` to `65536`.                       |
 
 Everything the model saw and everything the tools returned reaches the collector, including the verbatim output of
-commands the model ran, and an export cannot be recalled. Nothing is redacted. There is no command-line flag; only
-`--no-telemetry`, which suppresses the whole export.
+commands the model ran, and an export cannot be recalled. There is no command-line flag; only `--no-telemetry`, which
+suppresses the whole export.
+
+What `harness.pii` removes is gone before this sees it, since the scan runs as the text enters the conversation. That is
+the only redaction on this path: everything `harness.pii` does not scan or does not detect is exported verbatim.
 
 Plain `http://` to a non-loopback host is rejected at startup while capture is on. The settings under `capture` are
 ignored and unvalidated while `capture.enabled` is false. See the [telemetry guide](../telemetry/#content-capture)
@@ -739,3 +752,31 @@ user can still read that file if it knows where to look.
 Spans carry structure and timing, tool names and argument key names, and no prompts, tool arguments or results.
 Setting `telemetry.capture.enabled` reverses that for every one of them, and for the `error.type` reduction as well,
 since a tool's error text is part of its result.
+
+### Personal data
+
+`harness.pii` scans the prompt and each tool result as it enters the conversation, before the model, the session store
+or a telemetry collector sees it, and either replaces what it finds or refuses the text. It redacts unless configured
+otherwise. `fisk info` reports the mode in effect, and a run says so the first time it acts.
+
+Detection is pattern matching and is best-effort in both directions: it misses real values (a valid US social security
+number went undetected in testing) and it flags text that is no such thing. It lowers what leaks; it does not gate it,
+and no decision to send data somewhere should rest on it.
+
+Credentials are scanned alongside personal data: API keys with a recognizable prefix (`sk-…`, `sk-or-v1-…`, `sk-ant-…`,
+`xoxb-…`, `ghp_…`), bearer tokens, and NATS credentials and nkey seeds. These are matched by their own shape, so a key
+pasted into a prompt or printed by a tool is found wherever it appears, not only where it is assigned to a name. A
+credential with no distinctive shape is not found: an opaque value is indistinguishable from a git SHA or a base64 blob,
+and a rule wide enough to catch it redacts those too.
+
+Four limits are worth knowing before relying on it:
+
+* It does not see the system prompt, the memory index that prompt carries, the model's own replies, the arguments the
+  model writes for a tool call, a result a caller supplies for a deferred call, or the history a resume restores. A
+  session journaled before the feature was turned on keeps what it recorded.
+* Redaction is one-way. A placeholder the model reads out of a file goes back into that file through the next tool
+  call, since there is no restore path. Asking an agent to edit a file whose contents are redacted will corrupt it.
+* The scan is the last point the text passes, not the first. A prompt sent to an agent over a2a is already on the
+  broker, in the task record and in any wire log before the agent that answers scans it.
+* What the operator sees is what the model was given. A redacted tool result reads as redacted in your own terminal,
+  for data on your own machine, because the same trace reaches a caller who is not at it.

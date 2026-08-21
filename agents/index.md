@@ -202,7 +202,9 @@ the session. Every full-screen run works this way; `--no-tui` answers one prompt
 open.
 
 Type a follow-up and press Enter to send it; `Ctrl-D` ends the session, `Ctrl-C` aborts it. Up/Down recall this
-session's earlier follow-ups. Alt-Enter (Option-Enter) moves to the next line rather than send.
+session's earlier follow-ups. Alt-Enter (Option-Enter) moves to the next line rather than send. `Ctrl-L` empties the
+transcript on screen and leaves the conversation and any half-typed follow-up alone, where `/clear` does the opposite
+and drops the conversation while leaving the scrollback.
 
 ### Shell mode
 
