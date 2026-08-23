@@ -135,6 +135,32 @@ it did not fit. Everything else the channel says is plain text it wrote itself.
 `no_progress` turns the status message off. The answer, the questions and the refusals are posted either way, and the
 Stop button goes with the status message.
 
+## Who is speaking
+
+Every line the model reads is prefixed with the speaker, as their name and the markup that addresses them:
+
+```nohighlight
+Ana Silva <@U024BE7LH>: the deploy went out at four
+Ben Cole <@U0LM3D6TP>: and disk climbed right after
+```
+
+The name comes from the profile: the real name, then the display name, then the handle. It falls back to the user id
+under all three, and to the id alone where `users:read` was not granted, which the worker logs as a warning the first
+time it resolves each person.
+
+The markup is what notifies somebody. Slack sends a notification for `<@U024BE7LH>` and none for a name written out,
+so an answer that addresses people by name reaches nobody's phone. The bot does not use it unless you say so, which is
+a line in `system_prompt`:
+
+```yaml
+system_prompt: |
+  You inspect NATS servers for the people in this Slack workspace. Answer concisely.
+
+  Each line of the conversation is prefixed with the speaker's name and their Slack id, as
+  "Ana Silva <@U024BE7LH>". When you address someone, write that <@...> markup rather than
+  their name, so they are notified.
+```
+
 ## Questions
 
 A tool that needs a person asks in the thread, as a message of its own. It opens by mentioning whoever started the
