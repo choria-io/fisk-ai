@@ -4,13 +4,14 @@ A channel supplies work to an agent and returns the answer. A work queue and a N
 today; an HTTP listener or a caller in the same process would be channels too.
 
 The `fisk serve` command hosts an agent behind the channels. The queued-jobs channel polls a work queue. The prompts 
-channel answers a request on a NATS subject. The agent loop is the same either way and does not see the difference.
+channel answers a request on a NATS subject. The Slack channel answers people who mention a bot in a thread. The agent
+loop is the same in each case and does not see the difference.
 
 `fisk serve` also hosts endpoints that produce no work. [Serving tools](a2a/) answers another agent's tool call
 directly, running one tool. It starts no agent loop, so the behavior on this page does not apply to it.
 
 > [!info] Note
-> Queued jobs and prompts from other agents are the channels that ship today.
+> Queued jobs, prompts from other agents and Slack are the channels that ship today.
 >
 > Channels and `fisk serve` are available since {{% badge style="primary" title="Version" %}}0.0.5{{% /badge %}}.
 
@@ -31,6 +32,7 @@ What each shipped channel offers:
 |-------------|-----------|-------------|-----------------|---------------------------|
 | Queued jobs | no        | no          | no              | unverified `sender` field |
 | a2a prompts | yes       | optional    | yes             | unverified `sender` field |
+| Slack       | no        | yes         | yes             | the Slack user who spoke  |
 
 No caller waits for a queued job, so that channel does not stream output and does not take a second turn.
 
@@ -50,4 +52,5 @@ call one. The confirm gate then refuses the call and tells the model why.
 * [Serving](serving/) covers the `fisk serve` command and the settings every channel shares
 * [Queued jobs](asyncjobs/) covers the asyncjobs channel: submitting work, reading answers, and its own configuration
 * [Answering prompts](prompts/) covers taking prompts from other agents and streaming the run back to them
+* [Slack](slack/) covers answering people in a Slack workspace, where a thread is a conversation
 * [Serving tools](a2a/) covers offering this agent's tools to other agents without running an agent loop
