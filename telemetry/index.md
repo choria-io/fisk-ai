@@ -111,7 +111,7 @@ ones use a `fisk.` prefix.
 |---|---|---|
 | `fisk.run.terminal_reason` | root, turn | `completed`, `max_iterations`, `error`, `budget`, `suspended`, `setup_failed` |
 | `fisk.run.resumed`, `.crashed`, `.interactive` | root | how the run started and ended |
-| `fisk.run.tool_calls`, `.remote_tool_calls` | root | this run's tool calls |
+| `fisk.run.tool_calls`, `.remote_tool_calls`, `.mcp_tool_calls` | root | this run's tool calls |
 | `fisk.llm.uncached_input_tokens` | root, turn, chat | input tokens billed at the uncached rate |
 | `fisk.llm.thinking`, `.prompt_cache`, `.tool_search` | root | the feature switches this run used |
 | `fisk.llm.iteration`, `.messages`, `.tools` | chat | loop index and the sizes sent |
@@ -283,7 +283,9 @@ included in `output_tokens`, so it does not enter the calculation above; it is t
 displayed by default, which makes a dashboard the only place its cost is visible.
 
 On a resumed run, `gen_ai.usage.*` on the root covers that process alone, so summing it across a session's traces
-gives the session total once. `fisk.session.usage.*` carries the cumulative view for comparison.
+gives the session total once. `fisk.session.usage.*` carries the cumulative view for comparison. The three
+`fisk.run.*tool_calls` counters work the same way: each covers that process alone, and the remote and MCP counts
+are subsets of `fisk.run.tool_calls` on every run, resumed or not.
 
 ## Privacy
 
