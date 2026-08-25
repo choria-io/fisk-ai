@@ -320,7 +320,7 @@ harness:
 
 `human_in_the_loop` lets the model decide when to ask; the `ai:confirm` tag and `confirm_tags` gate a command the model
 wanted to run anyway. The two are compared in detail under [Command tags](#command-tags) and in the
-[Agents guide](../agents/#required-tool-use-confirmations).
+[Agents guide](../agents/hitl/#required-tool-use-confirmations).
 
 Point two agents at the same memory `directory` and they share a memory; leave the default and each keeps its own.
 Treat what a memory contains as data the model saved, not as trusted instructions.
@@ -350,7 +350,7 @@ resume. `/clear` and a `--force` resume across a changed
 configuration drop it, and a resume with no terminal attached declines a gated command rather than honoring it.
 `harness.confirm_tags` extends the same gate to any other tag your application already uses. Over MCP these gates are
 requested through elicitation instead of a local operator prompt; over agent-to-agent, confirmation-gated commands are
-not served at all. The full behavior is documented under [Command Tags](../agents/#command-tags) in the Agents guide.
+not served at all. The full behavior is documented under [Command tags](../agents/tools/#command-tags) in the Agents guide.
 
 ### Behavior tags
 
@@ -888,7 +888,7 @@ overlap, except for the hard off switches (`harness.no_tui`), which the command 
 | `--work-dir`   |                      | On `fisk serve`, the directory command tools run in. Must be an absolute path that exists. Defaults to the worker's own working directory.                                  |
 
 The MCP server port also reads `FISK_AI_MCP_PORT`, which `--port` overrides and which in turn overrides
-`expose.agent.mcp.port`. Sessions, chat, and their durability semantics are covered in the [Agents guide](../agents/).
+`expose.agent.mcp.port`. Sessions, chat, and their durability semantics are covered under [Session snapshots](../agents/sessions/).
 
 `--workers` overriding the file is the opposite of how `harness.tool_timeout` works, where a configured value beats the
 built-in default. The worker count is a property of the process; the tool timeout is a property of the agent.
@@ -900,7 +900,7 @@ The configuration is the boundary on what the model can reach: `application_path
 fix which of its commands become tools, and nothing outside that set is callable.
 Commands run as an argument vector rather than through a shell, each argument is checked against the command's schema, the
 `ANTHROPIC_API_KEY` is stripped from their environment, output is capped at 64 KiB, and `LLMFORMAT=1` is set. The
-[Agents](../agents/#safety) and [MCP](../mcp/#safety) guides describe the full threat model for each mode.
+[Agents](../agents/safety/) and [MCP](../mcp/#safety) guides describe the full threat model for each mode.
 
 The OpenTelemetry export credentials are stripped from tool environments too: `OTEL_EXPORTER_OTLP_HEADERS` and its
 per-signal forms, and the mTLS variables `OTEL_EXPORTER_OTLP_CLIENT_KEY`, `OTEL_EXPORTER_OTLP_CERTIFICATE` and

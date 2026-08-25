@@ -127,12 +127,12 @@ under [Command tags over MCP](#command-tags-over-mcp) below.
 
 The served tools are the agent's `include`/`exclude` selection, narrowed further by `expose.agent.tools` when it is set.
 With neither, every command is served, subject to the tag rules below. Tool selection uses the same regular expressions
-over the tool name as the [agent](../agents/#tool-selection). A tool call runs the command and returns its result,
+over the tool name as the [agent](../agents/tools/). A tool call runs the command and returns its result,
 limited by `tool_timeout` per call and `max_concurrent_tools` in flight at once.
 
 ## Command tags over MCP
 
-The reserved [command tags](../agents/#command-tags) are honored over MCP, differing from the agent loop where noted:
+The reserved [command tags](../agents/tools/#command-tags) are honored over MCP, differing from the agent loop where noted:
 
 | Tag             | Behavior over MCP                                                          |
 |-----------------|-----------------------------------------------------------------------------|
@@ -181,12 +181,12 @@ own gating is trusted and the second prompt is unwanted.
 The built-in operator tools are agent-mode only and are never exposed over MCP, since there is no local operator on the
 MCP path:
 
-* the [human-in-the-loop](../agents/#human-in-the-loop-hitl) `ask_human_*` tools
-* the [memory](../agents/#memory) `memory_*` tools
+* the [human-in-the-loop](../agents/hitl/) `ask_human_*` tools
+* the [memory](../agents/memory/) `memory_*` tools
 
 ## Safety
 
-Every served command gets the same per-command protections as the [agent](../agents/#safety): it runs as an argument
+Every served command gets the same per-command protections as the [agent](../agents/safety/): it runs as an argument
 vector rather than through a shell, its arguments are checked against the command's schema, its `ANTHROPIC_API_KEY` is stripped,
 its output combines stdout and stderr and is capped at 64 KiB, and `LLMFORMAT=1` is set.
 

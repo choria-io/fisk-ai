@@ -49,8 +49,4 @@ call one. The confirm gate then refuses the call and tells the model why.
 
 ## Where to go next
 
-* [Serving](serving/) covers the `fisk serve` command and the settings every channel shares
-* [Queued jobs](asyncjobs/) covers the asyncjobs channel: submitting work, reading answers, and its own configuration
-* [Answering prompts](prompts/) covers taking prompts from other agents and streaming the run back to them
-* [Slack](slack/) covers answering people in a Slack workspace, where a thread is a conversation
-* [Serving tools](a2a/) covers offering this agent's tools to other agents without running an agent loop
+{{< subpages >}}
