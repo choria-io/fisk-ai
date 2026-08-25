@@ -1,4 +1,4 @@
-# MCP Servers
+# MCP server
 
 Instead of running an agent loop, Fisk AI can serve a Fisk application's commands over the
 [Model Context Protocol](https://modelcontextprotocol.io/) so another client, such as Claude Desktop or Claude Code,

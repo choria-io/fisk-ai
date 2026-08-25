@@ -155,6 +155,6 @@ Collected from the subsystem pages so a reader can see the shape of the unfinish
 
 {{% notice style="tip" title="Next" %}}
 For operator-facing documentation rather than design, see the [Agents]({{% relref "/agents" %}}),
-[MCP Servers]({{% relref "/mcp" %}}), [Knowledge]({{% relref "/knowledge" %}}), and
+[MCP server]({{% relref "/mcp" %}}), [Knowledge]({{% relref "/knowledge" %}}), and
 [Reference]({{% relref "/reference" %}}) sections.
 {{% /notice %}}
