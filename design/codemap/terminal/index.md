@@ -1,259 +1,123 @@
-# Terminal and events
+# The terminal
 
-The agent package formats no prose. It emits typed events and lets the caller decide how they look. Two terminal surfaces
-consume that contract: a line-oriented renderer and a full-screen tview application. A third, structured sink exists for a
-server that does not yet live in this repository.
+The terminal owns no run. Even a local `fisk run` hosts an agent behind an embedded broker and talks to it over a2a, so a terminal reaches its own agent the same way it reaches somebody else's.
 
 {{% notice style="note" title="Where it lives" %}}
-`internal/agent/events.go` defines the contract, `slog_events.go` the structured sink. `run_events.go` is the line UI and
-`run_tui_events.go` the full-screen one. `internal/tui` holds the screen: `live.go`, `viewer.go`, `prompter.go`,
-`splash.go`. `internal/util` supplies sanitization, markdown rendering, terminal detection, the trace, and the run
-summary.
+`internal/tui` holds the full-screen surface: `viewer.go` is the shared viewport, `live.go` drives a running agent, `prompter.go` is the native prompter, `callline.go` renders a tool call, `splash.go` the startup card. `package main` holds command registration and the two client surfaces, `run_chat.go` and `run_client.go`, with `run_render.go` as the single rendering point.
 {{% /notice %}}
 
-## The event contract
+## From the command to the screen
 
-`Events` is a typed sink with a three-clause contract: it is called from the single run goroutine, it may be called
-during teardown, and a per-run sink therefore needs no locking.
+<ol class="cm-steps">
+  <li><b>Decide the shape</b> A NATS context turns the process into a pure client. Without one it hosts. That single switch decides how much configuration the run needs.</li>
+  <li><b>Resolve telemetry before anything is opened</b> A bad endpoint then fails on a readable terminal rather than behind the alternate screen.</li>
+  <li><b>Open one session store</b> Shared by the hosted agent that journals into it and the channel that reads back from it.</li>
+  <li><b>Start the agent before taking the screen</b> A worker that cannot start says so on a terminal somebody can read.</li>
+  <li><b>Probe the agent card</b> One round trip with a short deadline. No responders is fatal, since nothing is serving that identity; any other failure returns no card and no error.</li>
+  <li><b>Run the view</b> Full screen when stdin and stdout are both terminals and nothing disabled it, otherwise the line surface.</li>
+</ol>
 
-The payloads carry display decisions rather than rendered text. `ToolTrace` is the clearest example: it carries both a
-full display form and a middle-elided short form, plus the presentation and the provider kind. Renderers key suppression
-off presentation and never off kind.
+On exit the terminal is restored and everything is reprinted to the normal buffer so it survives in scrollback: warnings, the handles of conversations a reset walked away from, the answer to stdout, and the resume hint, usage and trace lines to stderr.
 
-All warning wording lives in one function shared by both surfaces, so the line UI and the full-screen UI cannot drift
-apart on phrasing. The same is true for tool-result lines and for the tool-call elision function, which the line UI calls
-with a width measured from stderr so both surfaces cut at the same point.
-
-## Who owns the screen
+## One rendering, three sources
 
 <figure class="cm-diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="Events travelling from the run goroutine to a drawn frame">
+  <svg viewBox="0 0 760 230" role="img" aria-label="A live reply set and a stored session rendered through one function into two surfaces">
     <defs>
-      <marker id="tm-ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--cm-accent)"/></marker>
+      <marker id="tui-ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--cm-accent)"/></marker>
     </defs>
-    <rect class="cm-svg-box" x="20" y="40" width="200" height="54" rx="8"/>
-    <text class="cm-svg-label" x="120" y="63" text-anchor="middle">run goroutine</text>
-    <text class="cm-svg-sub" x="120" y="80" text-anchor="middle">single, needs no locks</text>
-    <rect x="280" y="40" width="200" height="54" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
-    <text class="cm-svg-label" x="380" y="63" text-anchor="middle" style="fill:var(--cm-accent)">Events sink</text>
-    <text class="cm-svg-sub" x="380" y="80" text-anchor="middle">cli, tcell, or slog</text>
-    <line x1="220" y1="67" x2="274" y2="67" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#tm-ah)"/>
-    <rect class="cm-svg-box" x="540" y="40" width="200" height="54" rx="8"/>
-    <text class="cm-svg-label" x="640" y="63" text-anchor="middle">QueueUpdateDraw</text>
-    <text class="cm-svg-sub" x="640" y="80" text-anchor="middle">blocks until drawn</text>
-    <line x1="480" y1="67" x2="534" y2="67" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#tm-ah)"/>
-    <rect x="540" y="146" width="200" height="54" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
-    <text class="cm-svg-label" x="640" y="169" text-anchor="middle" style="fill:var(--cm-accent)">tview loop</text>
-    <text class="cm-svg-sub" x="640" y="186" text-anchor="middle">sole screen owner</text>
-    <line x1="640" y1="94" x2="640" y2="140" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#tm-ah)"/>
-    <rect class="cm-svg-box" x="540" y="250" width="200" height="54" rx="8"/>
-    <text class="cm-svg-label" x="640" y="273" text-anchor="middle">drawn frame</text>
-    <text class="cm-svg-sub" x="640" y="290" text-anchor="middle">alt-screen, dev tty</text>
-    <line x1="640" y1="200" x2="640" y2="244" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#tm-ah)"/>
-    <rect class="cm-svg-box" x="280" y="250" width="200" height="54" rx="8"/>
-    <text class="cm-svg-label" x="380" y="273" text-anchor="middle">stdout and stderr</text>
-    <text class="cm-svg-sub" x="380" y="290" text-anchor="middle">answers to stdout</text>
-    <line x1="380" y1="94" x2="380" y2="244" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#tm-ah)"/>
-    <text class="cm-svg-sub" x="150" y="170" text-anchor="middle">every append is synchronous:</text>
-    <text class="cm-svg-sub" x="150" y="185" text-anchor="middle">the run goroutine waits for the</text>
-    <text class="cm-svg-sub" x="150" y="200" text-anchor="middle">frame, so an event storm</text>
-    <text class="cm-svg-sub" x="150" y="215" text-anchor="middle">throttles the agent, not memory</text>
+    <rect class="cm-svg-box" x="20" y="40" width="180" height="50" rx="8"/>
+    <text class="cm-svg-label" x="110" y="63" text-anchor="middle">live reply set</text>
+    <text class="cm-svg-sub" x="110" y="81" text-anchor="middle">a2a blocks</text>
+    <rect class="cm-svg-box" x="20" y="110" width="180" height="50" rx="8"/>
+    <text class="cm-svg-label" x="110" y="133" text-anchor="middle">stored session</text>
+    <text class="cm-svg-sub" x="110" y="151" text-anchor="middle">same blocks</text>
+    <line x1="200" y1="65" x2="274" y2="93" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#tui-ah)"/>
+    <line x1="200" y1="135" x2="274" y2="117" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#tui-ah)"/>
+    <rect x="280" y="70" width="190" height="70" rx="10" fill="color-mix(in srgb, var(--cm-accent) 14%, transparent)" stroke="var(--cm-accent)"/>
+    <text class="cm-svg-label" x="375" y="100" text-anchor="middle" style="fill:var(--cm-accent)">blockRenderer</text>
+    <text class="cm-svg-sub" x="375" y="120" text-anchor="middle">one appearance</text>
+    <line x1="470" y1="93" x2="544" y2="65" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#tui-ah)"/>
+    <line x1="470" y1="117" x2="544" y2="135" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#tui-ah)"/>
+    <rect class="cm-svg-box" x="550" y="40" width="190" height="50" rx="8"/>
+    <text class="cm-svg-label" x="645" y="63" text-anchor="middle">live viewport</text>
+    <text class="cm-svg-sub" x="645" y="81" text-anchor="middle">full screen</text>
+    <rect class="cm-svg-box" x="550" y="110" width="190" height="50" rx="8"/>
+    <text class="cm-svg-label" x="645" y="133" text-anchor="middle">printTranscript</text>
+    <text class="cm-svg-sub" x="645" y="151" text-anchor="middle">plain output</text>
+    <text class="cm-svg-sub" x="380" y="200" text-anchor="middle">one line list drives both, so a stored run reads like a live one</text>
   </svg>
-  <figcaption>The line UI writes directly. The full-screen UI marshals every mutation onto the loop, which owns the screen.</figcaption>
+  <figcaption>Every conversation this program draws goes through the block renderer.</figcaption>
 </figure>
 
-The tview loop runs on the caller's goroutine. The agent runs on a spawned goroutine with its own recover, and reaches the
-screen only through the queue.
+Line kinds carry the prefixes that make the line surface and the full-screen viewport read the same: the arrow for a tool call, the reversed arrow for a result, the plain word for a warning. A tool result unwraps its command envelope, keeps a non-zero exit, and renders a silent success explicitly rather than as a blank.
 
-Because the queue waits on a per-call done channel, every append is synchronous: the run goroutine blocks until the loop
-has applied the closure and drawn. That is the back-pressure mechanism. An event storm throttles the agent to the draw
-rate instead of growing an unbounded queue.
+With no terminal the plain surface drops tool output rather than folding it, since a text dump has nothing to unfold with.
 
-A live run has seven goroutines: the tview loop, the agent, a spinner ticker, a signal watcher, a teardown coordinator, a
-stderr copier, and any notice-expiry timer.
-
-Four invariants keep a stopped loop from turning into a deadlock or a panic:
-
-- The loop is never stopped while the run goroutine can still queue, because teardown waits for the run to return first.
-- The ticker is stopped and joined before the run is marked ended, closing the race window before the loop stops.
-- Notice timers are always cancelled before a stop.
-- Flags that cannot go through the loop are atomics: whether the spinner should animate, and whether an explicit leave was
-  requested.
-
-The screen wrapper makes finalization idempotent, because tview finalizes on stop and again from its own panic recovery,
-while the viewer defers one of its own.
-
-The one deliberate exception to the queue rule is the initial status refresh, called directly before the loop starts,
-since queueing onto a loop that has not started would block forever.
-
-## The widget layout
-
-```text
-pages: main | help | search | prompt | splash
-  main: Flex(row)
-    header  TextView   1 row, only when non-empty
-    view    TextView   flex, dynamic colors, regions, scrollable, wrap
-    promptTop / promptInput / promptBottom   inserted only in chat mode
-    status  TextView   1 row, filled bar
-```
-
-Overlays are centered pages built from nested flexes. The splash page is added last so it sits on top of everything else.
-
-Three parallel slices stay index-aligned one to one: the raw lines, their sanitized plain text, and their rendered
-markup. A folded line still renders inside its search region, so a match still lands on it and the slices do not shift.
-Search walks the plain text, which is also what the copy key sends, so search stays authoritative over folding and
-revealing a match unfolds rather than skips.
-
-Nothing renders until the first draw knows the width. A resize re-renders everything, which also re-picks tool-call
-elision and re-wraps markdown.
-
-Folding is a global mode rather than per-block state, because a flat text view has no cursor. Tool output folds at any
-size, since the raw result is rarely worth reading inline. Thinking folds only past a six-row threshold, because a short
-block saves nothing folded. Row counting hard-wraps at the current width, so a single very long JSON or base64 line counts
-as the many rows it actually paints.
-
-## One-shot and chat
-
-The TUI gate requires that the TUI is not disabled by flag or config and that both stdin and stdout are terminals. Config
-`no_tui` is an absolute veto; the flag can only turn it off.
-
-Chat mode is TUI-only and fails loudly otherwise, with a distinct message for the resume case. A resumed session restores
-its own chat-ness, peeked from the stored metadata before the run, so `--chat` need not be re-passed.
-
-Chat mode also starts with thinking folded, on the theory that a chat leans on the answers with reasoning a keystroke
-away.
-
-The input row grows to five rows, lowered further so the transcript keeps at least three, with an overflow marker
-embedded in its bottom rule. Bracketed paste stays enabled so a multi-line paste reaches the text area verbatim instead
-of arriving as raw Enter keys that the key capture would read as a submit at the first newline.
-
-Growing the input row re-pins the tail, because it steals height with no key pressed.
-
-## Confirmation prompts
-
-The full-screen prompter shows a three-button modal with the safe option as button zero, so the escape key's no-selection
-result maps to the safe default. The default-deny policy itself lives in the gate, not in the prompter.
-
-While a prompt page is front, every key goes to the widget except the abort key, so an abort is always possible while a
-prompt is up.
-
-Blocking recolors the status bar amber, sets a word describing the state, drops any lingering notice so it cannot mask
-the bar, and rings the bell when enabled. Clearing the blocked state only reverts from blocked, so a terminal state set
-by teardown after a cancelled prompt is not overwritten.
-
-## The two-step markup defense
+Similarly, a tool call line is rendered from what the call is, not from what any one surface received, so live, streamed and journal-replayed runs produce the same line. Arguments are sorted, because a decoded object has no order and a line that changed between renderings would read as two calls.
 
 {{% notice style="warning" title="Load-bearing decision" %}}
-Every piece of model text follows the same order: sanitize for display, then escape for tview, then apply trusted tags.
-Escaping before translating ANSI is what stops model output from injecting markup. The same order is used for the
-prompter body, border titles, splash values, the status bar, and the header. Bracketed literals in trusted text are
-escaped too, because the bars have dynamic colors enabled.
+Model text goes through two steps before it can be drawn: terminal escapes are stripped, then literal brackets are neutralized so the text cannot open a color or region tag. Only after that are the trusted per-kind tags wrapped around it.
 {{% /notice %}}
 
-Sanitization comes in two strengths. The display form strips escape and control sequences while preserving newlines and
-tabs, and does not truncate. The terminal form collapses to one line and caps runes, and is what command lines and
-model-supplied keys go through.
+## Chat and the line surface
 
-## Two markdown renderers
+| | Full screen | `--no-tui` or no terminal |
+|---|---|---|
+| Turns | A loop: prompt, turn, input row, next turn | Exactly one |
+| Empty prompt | Opens the input row | An error naming the two ways out |
+| Resume replay | 500 blocks, at or above the worker's cap | 40, because nobody reads scrollback upwards |
+| Interrupt | A key event, since the view holds raw mode; first press suspends at a boundary, second leaves | First sends a cancel message, second stops |
+| Thinking | Folded by default | Printed inline with `--thinking` |
 
-The split is deliberate.
+There is no `--chat` flag. Chat is implicit whenever the full-screen view runs.
 
-<dl class="cm-kv">
-  <dt>Line UI</dt><dd>Sanitizes first, so a raw escape in the model's prose cannot set a style that outlives the message. Returns raw markdown when color is off or when the target is not a terminal, so redirected output is ANSI-free. Otherwise renders with automatic style matching the terminal background.</dd>
-  <dt>Full-screen UI</dt><dd>Never inspects a terminal. It forces an explicit style and color profile so nothing queries the tty, which the UI owns while its screen is held. A minimum width floor exists because below it the word wrap produces mangled output.</dd>
-</dl>
+Cancellation is a message rather than a signal, which is why the stop request is sent from a goroutine: waiting for the ack on the draw loop would freeze the view and swallow the second press.
 
-## What no-color does and does not do
+An answer held for a question the run outlived is delivered between the turn and the input row, never riding on the next prompt.
 
-`--no-color` affects markdown only. The per-kind line tags, the blue, green, and amber status bar, the splash accent, and
-the gray fold placeholders are not suppressed by it.
+## The viewport
 
-The design compensates by keeping information in words rather than color. The status bar carries a state word so the
-information survives on a monochrome terminal, fold placeholders say how many lines are hidden and which key expands
-them, and an errored tool result is prefixed with a word so the failure reads without the color.
+Lines, their plain text and their rendered markup stay index-aligned one to one, so search can address a line by index and rendering can replace only the new one. Search is authoritative over folding: a match inside folded content reveals it. Copying is not: folded content is left out rather than sent as its placeholder, because folding it says the reader is not reading it.
 
-The full-screen UI binds its screen to the controlling terminal rather than stdout, so stdout stays free for the piped
-answer.
+Folding applies to thinking only above a row estimate, and to tool output unconditionally when it is on. Tail-follow re-arms for the mouse, End and G but not for Down or Page Down, so reaching the bottom by any means behaves like following a file.
 
-## Suspend and abort
+The key binding drops the scrollback and keeps the conversation; the slash command drops the conversation and keeps the scrollback.
 
-For a checkpointed run, the first leave key requests a graceful suspend and appends a notice. A second press aborts, as
-does a leave on a non-checkpointed run, an already-ended run, or a run blocked on a prompt.
+The startup card is a single opaque text view rather than a flex layout, because a flex leaves its background unfilled and the transcript would bleed through. Its telemetry row has three states, since an agent that did not answer must not look like one that exports nothing.
 
-At the input bar the abort key aborts directly, because the loop-boundary suspend flag is useless there: the run is parked
-gathering a prompt, not in the loop, so it never polls the flag. The graceful leave at the input bar is the end-of-input
-key instead.
+## The live view
 
-Outcome classification uses the run's real result rather than operator intent. A run counts as suspended only if it ended
-without error and the suspend flag is set, because the run may have completed at the very boundary the operator asked to
-suspend at.
+The status bar is a small state machine: running, blocked, suspending, suspended, complete, aborted, error, awaiting input. Awaiting input is green and distinct from the amber block, and the state word survives on a monochrome terminal. Elapsed time is deliberately absent, because it kept climbing through idle input waits.
 
-An explicit leave skips the "press q to quit" park entirely. The operator already asked to go, so the answer, statistics,
-and any resume hint are reprinted to the restored terminal immediately.
+Four token counters are kept apart because a caller reports them apart and a resume seeds them; the bar renders their sum, since the budget counts cache reads and writes at full weight. Thinking tokens are tracked and never shown.
 
-## Surviving the alternate screen
+Standard error is redirected into a buffer for the whole run and flushed to the restored terminal afterwards, so SDK and library logging cannot draw onto the alternate screen. That is also why the debug flags write fixed-name files rather than to stderr, each created exclusively after an unlink so a planted symlink is dropped rather than followed.
 
-Standard error is redirected into a buffer for the run's duration, so an SDK, a library, or a deferred write cannot draw
-on the alternate screen, and the buffer is flushed to the restored terminal afterwards. Nothing is lost, only deferred.
-That is also why HTTP debug output goes to a file rather than stderr.
+Teardown ordering is owned by one goroutine so nothing marshals onto a stopped loop, and the screen restore is idempotent, because the framework calls it on stop and again from its own panic recovery while the viewer defers one of its own.
 
-The full-screen event sink hoards the answer, the warnings, the rotated session ids, and any panic value and stack, and
-the command reprints them after teardown: warnings and hints to stderr, the answer through the markdown renderer to
-stdout, so the run stays pipe-compatible.
+{{% notice style="warning" title="Load-bearing decision" %}}
+An aborted prompt records no decision. A checkpointed run would otherwise replay an answer the operator never gave, on every resume.
+{{% /notice %}}
 
-The panic event deliberately writes nothing into the view, because it fires during unwind and races the teardown.
+Only one question is put at a time, whichever surface asks, because the contended resource is the terminal rather than either widget. In the full-screen prompter the modal owns its keys, but the interrupt still reaches the run, so leaving is always possible with a prompt up. In the line surface the approval list puts No first, so a reflexive Enter declines.
 
-The terminal is always restored. The run defers the restore and then the screen finalization, so the pair unwinds in the
-right order even through a panic.
+## Telling a multiplexer what is happening
 
-Live counters must agree with the end-of-run summary, so the live view sums per-message usage exactly as the runner sums
-its statistics, and a resume seeds the bar from the restored counters.
+`internal/multiplex` reports whether the run is working, idle, or blocked on a decision, so a multiplexer arranging agents in panes can show which one wants a person. It cannot tell any of that from the pane's output, so the agent says it.
 
-Elapsed time is deliberately absent from the bar: it kept climbing through idle input waits, which read as odd. The
-summary still reports real latency.
+Reporting is best effort and never fails a run. Every call returns before the report is sent, a newer report supersedes an unsent older one, a failed delivery is dropped, and the sender recovers its own panics, because a panic there would take the process down with the terminal still in raw mode.
 
-## The trace file
+The pane is labeled with the agent's identity rather than the program name, since somebody watching six panes is watching six agents. Detection reads the environment and claims the process for the first multiplexer that named itself. Outside a pane no multiplexer claims it, and the caller installs the same option either way.
 
-`--trace` installs a middleware that writes JSON Lines. The file is created exclusively at mode 0600, so an existing path
-is an error rather than a clobber, and the permissions match the fact that it holds full prompts and responses.
+The hooks are driven from what the a2a client already sees. Working fires on prompt submission rather than on the turn being accepted, because an agent under load can take seconds to ack and the pane would ask for a person while the work is already on its way.
 
-| Event | Contents |
-|-------|----------|
-| `session` | Written once: model, config path, version |
-| `request` | Id, iteration, attempt, method, URL, body |
-| `response` | Same id, status, duration, body |
-| `error` | Same id, duration, error text; the error still propagates |
-| `summary` | Session, counters, all four token tiers, duration |
+## Reserved
 
-A request and its response share an id. The iteration comes from the agent loop through the context, and the attempt is
-parsed from the SDK's retry-count header, so a retry reuses the iteration but gets a new id and an incremented attempt.
+The short form of a tool call line is infrastructure waiting for a wire field. The renderer sets it equal to the full text, so the fit test can never choose it; the pre-elided form exists inside the agent but the protocol's tool-call block carries only the name and input.
 
-Bodies are read non-destructively, with the response buffered and restored even on a read error. A valid JSON body is
-embedded raw and anything else is wrapped as a JSON string, so a non-JSON body can never corrupt the one-object-per-line
-format.
-
-Writes never abort the run. The first failure warns once through an injected sink, which exists because `util` is a
-dependency of the agent rather than the other way around. Every method is nil-safe, so the run path wires the tracer
-unconditionally.
-
-The per-kind tool counts are omitted on a resume, so a partial map can never look like it should sum.
-
-## Reserved and unused
-
-- Cache-creation tokens are tracked but never shown on the live bar, so a resumed run's counters stay whole without
-  crowding the compact bar. They do reach the trace summary and the verbose statistics line.
-- The full-screen sink deliberately drops the no-application notice, with a comment saying the TUI has no place for
-  incidental notes yet and to restore it once a logs pane exists. A logs pane is the named future work.
-- The line UI's session-rotated handler is a defensive fallback, since chat runs in the full-screen UI.
-- Two slash-command handlers ignore their argument parameter; the signature exists only to fit the command table.
-- The tool-error line kind has no dedicated fold toggle. The tool-output toggle governs it, though the fold notice only
-  ever names thinking or output.
-- The splash card is a single opaque text view rather than nested flexes, because a flex leaves its background unfilled
-  and the transcript bleeds through the gaps. Its width is fixed because it cannot be resized from the before-draw hook,
-  which runs under the application lock where hiding a page would deadlock.
-- Clipboard copy is fire-and-forget over the terminal escape, and the notice wording says what was sent rather than that
-  it landed, because many terminals disable or cap it.
+The live status bar's session segment never renders, because the run command sets no title. The header's chat marker described in the source does not exist. Stale references to the removed `--chat` flag survive in three comments. The multiplexer detector table has one entry, and the blocked-reason plumbing is general but fed only by the question path.
 
 {{% notice style="tip" title="Next" %}}
-[Reference and map]({{% relref "reference" %}}) lists the command surface, the packages, and the vocabulary in one place.
+Continue to [Reference]({{% relref "reference" %}}) for the command surface and the source map, or [Serving]({{% relref "serving" %}}) for the agent on the other end of the wire.
 {{% /notice %}}

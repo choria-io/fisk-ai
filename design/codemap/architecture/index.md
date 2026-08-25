@@ -1,174 +1,82 @@
 # Architecture
 
-Fisk AI is a single Go module with one binary. The layering is strict enough that reading any one package rarely requires
-reading its callers, and the recurring patterns are consistent enough that learning them once covers most of the tree.
-
-## Layers
+The tree layers by what a package is allowed to import. The root holds commands and presentation, the middle holds `agent` and `serve`, and the leaves import nothing else from this repository.
 
 <figure class="cm-diagram">
-  <svg viewBox="0 0 760 384" role="img" aria-label="Package layering from the config package up to the CLI">
-    <rect class="cm-svg-box" x="20" y="20" width="720" height="56" rx="8"/>
-    <text class="cm-svg-label" x="380" y="44" text-anchor="middle">main: run, session, info, knowledge, mcp, a2a, discover</text>
-    <text class="cm-svg-sub" x="380" y="61" text-anchor="middle">owns flags, signals, and every byte of terminal wording</text>
-    <rect x="20" y="92" width="720" height="56" rx="8" fill="color-mix(in srgb, var(--cm-accent) 14%, transparent)" stroke="var(--cm-accent)"/>
-    <text class="cm-svg-label" x="380" y="116" text-anchor="middle" style="fill:var(--cm-accent)">internal/agent</text>
-    <text class="cm-svg-sub" x="380" y="133" text-anchor="middle">the only package that composes all the others</text>
-    <rect class="cm-svg-box" x="20" y="164" width="124" height="56" rx="8"/>
-    <text class="cm-svg-label" x="82" y="188" text-anchor="middle">memory</text>
-    <text class="cm-svg-sub" x="82" y="205" text-anchor="middle">notes</text>
-    <rect class="cm-svg-box" x="154" y="164" width="124" height="56" rx="8"/>
-    <text class="cm-svg-label" x="216" y="188" text-anchor="middle">runstate</text>
-    <text class="cm-svg-sub" x="216" y="205" text-anchor="middle">journal</text>
-    <rect class="cm-svg-box" x="288" y="164" width="124" height="56" rx="8"/>
-    <text class="cm-svg-label" x="350" y="188" text-anchor="middle">rag</text>
-    <text class="cm-svg-sub" x="350" y="205" text-anchor="middle">index</text>
-    <rect class="cm-svg-box" x="422" y="164" width="124" height="56" rx="8"/>
-    <text class="cm-svg-label" x="484" y="188" text-anchor="middle">a2a</text>
-    <text class="cm-svg-sub" x="484" y="205" text-anchor="middle">peers</text>
-    <rect class="cm-svg-box" x="556" y="164" width="184" height="56" rx="8"/>
-    <text class="cm-svg-label" x="648" y="188" text-anchor="middle">mcpserver, tui</text>
-    <text class="cm-svg-sub" x="648" y="205" text-anchor="middle">surfaces</text>
-    <rect x="20" y="236" width="232" height="56" rx="8" fill="color-mix(in srgb, var(--cm-accent2) 14%, transparent)" stroke="var(--cm-accent2)"/>
-    <text class="cm-svg-label" x="136" y="260" text-anchor="middle" style="fill:var(--cm-accent2)">internal/llm</text>
-    <text class="cm-svg-sub" x="136" y="277" text-anchor="middle">neutral message model</text>
-    <rect x="264" y="236" width="232" height="56" rx="8" fill="color-mix(in srgb, var(--cm-accent2) 14%, transparent)" stroke="var(--cm-accent2)"/>
-    <text class="cm-svg-label" x="380" y="260" text-anchor="middle" style="fill:var(--cm-accent2)">internal/toolkit</text>
-    <text class="cm-svg-sub" x="380" y="277" text-anchor="middle">tool contracts</text>
-    <rect x="508" y="236" width="232" height="56" rx="8" fill="color-mix(in srgb, var(--cm-accent2) 14%, transparent)" stroke="var(--cm-accent2)"/>
-    <text class="cm-svg-label" x="624" y="260" text-anchor="middle" style="fill:var(--cm-accent2)">internal/util</text>
-    <text class="cm-svg-sub" x="624" y="277" text-anchor="middle">shared primitives</text>
-    <rect class="cm-svg-box" x="20" y="308" width="720" height="56" rx="8"/>
-    <text class="cm-svg-label" x="380" y="332" text-anchor="middle">config</text>
-    <text class="cm-svg-sub" x="380" y="349" text-anchor="middle">pure data, no IO beyond reading the file, imports no internal package</text>
-  </svg>
-  <figcaption>Each band imports only from bands below it. `config` sits at the bottom precisely so everything can read it.</figcaption>
-</figure>
-
-Two placements are worth calling out.
-
-`config` is the lowest layer and imports nothing internal, which is why it can define constants that other packages need
-to agree on. The knowledge tool's name lives there so the MCP allowlist can be validated without importing the package
-that implements the tool.
-
-`internal/agent` is the only package that composes all the others. Its own doc states the boundary: it owns no CLI
-concerns, so flags, signals, and terminal rendering stay with the caller. That is what makes it embeddable.
-
-The subsystem band packages do not import each other. Memory does not know about knowledge, and the journal does not know
-about tools. They meet only in the agent.
-
-## Implementations are linked in, never named in code
-
-Five things are selected by a string in the config file: the model provider, the A2A transport, the memory backend, the
-session backend, and the tool kinds. All but the last use the same registry pattern.
-
-<figure class="cm-diagram">
-  <svg viewBox="0 0 760 270" role="img" aria-label="A config string resolved through a registry populated by blank imports">
+  <svg viewBox="0 0 760 300" role="img" aria-label="Four layers from package main down to leaf packages that import nothing from the tree">
     <defs>
-      <marker id="ar-ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--cm-accent)"/></marker>
+      <marker id="arch-ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--cm-accent)"/></marker>
     </defs>
-    <rect class="cm-svg-box" x="20" y="30" width="210" height="54" rx="8"/>
-    <text class="cm-svg-label" x="125" y="53" text-anchor="middle">config names it</text>
-    <text class="cm-svg-sub" x="125" y="70" text-anchor="middle">harness.memory.backend</text>
-    <rect x="290" y="30" width="190" height="54" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
-    <text class="cm-svg-label" x="385" y="53" text-anchor="middle" style="fill:var(--cm-accent)">registry lookup</text>
-    <text class="cm-svg-sub" x="385" y="70" text-anchor="middle">by name only</text>
-    <rect class="cm-svg-box" x="540" y="30" width="200" height="54" rx="8"/>
-    <text class="cm-svg-label" x="640" y="53" text-anchor="middle">factory</text>
-    <text class="cm-svg-sub" x="640" y="70" text-anchor="middle">fails at construction</text>
-    <line x1="230" y1="57" x2="284" y2="57" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#ar-ah)"/>
-    <line x1="480" y1="57" x2="534" y2="57" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#ar-ah)"/>
-    <rect class="cm-svg-box" x="290" y="160" width="190" height="54" rx="8"/>
-    <text class="cm-svg-label" x="385" y="183" text-anchor="middle">blank import</text>
-    <text class="cm-svg-sub" x="385" y="200" text-anchor="middle">init registers itself</text>
-    <line x1="385" y1="160" x2="385" y2="90" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#ar-ah)"/>
-    <text class="cm-svg-sub" x="640" y="180" text-anchor="middle">an unknown name lists</text>
-    <text class="cm-svg-sub" x="640" y="195" text-anchor="middle">exactly what is linked in</text>
-    <text class="cm-svg-sub" x="130" y="188" text-anchor="middle">no host code ever</text>
-    <text class="cm-svg-sub" x="130" y="203" text-anchor="middle">names a backend</text>
+    <rect class="cm-svg-box" x="60" y="30" width="640" height="50" rx="8"/>
+    <text class="cm-svg-label" x="380" y="52" text-anchor="middle">package main</text>
+    <text class="cm-svg-sub" x="380" y="70" text-anchor="middle">command registration, flag parsing, terminal presentation</text>
+    <line x1="380" y1="80" x2="380" y2="94" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#arch-ah)"/>
+    <rect x="60" y="95" width="640" height="50" rx="8" fill="color-mix(in srgb, var(--cm-accent) 14%, transparent)" stroke="var(--cm-accent)"/>
+    <text class="cm-svg-label" x="380" y="117" text-anchor="middle" style="fill:var(--cm-accent)">agent, serve</text>
+    <text class="cm-svg-sub" x="380" y="135" text-anchor="middle">run the loop, host it behind channels</text>
+    <line x1="380" y1="145" x2="380" y2="159" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#arch-ah)"/>
+    <rect class="cm-svg-box" x="60" y="160" width="640" height="50" rx="8"/>
+    <text class="cm-svg-label" x="380" y="182" text-anchor="middle">toolkit  llm  memory  rag  runstate  a2a  tasks</text>
+    <text class="cm-svg-sub" x="380" y="200" text-anchor="middle">a registry and several backends each</text>
+    <line x1="380" y1="210" x2="380" y2="224" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#arch-ah)"/>
+    <rect class="cm-svg-box" x="60" y="225" width="640" height="50" rx="8"/>
+    <text class="cm-svg-label" x="380" y="247" text-anchor="middle">config  telemetry  util  conns</text>
+    <text class="cm-svg-sub" x="380" y="265" text-anchor="middle">import nothing else from this tree</text>
   </svg>
-  <figcaption>Every registry error message enumerates the linked implementations, which turns a forgotten import into a self-diagnosing failure.</figcaption>
+  <figcaption>An arrow is an import. The bottom band is the rule that keeps the middle band free of cycles.</figcaption>
 </figure>
 
-The blank imports all live in `internal/agent/agent.go`, each with an inline comment saying what it enables. Adding a
-second implementation is a package plus one import line.
+## The two hard leaves
 
-Every registry follows the same rules:
+`config` imports the standard library, a duration parser and a YAML library. `internal/telemetry` imports the standard library and OpenTelemetry.
 
-- `Register` panics on an empty name, a nil factory, or a duplicate, mirroring `database/sql.Register`. Each is a
-  programming error resolvable at compile time.
-- Factories decode their options strictly, with unknown fields rejected, so an operator's typo fails at run start.
-- Construction failures are errors, so a missing bucket, an unwritable directory, or a misconfigured stream surfaces
-  before the agent runs.
-- A backend declares its own requirements rather than being special-cased. The JetStream memory and session backends
-  register a "requires NATS" flag, which is the only reason the host knows to dial a connection without naming any
-  backend.
+Because `config` cannot see the rest of the tree, two lists are hand-maintained duplicates: the OTLP credential variable names, mirrored in `telemetry`, and the built-in tool names that may be exposed over MCP, mirrored on each tool's own spec. Both are pinned by a test assertion so they cannot drift.
 
-## Invariants that repeat everywhere
+Because `telemetry` cannot see the rest of the tree, its constructors take primitives rather than domain types, and its error classes are unforgeable values rather than a classifier over somebody else's sentinels. The HTTP middleware's type is written out longhand rather than named, and the `llm` package declares both halves as type aliases, so the value satisfies the interface without either package importing the other.
 
-Recognizing these once makes the rest of the tree read quickly.
+## Patterns that repeat
 
-<dl class="cm-kv">
-  <dt>One flat tool namespace</dt><dd>Application, built-in, remote, and custom tools share one name set. A collision aborts the run rather than shadowing, because shadowing a confirm-gated command would strip its gate.</dd>
-  <dt>Borrowed versus owned</dt><dd>Anything injected by a caller, whether a NATS connection, a store, a transport, or a provider, is used and never closed. Only what the run itself dialed or opened gets a deferred close. The contract is restated at every field and every use site.</dd>
-  <dt>Fail at construction</dt><dd>Unknown backend, unknown option key, unwritable directory, missing bucket, bad stream config, illegal prefix, unreachable remote host. All are startup errors, never a surprise at the first tool call.</dd>
-  <dt>Determinism for resume</dt><dd>Anything hashed into the run fingerprint must be byte-stable across restarts, which is why schemas are cloned rather than mutated, lists are sorted, and optional fields are emitted unconditionally.</dd>
-  <dt>Data, not instructions</dt><dd>Memory entries and retrieved knowledge are wrapped and labeled as data the agent saved or found, never as instructions. The framing appears in the system note, the injected block, and the tool description.</dd>
-  <dt>Bounded everything</dt><dd>Message sizes, output capture, source files, chunk sizes, query terms, batch sizes, response bodies, concurrency, and timeouts all have explicit constants with the reason in a comment.</dd>
-  <dt>Soft states versus hard failures</dt><dd>A missing index, an absent memory, a declined confirmation, and a non-zero exit are all normal results. Only a harness failure is an error.</dd>
-  <dt>Sanitize before truncate</dt><dd>Everything reaching an operator's terminal is stripped of escape sequences before any length cap, so a cut can never leave a dangling escape.</dd>
-</dl>
+**A registry with backends.** Memory, sessions, tasks, model providers and a2a transports all follow the same shape: a factory registered from `init` under a name, a `RequiresNats` style option so the host resolves a backend's needs without naming any backend, and a `Register` that panics on an empty name, a nil factory or a duplicate. Each registry has one or two implementations today, and adding a third needs no change in the host.
 
-## The single run goroutine
+**Failures land at startup.** An unknown backend, a typo in an options block, a bucket with a time-to-live, an unreachable peer, a stale knowledge manifest: each stops the process before the model is contacted, and the error names the key to change. One decoder handles every backend's options block, so no backend can relax the rule.
 
-The agent spawns no goroutines of its own. Several design decisions rest on that and say so:
+**Nothing is silently weakened.** A configured confirm tag matching no tool is warned about, because leaving it unreported would give a false sense of safety. A tool-name collision aborts the run rather than shadowing, because shadowing a gated command would strip its gate. A tag-based exclude on a remote host is rejected outright, because discovery carries no tags and the filter could never be honored.
 
-- The events sink needs no locking for a per-run consumer.
-- The run statistics counters need no lock.
-- The confirm gate is explicitly not concurrency-safe and must never be wired into the concurrent MCP path.
-- Hooks run on that goroutine, in loop order.
+**Untrusted text stays data.** Model-written memories and retrieved documents are fenced, labeled as data rather than instruction, sanitized at write time and sanitized again at render time.
 
-The serving modes are the exception, and both bound their concurrency with a semaphore for the same stated reason: an
-external caller has no iteration budget, so an ungated path could spawn unbounded concurrent commands.
+**Closed vocabularies are structs, not strings.** The telemetry error class, the degrade reason and the MCP transport are each a struct wrapping a string, because a string type is convertible from any string and passing an error's own text would compile.
 
-## Three entry points, one selection
+**State is derived, never cached beside its source.** Counters, resume position and the committed conversation are all recomputed from the journal, so they cannot drift from what happened.
 
-`run`, `mcp`, and `a2a` read the same file and share the same tool-selection path. What differs is which validation mode
-applies and what happens to a confirm-gated tool.
+**Resources are borrowed.** A run uses every injectable store, connection and session as given, and never closes one. A host builds them once and shares them across runs; a CLI run falls back to building its own.
 
-| | `run` | `mcp` | `a2a` |
-|---|-------|-------|-------|
-| Needs a model and prompt | yes | no | no |
-| Built-in tools | all enabled ones | the knowledge tools only, if allowlisted | none declares a2a exposure |
-| Confirm-gated tools | prompted locally | exposed and gated by elicitation | dropped entirely |
-| Concurrency | one loop | semaphore | semaphore |
-| Human reachable | yes, on a terminal | maybe, through the client | no |
+## Where a decision is enforced
 
-## Where the trust boundaries are
+| Concern | Enforced by |
+|---|---|
+| Which tools exist | The flat namespace built at run start; collisions abort |
+| Which tools the model may see | Config include and exclude, after `ai:deny` is stripped unconditionally |
+| Which tools need a human | The confirm gate, on the union of the original and rewritten call |
+| Which tools reach a peer | The exposure methods on the interface, plus a per-surface allowlist |
+| Whether a conversation may continue | The run fingerprint, split into hard, blocking, tools and budget classes |
+| What may leave the process on a span | Closed vocabularies and constructors that own their own attribute sets |
 
-Being specific about this is more useful than a general claim of safety.
+## The library standard
 
-The model is untrusted. It chooses tool names and arguments, and everything it produces is treated as data: arguments are
-bounded to a schema and become argv with no shell, text is sanitized before display, and stored or retrieved text is
-framed as data rather than instruction.
+The packages under `internal/` are being prepared to leave it, so others can build agents on them. `agent`, `llm`, `telemetry`, `toolkit`, `memory`, `rag`, `runstate`, `util`, `conns`, `serve` and `agenttest` are held to a public standard: names, signatures and doc comments are contracts.
 
-The wrapped application is trusted to run but not to behave. Its introspection output is size-capped and rejected if it
-overflows, its process group is killed on cancel, and its environment is scrubbed of credentials by name.
+Logic an embedder would have to reimplement does not belong in `package main`; the root holds command registration, flag parsing, presentation and wiring. A library supplies the value and the caller decides what to do with it, so where something is the CLI's business, the library returns it or takes it as a parameter rather than deciding.
 
-A remote peer is untrusted at the protocol level. Messages are size-capped before decoding and schema-validated in both
-directions, and a reply is only ever sent to the inbox the transport supplied, never to an address taken from the message.
-Authentication and authorization are delegated entirely to NATS.
+`a2a`, `mcpserver`, `serve/asyncjobs` and `tasks` are not there yet and their current APIs are not contracts. `remotetools` and `tui` are not libraries at all: one is the agent's own run-path helper, the other is terminal presentation that happens not to live in the root.
 
-The operator is trusted. Custom tools, hooks, and an injected provider all run with the agent's own privileges, and the
-source says so rather than implying a sandbox that does not exist.
+`agenttest` is the embedder-facing test surface, and several of its fakes double as an audit: a compile-time assertion fails if an injectable interface stops being implementable from outside its own package using only exported identifiers.
 
-{{% notice style="warning" title="Load-bearing decision" %}}
-None of the execution paths is a sandbox, and the source repeatedly refuses to imply otherwise. The per-run working
-directory is described as collision avoidance, not confinement. Credential scrubbing is name-based and cannot catch a
-secret exported under an undeclared name. The reliable exclusion mechanism is `ai:deny`, which drops a command before any
-filter or gate can reach it.
-{{% /notice %}}
+## Concurrency
+
+One run is one goroutine. Every event, hook and prompt call happens on it, so a per-run sink holds state without locking. MCP advisories arrive on another goroutine and land in a mutex-guarded queue the loop drains where it takes tools for a call. The tool set is an atomic pointer to a whole immutable set.
+
+A host runs many such goroutines with per-channel slot pools. They share the knowledge store, the MCP session set, the model provider, and stores that resolve per-run state per call rather than at construction. Each of those is read-only or safe for concurrent use.
 
 {{% notice style="tip" title="Next" %}}
-[Configuration]({{% relref "configuration" %}}) is where a reader following the flow should go, since every entry point
-starts there.
+Start with [Configuration]({{% relref "configuration" %}}), since every entry point begins by parsing a file, then [The agent loop]({{% relref "agent-loop" %}}) and [Tools and introspection]({{% relref "tools" %}}).
 {{% /notice %}}

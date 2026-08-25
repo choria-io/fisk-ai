@@ -1,160 +1,129 @@
-# Reference and map
+# Reference
 
-A lookup page. Where the other pages explain reasoning, this one answers "where does that live" and "what does that word
-mean here".
+Seven commands, registered in `main.go`, plus the packages behind them and the words this codebase uses for its own parts.
 
-## Command surface
+## Commands
 
-| Command | Purpose |
-|---------|---------|
-| `fisk run [query...]` | Runs the agent. The largest flag set: `--config`, `--api-key`, `--base-url`, `--http-debug`, `--no-color`, `--verbose`, `--tool-output`, `--no-tui`, `--chat`, `--trace`, `--checkpoint`, `--name`, `--resume`, `--force`, `--state-dir` |
-| `fisk session ls` | Lists checkpointed sessions, newest first. Alias `list` |
-| `fisk session show` | Shows one session, with `--transcript` for the full-screen viewer. Alias `view` |
-| `fisk session rm` | Removes a checkpointed session. Alias `delete` |
-| `fisk info` | Explains a config without contacting a model: tools, tags, confirm column, globals, prompt |
-| `fisk knowledge index` | Builds or updates the index, incrementally by content hash |
-| `fisk knowledge watch` | Watches the configured paths and re-indexes on change |
-| `fisk knowledge search` | Retrieves from the index for tuning, printing citations and snippets |
-| `fisk knowledge match` | Lists every document containing the words, as a complete set. Aliases `enumerate`, `which` |
-| `fisk knowledge words` | Lists the vocabulary of the index with document counts. Aliases `vocab`, `terms` |
-| `fisk knowledge show` | Prints one chunk verbatim, resolving a citation |
-| `fisk knowledge rm` | Removes specific indexed sources by path |
-| `fisk knowledge reset` | Wipes the entire index |
-| `fisk knowledge sources` | Lists indexed files with chunk counts and last-indexed time |
-| `fisk knowledge doctor` | Checks the index, its full-text integrity, and when configured the embeddings server |
-| `fisk knowledge rebuild` | Rebuilds the search indexes from the stored text, without re-embedding |
-| `fisk knowledge stats` | Prints the tier banner and index counts and sizes |
-| `fisk mcp` | Serves the tools over MCP on streamable HTTP |
-| `fisk a2a` | Serves the tools to other agents over NATS |
-| `fisk serve` | Hosts the agent behind the surfaces its configuration enables, taking queued work: `--config`, `--workers`, `--state-dir`, `--work-dir`, `--api-key`, `--base-url`, `--no-telemetry`, `--verbose` |
-| `fisk discover <agent>` | Discovers a remote agent and prints its tools |
+### `fisk run [query...]`
 
-The `knowledge` command carries `rag` and `k` as aliases.
+Hosts an agent and talks to it, or talks to somebody else's.
+
+| Flag | Effect |
+|---|---|
+| `--config` | Configuration file, default `agent.yaml` |
+| `--api-key`, `--base-url` | Provider credentials and endpoint |
+| `--nats-context` | Turns the process into a pure client of a remote worker |
+| `--identity` | Names the agent to reach; requires `--nats-context` |
+| `--resume`, `--force` | Continue a session id or conversation token, optionally across a changed configuration |
+| `--no-tui`, `--no-color`, `--verbose`, `--tool-output`, `--thinking` | Presentation |
+| `--trace`, `--http-debug`, `--a2a-debug` | Diagnostic files |
+| `--state-dir`, `--no-telemetry` | Storage and export |
+
+Two validation gates run before anything opens. `fisk run` refuses `--resume` with a query, `--force` without `--resume`, and `--identity` without `--nats-context`. In client mode it also refuses seven flags belonging to the worker, but only when they are set on the command line, so an exported environment variable never fails a run.
+
+There is no chat flag. Chat is implicit whenever the full-screen view runs.
+
+### `fisk serve`
+
+Runs the endpoints the configuration enables, with `--workers`, `--work-dir`, `--state-dir`, `--api-key`, `--base-url`, `--no-telemetry` and `--verbose`. It refuses a configuration that enables no endpoint, and provisions no storage: the queue, task store, session stream and memory bucket are the operator's to create.
+
+### `fisk mcp`
+
+Serves the selected tools over MCP, with `--port` and `--address` defaulting to loopback. It refuses a configuration with no MCP exposure block.
+
+### `fisk knowledge` (aliases `rag`, `k`)
+
+Group flags `--config` and `--store-dir`.
+
+| Subcommand | Purpose |
+|---|---|
+| `index [paths...]` | Build or update the index. `--reindex`, `--dry-run` |
+| `watch [paths...]` | Re-index on change. `--debounce`, `--no-initial` |
+| `search <query>` | Ranked retrieval. `--top-k`, `--full` |
+| `match <query>` (aliases `enumerate`, `which`) | Complete set membership. `--all`, `--count`, `--paths-only`, `--explain`, `--exit-code`, `--min-matches`, `--sort`, `--limit` |
+| `words` (aliases `vocab`, `terms`) | Vocabulary with document frequencies. `--field`, `--min-docs`, `--max-docs`, `--words-only`, `--count`, `--exit-code` |
+| `show <citation>` | One chunk by path and ordinal |
+| `rm <sources...>`, `reset --force` | Remove documents, or the whole index |
+| `sources`, `stats`, `doctor`, `rebuild` | Inspect and repair |
+
+### `fisk session`
+
+`ls`, `show <id>` and `rm <id>`, with `--config` and `--state-dir`. The show subcommand takes `--transcript`, `--thinking` and `--no-tui`.
+
+### `fisk info`
+
+Reports the effective configuration, including telemetry values with their origins. It parses in the most lenient mode so it can describe a configuration it could not run.
+
+### `fisk discover <agent>`
+
+Fetches a peer's agent card over the configured NATS context.
 
 ## Source map
 
-Line counts exclude tests, at the snapshot commit.
-
-| Package | Files | Lines | Role | Page |
-|---------|------:|------:|------|------|
-| `main` (repo root) | 15 | 3869 | The CLI: command registration, flags, signals, and both terminal renderers | [Configuration]({{% relref "configuration" %}}) |
-| `config` | 1 | 1281 | The whole configuration surface, parsing, defaulting, and validation | [Configuration]({{% relref "configuration" %}}) |
-| `internal/agent` | 5 | 2975 | Run setup, the loop, hooks, and the events contract | [The agent loop]({{% relref "agent-loop" %}}) |
-| `internal/toolkit` | 8 | 637 | Neutral tool contracts: `Tool`, `Kind`, `Presentation`, `Prompter` | [Tools]({{% relref "tools" %}}) |
-| `internal/toolkit/fisk` | 5 | 1384 | Introspection, filtering, argv construction, execution | [Tools]({{% relref "tools" %}}) |
-| `internal/toolkit/builtin` | 4 | 1299 | The human-in-the-loop, memory, and knowledge tools | [Tools]({{% relref "tools" %}}) |
-| `internal/toolkit/functool` | 3 | 446 | The generic function-tool backend | [Tools]({{% relref "tools" %}}) |
-| `internal/llm` | 6 | 423 | The provider-neutral message model and registry | [Providers]({{% relref "providers" %}}) |
-| `internal/llm/anthropic` | 3 | 534 | The only provider, and the only SDK importer | [Providers]({{% relref "providers" %}}) |
-| `internal/rag` | 16 | 4905 | The knowledge index: chunking, embedding, hybrid search, enumeration, vocabulary, watching | [Knowledge]({{% relref "knowledge" %}}) |
-| `internal/memory` | 6 | 513 | The memory contract and shared rules | [Memory]({{% relref "memory" %}}) |
-| `internal/memory/file` | 3 | 316 | One markdown file per memory | [Memory]({{% relref "memory" %}}) |
-| `internal/memory/jetstream` | 1 | 487 | One KV entry per memory, with a read-before-update guard | [Memory]({{% relref "memory" %}}) |
-| `internal/runstate` | 7 | 986 | Records, the fold, the fingerprint, and the schemas | [Sessions and replay]({{% relref "state" %}}) |
-| `internal/runstate/file` | 3 | 472 | A JSON-lines journal per run, with an advisory lock | [Sessions and replay]({{% relref "state" %}}) |
-| `internal/runstate/jetstream` | 1 | 627 | One record per subject, with a tail fence | [Sessions and replay]({{% relref "state" %}}) |
-| `internal/a2a` | 13 | 1627 | The agent-to-agent protocol engine and its transport contract | [Serving]({{% relref "serving" %}}) |
-| `internal/a2a/nats` | 1 | 242 | The one live transport binding | [Serving]({{% relref "serving" %}}) |
-| `internal/mcpserver` | 1 | 638 | The whole MCP serving mode | [Serving]({{% relref "serving" %}}) |
-| `internal/tui` | 4 | 2740 | The full-screen surface: live view, viewer, prompter, splash | [Terminal and events]({{% relref "terminal" %}}) |
-| `internal/util` | 8 | 1149 | Sanitization, markdown, the confirm gate, the tracer, run stats | [Terminal and events]({{% relref "terminal" %}}) |
-| `internal/remotetools` | 1 | 315 | Import policy: discovery, filtering, deterministic naming | [Serving]({{% relref "serving" %}}) |
-| `internal/conns` | 1 | 89 | Connection establishment and ownership | [Serving]({{% relref "serving" %}}) |
-| `internal/agenttest` | 8 | 976 | Fakes proving each contract is implementable from outside the package | |
-
-The root `main` package holds one file per command plus the two event renderers: `main.go`, `run_command.go`,
-`run_events.go`, `run_tui_events.go`, `session_command.go`, `resume_replay.go`, `info_command.go`, `rag_command.go`,
-`rag_match.go`, `rag_words.go`, `rag_watch.go`, `mcp_command.go`, `a2a_command.go`, `discover_command.go`, `remote_tools.go`.
+| Path | Holds | Page |
+|---|---|---|
+| `main.go`, `run_*.go`, `*_command.go` | Command registration, flags, the two client surfaces, rendering | [The terminal]({{% relref "terminal" %}}) |
+| `config/config.go` | Every configuration type, the parser, defaults, validation, accessors | [Configuration]({{% relref "configuration" %}}) |
+| `internal/agent` | Run setup, the loop, hooks, events, approvals, the PII guard | [The agent loop]({{% relref "agent-loop" %}}) |
+| `internal/toolkit` | The tool interface, tag behavior, the prompter, deferral | [Tools and introspection]({{% relref "tools" %}}) |
+| `internal/toolkit/fisk` | CLI introspection into tools, subprocess execution | [Tools and introspection]({{% relref "tools" %}}) |
+| `internal/toolkit/functool` | Go function tools, the backend for built-ins, remote and MCP | [Tools and introspection]({{% relref "tools" %}}) |
+| `internal/toolkit/builtin` | The harness's own tools and their system notes | [Tools]({{% relref "tools" %}}), [Memory]({{% relref "memory" %}}), [Knowledge]({{% relref "knowledge" %}}) |
+| `internal/mcpclient`, `internal/remotetools` | Importing tools from MCP servers and peer agents | [Tools and introspection]({{% relref "tools" %}}) |
+| `internal/llm`, `internal/llm/anthropic` | The neutral conversation model and its one backend | [Model providers]({{% relref "providers" %}}) |
+| `internal/memory` | The memory contract, key rules, scope, two backends | [Memory]({{% relref "memory" %}}) |
+| `internal/rag` | The knowledge store, indexing, retrieval, enumeration | [Knowledge]({{% relref "knowledge" %}}) |
+| `internal/runstate`, `internal/tasks` | The journal, the fold, the fingerprint, the task record | [Durable state]({{% relref "state" %}}) |
+| `internal/serve` and subpackages | The host, the three channels, shared resources | [Serving]({{% relref "serving" %}}) |
+| `internal/a2a` | The protocol, its schemas, the client and server, the NATS binding | [Serving]({{% relref "serving" %}}) |
+| `internal/mcpserver` | The MCP tool server, a surface of its own | [Serving]({{% relref "serving" %}}) |
+| `internal/telemetry` | Spans, metrics, content capture, propagation | [Telemetry]({{% relref "telemetry" %}}) |
+| `internal/tui`, `internal/multiplex` | The full-screen view and multiplexer reporting | [The terminal]({{% relref "terminal" %}}) |
+| `internal/pii` | Personal-data detection and redaction | [The agent loop]({{% relref "agent-loop" %}}) |
+| `internal/conns`, `internal/util` | NATS connection ownership, shared helpers | [Architecture]({{% relref "architecture" %}}) |
+| `internal/agenttest` | Fakes for an embedder's tests | [Architecture]({{% relref "architecture" %}}) |
 
 ## Key types
 
 | Type | Package | What it is |
-|------|---------|-----------|
-| `agent.Options` | `internal/agent` | Everything a caller supplies for one run, including every injection point |
-| `agent.Events` | `internal/agent` | The typed display sink; the package decides what happened, the caller how it looks |
-| `agent.Hooks` | `internal/agent` | Eight optional callbacks on the run goroutine |
-| `toolkit.Tool` | `internal/toolkit` | The four-method interface every tool kind satisfies |
-| `toolkit.Kind` | `internal/toolkit` | The accounting axis: who provides the tool |
-| `toolkit.Presentation` | `internal/toolkit` | The visibility axis: how a call is shown |
-| `toolkit.Prompter` | `internal/toolkit` | The only sanctioned path to an operator |
-| `toolkit.CommandResult` | `internal/toolkit` | The JSON shape a command-ish tool returns, local or remote |
-| `llm.Provider` | `internal/llm` | The one place a concrete SDK is spoken on the request path |
-| `llm.Message` | `internal/llm` | The neutral message model, and also the on-disk format |
-| `runstate.Store` | `internal/runstate` | Describe, create, open, load, list, delete for run journals |
-| `runstate.RunState` | `internal/runstate` | The folded, resumable state |
-| `runstate.Fingerprint` | `internal/runstate` | The configuration a journal was written against |
-| `memory.Store` | `internal/memory` | Describe, list, read, write, delete over durable model-written notes |
-| `rag.Store` | `internal/rag` | One handle over the single SQLite index file |
-| `a2a.Transport` | `internal/a2a` | Round-trip, serve, describe, close; moves bytes and never decodes |
-| `a2a.Header` | `internal/a2a` | Framing embedded flat into every message |
-| `config.Config` | `config` | The whole YAML surface, read through nil-safe accessors |
-
-## Constants worth knowing
-
-| Value | Meaning |
-|-------|---------|
-| 10 | Tool count at which deferral and tool search engage |
-| 200000 / 50 / 120s | Default token budget, iteration budget, and per-call timeout |
-| 8192 / 16384 | Default max output tokens, and the value used when thinking is on |
-| 2 / 30s | Default concurrency and per-call timeout for both serving modes |
-| 64 KiB / 32 KiB | Head and tail kept from a tool's output before truncation |
-| 16 MiB | Introspection output cap, rejected rather than truncated |
-| 768 KiB | A2A message size cap, sitting under the NATS 1 MiB default |
-| 64 KiB / 1024 | Memory content cap and entry count cap |
-| 69600 | Memory entry cap including frontmatter, the `nats kv add` figure |
-| 1200 / 1500 | Knowledge chunk target and maximum in bytes |
-| 50 / 20 / 6000 | Search fanout per tier, result ceiling, and default injected-token budget |
-| 8080 / 127.0.0.1 | Default MCP port and address |
-| `choria.fisk-ai` | The A2A NATS subject prefix |
+|---|---|---|
+| `Config` | `config` | The whole of `agent.yaml`, parsed, defaulted and validated for a mode |
+| `Tool` | `toolkit` | Nine methods every tool kind answers, whatever provides it |
+| `Behavior` | `toolkit` | What a tool declares about itself, resolved conservatively |
+| `Prompter` | `toolkit` | The only path permitted to read the terminal or draw a prompt |
+| `ToolSet` | `agent` | An immutable set of definitions plus the registry that dispatches them |
+| `Hooks` | `agent` | Seven points a caller can observe or interrupt |
+| `Provider` | `llm` | Call and Capabilities: the only code that calls a provider SDK |
+| `ContentBlock` | `llm` | The neutral union, with a provider block as its escape hatch |
+| `Store` | `memory` | Five methods, no close, safe across processes |
+| `Store` | `rag` | The knowledge database and every operation on it |
+| `Record`, `RunState` | `runstate` | One journal entry, and the fold of all of them |
+| `Fingerprint` | `runstate` | The configuration a stored conversation was written under |
+| `Channel`, `Work`, `Outcome` | `serve` | Where work comes from, what it is, and what came of it |
+| `Header` | `a2a` | The framing embedded flat into every protocol message |
+| `Provider` | `telemetry` | Nil-safe spans and metrics, registering nothing globally |
 
 ## Glossary
 
 <dl class="cm-kv">
-  <dt>agent</dt><dd>One configuration driving one model over one tool set. Named by its identity.</dd>
-  <dt>identity</dt><dd>The agent's name. Also the NATS queue group and the namespace for on-disk state.</dd>
-  <dt>tool</dt><dd>Anything the model may call: a wrapped leaf command, a built-in, an imported remote tool, or a caller-injected custom tool.</dd>
-  <dt>kind</dt><dd>Who provides a tool. Used for accounting and log tokens, never for display suppression.</dd>
-  <dt>presentation</dt><dd>How a tool call is displayed. Used for suppression, never for accounting.</dd>
-  <dt>confirm gate</dt><dd>The operator approval checkpoint on a command the model chose. Default deny.</dd>
-  <dt>HITL</dt><dd>Human in the loop: the built-in tools with which the model asks the operator a question.</dd>
-  <dt>deferral</dt><dd>Withholding full tool definitions so the model finds them through tool search instead.</dd>
-  <dt>checkpoint</dt><dd>A run that writes a durable journal and can therefore be suspended and resumed.</dd>
-  <dt>session</dt><dd>One journal, identified by a run id. A context reset rotates to a new one.</dd>
-  <dt>journal</dt><dd>The append-only record stream for one session.</dd>
-  <dt>fold</dt><dd>The pure function turning a record stream back into a resumable state.</dd>
-  <dt>fingerprint</dt><dd>The hashed configuration a journal was written against, checked before a resume.</dd>
-  <dt>memory</dt><dd>Short markdown notes the model writes for its future self.</dd>
-  <dt>memory index</dt><dd>The key-and-description listing injected into the system prompt at startup.</dd>
-  <dt>knowledge</dt><dd>The operator-owned document index the model searches. RAG is the technique; knowledge is the feature.</dd>
-  <dt>tier</dt><dd>Whether knowledge search is lexical only or hybrid, always reported on its own line.</dd>
-  <dt>citation</dt><dd>A knowledge reference of the form <code>path#ordinal</code>. Ordinals shift after a reindex.</dd>
-  <dt>A2A</dt><dd>Agent to agent: the NATS protocol for serving tools to, and importing tools from, another Fisk AI agent.</dd>
-  <dt>agent card</dt><dd>The discovery reply describing an agent's name, version, and exposed tools.</dd>
-  <dt>remote tool</dt><dd>Another agent's tool imported into this one, presented to the model as if it were local.</dd>
-  <dt>elicitation</dt><dd>The MCP mechanism used to request approval from a client when there is no local operator.</dd>
+  <dt>Identity</dt><dd>The agent's name: a NATS subject token, a queue group, and the first field hashed into a session id.</dd>
+  <dt>Named identity</dt><dd>One an operator wrote, as opposed to one derived from the application's basename. Every serving path requires a named one.</dd>
+  <dt>Introspection</dt><dd>Running a fisk application with a flag that makes it describe its own command tree, which is where tool schemas come from.</dd>
+  <dt>Confirm gate</dt><dd>The default-deny check in front of a tagged tool. Independent of the human-in-the-loop tools.</dd>
+  <dt>Standing grant</dt><dd>An approval that covers a tool for the rest of the conversation, journaled after the call that triggered it resolves. There is no standing denial.</dd>
+  <dt>Deferral</dt><dd>A tool saying it will answer later. The call is never dispatched again; its turn finishes when an answer is supplied.</dd>
+  <dt>Elicitation</dt><dd>Putting a question to a person through the caller rather than at a terminal, over a2a or MCP.</dd>
+  <dt>Fingerprint</dt><dd>The stamped configuration that decides whether a stored conversation may continue, and whether its approvals survive.</dd>
+  <dt>Claim</dt><dd>A record appended on resume. Appending it excludes a second runner; the payload only says who took the run.</dd>
+  <dt>Reply set</dt><dd>The sequence of messages answering one a2a request, numbered gap-free from the ack.</dd>
+  <dt>Conversation token</dt><dd>The caller's credential for adding a turn to a conversation. Neither logged nor displayed.</dd>
+  <dt>Tool search</dt><dd>Deferring tool definitions past a threshold so the model looks them up instead of receiving them all.</dd>
+  <dt>Knowledge</dt><dd>The operator's corpus. Go identifiers call it <code>rag</code>; every user-facing name calls it knowledge.</dd>
+  <dt>Memory</dt><dd>Notes the model writes and reads back. Always data, never instruction.</dd>
+  <dt>Degrade</dt><dd>A knowledge search that fell back to the lexical tier, reported with which step failed.</dd>
+  <dt>Content capture</dt><dd>Exporting prompts and completions on spans. Off by default, and it bypasses the other protections in that area by construction.</dd>
 </dl>
 
-## Reserved and unused, at a glance
-
-Collected from the subsystem pages so a reader can see the shape of the unfinished edges in one place.
-
-| Item | Status |
-|------|--------|
-| `remote_agents` config key and its type | Declared, read by nothing. `remote_tools` is the working feature |
-| The A2A streaming task flow | Fully defined, schema-validated, round-trip tested; no transport path sends or receives it |
-| `Header.MustUnderstand`, `Header.Parent`, `Recipient.Instance` | Declared and schema-valid, never set or read |
-| The runstate JSON schema validator | Compiled and tested, wired into no read or write path |
-| `llm.Caps.MaxOutputTokens` | Declared, never read; nothing clamps the per-call cap |
-| Three exported anthropic codec functions | No non-test callers; migration residue |
-| `agent.SlogEvents` | No in-tree consumer; exists for a job runner that does not exist yet |
-| Most of `agent.Options` | Embedder-only; the CLI sets fewer than half its fields |
-| `functool` confirm and validation specs | No production users; for embedder-supplied tools |
-| `IndexOptions.Extensions` | A real extension point no caller sets |
-| `documents.title` in the knowledge schema | Written on every upsert, read on no path |
-| A second transport, provider, or MCP client | The registries are complete; no second implementation exists, and there is no MCP client at all |
-
 {{% notice style="tip" title="Next" %}}
-For operator-facing documentation rather than design, see the [Agents]({{% relref "/agents" %}}),
-[MCP server]({{% relref "/mcp" %}}), [Knowledge]({{% relref "/knowledge" %}}), and
-[Reference]({{% relref "/reference" %}}) sections.
+Return to the [overview]({{% relref "_index" %}}), or read [Architecture]({{% relref "architecture" %}}) for how these packages layer.
 {{% /notice %}}

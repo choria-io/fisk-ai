@@ -1,21 +1,18 @@
 # Memory
 
-Memory gives an agent four tools for storing short markdown notes that survive the end of a run. The design problem is
-not storage. It is that both the key and the body are written by a model, so every value read back is untrusted input
-that will be placed into a later prompt.
+The model writes a note under a key and reads it back on a later run. The harness stores that text, shows it back, and never treats it as instruction.
 
 {{% notice style="note" title="Where it lives" %}}
-`internal/memory` holds the contract and the shared rules. Key files: `store.go`, `key.go`, `write.go`,
-`frontmatter.go`, `registry.go`. The backends are `internal/memory/file` and `internal/memory/jetstream`. The
-model-facing tools are in `internal/toolkit/builtin/builtin_memory.go`.
+`internal/memory` holds the contract: the `Store` interface, key rules, the write validator and the on-disk format. `internal/memory/file` and `internal/memory/jetstream` are the two backends. `internal/toolkit/builtin/builtin_memory.go` is the tool surface the model sees. Key files: `store.go`, `key.go`, `write.go`, `frontmatter.go`, `scope.go`.
 {{% /notice %}}
 
 ## The contract
 
-`memory.Store` (`internal/memory/store.go:105`) is four methods.
+`Store` has five methods and no `Close`. No backend owns a resource to release; the JetStream connection is borrowed from the host and must never be closed by the backend.
 
 ```go
 type Store interface {
+	Info() Info
 	List(ctx context.Context) ([]Item, error)
 	Read(ctx context.Context, key string) (description, content string, err error)
 	Write(ctx context.Context, key, description, content string, overwrite bool) error
@@ -23,255 +20,102 @@ type Store interface {
 }
 ```
 
-`Item` (`store.go:96`) carries only `Key` and `Description`, never the body. That is what makes the index cheap enough to
-inject into every prompt. Reading a body always costs a tool call.
-
-The interface documents a stronger concurrency requirement than usual: an implementation must be safe for use by
-independent processes sharing one backing store, not merely by goroutines in one process. Two agents pointed at the same
-directory or the same NATS bucket are the expected case.
-
-Three sentinel errors carry the outcomes the tool layer needs to distinguish: `ErrExists`, `ErrNotExist`, and `ErrStale`.
-
-The limits are constants in one file, and the two exported ones leak into operator-facing documentation.
+An implementation must be safe for concurrent use by independent processes sharing one backing store, and must validate the key before touching that store. `Info` is a required method rather than an optional capability, so every backend reports its name and location.
 
 <dl class="cm-kv">
-  <dt>maxKeyRunes</dt><dd>200, sized so <code>key + ".md"</code> fits on every filesystem.</dd>
-  <dt>maxDescriptionRunes</dt><dd>500 after normalization to a single line.</dd>
-  <dt>MaxContentBytes</dt><dd>64 KB. The cap shown by <code>fisk info</code>.</dd>
-  <dt>MaxEntries</dt><dd>1024 memories per store.</dd>
-  <dt>MaxEntryBytes</dt><dd>69600. Content plus a deliberately over-estimated frontmatter overhead. This is the number an operator passes to <code>nats kv add --max-value-size</code>.</dd>
+  <dt>Item</dt><dd>Key and description only. The body is always a separate <code>Read</code>.</dd>
+  <dt>Info.Backend</dt><dd>The registered backend name, which lands on a telemetry span.</dd>
+  <dt>Info.Location</dt><dd>An operator-configured identifier, never a filesystem path, a URL carrying userinfo, or a credential. The file backend returns an empty string for exactly that reason.</dd>
+  <dt>Scope</dt><dd>One run's record of which keys it has read and at which revision. A nil <code>*Scope</code> is valid and authorizes no overwrite, so every backend uses it without a nil check.</dd>
 </dl>
 
-The two byte caps are close enough to read as a contradiction. `MaxContentBytes` bounds what the model may write.
-`MaxEntryBytes` bounds what the backend stores, because the stored value includes the frontmatter header.
+Limits live in `store.go`: 200 runes of key, 500 runes of description, 64 KiB of content, 1024 entries. `MaxEntryBytes` adds twice the description budget plus 64 bytes on top of the content cap, because YAML may quote and escape every byte of a description.
 
-## The key charset is the whole traversal defense
-
-`ValidateKey` (`internal/memory/key.go:25`) enforces five rules in order: non-empty, at most 200 runes, matching
-`^[A-Za-z0-9._=-]+$`, no leading or trailing `.`, and no `..` substring.
-
-The charset is the intersection of legal NATS KV keys and safe filenames, with `/` excluded even though KV permits it.
-That exclusion is the point. A key maps one to one onto a flat filename with no path separator to escape.
-
-{{% notice style="warning" title="Load-bearing decision" %}}
-Because a validated key provably carries no separator, `filepath.Join(s.dir, key+".md")` cannot leave the memory
-directory. Every `Store` method validates before touching the backing store, and the file backend re-validates on the way
-out: `keyFiles` (`internal/memory/file/file.go:196`) drops any filename stem that fails `ValidateKey`, so a name planted
-by hand can never appear in a listing. Loosening the charset to allow `/` would silently remove the traversal guarantee
-from both directions.
-{{% /notice %}}
-
-Namespacing happens per backend rather than per key. The file backend uses a directory named `memory/<identity>`. The
-JetStream backend prefixes keys with `<identity>.`, joined with a dot because a dot is a legal key character, so a
-prefixed key is still a legal key on both sides.
-
-## The write path
+## Writing a memory
 
 <ol class="cm-steps">
-  <li><b>Validate</b> <code>ValidateWrite</code> (<code>write.go:19</code>) checks the key, normalizes the description, rejects an empty result, and rejects content over 64 KB. It returns the normalized description, which the backend must be the one to persist.</li>
-  <li><b>Normalize the description</b> <code>normalizeDescription</code> (<code>write.go:51</code>) replaces control characters with spaces, collapses runs of whitespace, and truncates to 500 runes. The result is always a single line.</li>
-  <li><b>Check capacity</b> On the create path only, the backend counts entries and calls <code>CheckCapacity</code> (<code>write.go:39</code>).</li>
-  <li><b>Serialize</b> <code>Serialize</code> (<code>frontmatter.go:31</code>) marshals a typed struct into a YAML header followed by the body verbatim.</li>
-  <li><b>Store atomically</b> The file backend stages a temp file and then links or renames. The JetStream backend creates, or updates against a known revision.</li>
+  <li><b>Validate before storing</b> Every backend calls <code>memory.ValidateWrite</code> first: the key charset, the description after normalization, and the 64 KiB content cap. The normalized description is what gets persisted; the raw one is discarded.</li>
+  <li><b>Count on create only</b> An overwrite replaces an entry that already counted, so <code>CheckCapacity</code> runs on the create path alone.</li>
+  <li><b>Serialize once</b> <code>memory.Serialize</code> writes the YAML header with a real marshaller, so a description containing a colon, a quote or a leading dash cannot corrupt it.</li>
+  <li><b>Store atomically</b> The file backend stages a temp file and links it for a create or renames it for an overwrite. JetStream calls <code>kv.Create</code>, or the revision-checked <code>kv.Update</code>.</li>
+  <li><b>Answer the model in its own terms</b> <code>ErrExists</code> becomes a structured refusal that names the colliding memory's description, found by an extra read, so the model can decide without spending another tool call. <code>ErrStale</code> becomes an instruction to read the key and retry with <code>overwrite: true</code>.</li>
 </ol>
 
 <figure class="cm-diagram">
-  <svg viewBox="0 0 760 330" role="img" aria-label="The memory write path from tool call through validation to the two backends">
+  <svg viewBox="0 0 760 290" role="img" aria-label="A memory write validated, serialized and stored, with refusals returned to the model">
     <defs>
-      <marker id="mw-ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--cm-accent)"/></marker>
-      <marker id="mw-ad" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--cm-accent3)"/></marker>
+      <marker id="mem-ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--cm-accent)"/></marker>
+      <marker id="mem-ah2" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--cm-faint)"/></marker>
     </defs>
-    <rect class="cm-svg-box" x="20" y="26" width="150" height="52" rx="8"/>
-    <text class="cm-svg-label" x="95" y="48" text-anchor="middle">memory_write</text>
-    <text class="cm-svg-sub" x="95" y="65" text-anchor="middle">model tool call</text>
-    <rect x="210" y="26" width="180" height="52" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
-    <text class="cm-svg-label" x="300" y="48" text-anchor="middle" style="fill:var(--cm-accent)">ValidateWrite</text>
-    <text class="cm-svg-sub" x="300" y="65" text-anchor="middle">key charset, size caps</text>
-    <rect x="430" y="26" width="180" height="52" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
-    <text class="cm-svg-label" x="520" y="48" text-anchor="middle" style="fill:var(--cm-accent)">CheckCapacity</text>
-    <text class="cm-svg-sub" x="520" y="65" text-anchor="middle">create path only</text>
-    <line x1="170" y1="52" x2="204" y2="52" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#mw-ah)"/>
-    <line x1="390" y1="52" x2="424" y2="52" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#mw-ah)"/>
-    <!-- rejection path -->
-    <rect x="20" y="130" width="180" height="52" rx="8" fill="color-mix(in srgb, var(--cm-accent3) 10%, transparent)" stroke="var(--cm-accent3)"/>
-    <text class="cm-svg-label" x="110" y="152" text-anchor="middle" style="fill:var(--cm-accent3)">rejected</text>
-    <text class="cm-svg-sub" x="110" y="169" text-anchor="middle">never reaches a backend</text>
-    <path d="M260,78 L260,156 L206,156" fill="none" stroke="var(--cm-accent3)" stroke-width="2" stroke-dasharray="4 3" marker-end="url(#mw-ad)"/>
-    <!-- serialize -->
-    <rect class="cm-svg-box" x="430" y="130" width="180" height="52" rx="8"/>
-    <text class="cm-svg-label" x="520" y="152" text-anchor="middle">Serialize</text>
-    <text class="cm-svg-sub" x="520" y="169" text-anchor="middle">typed yaml frontmatter</text>
-    <line x1="520" y1="78" x2="520" y2="124" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#mw-ah)"/>
-    <!-- backends -->
-    <rect class="cm-svg-box" x="60" y="242" width="230" height="56" rx="8"/>
-    <text class="cm-svg-label" x="175" y="266" text-anchor="middle">file backend</text>
-    <text class="cm-svg-sub" x="175" y="283" text-anchor="middle">link to create, rename to replace</text>
-    <rect class="cm-svg-box" x="450" y="242" width="230" height="56" rx="8"/>
-    <text class="cm-svg-label" x="565" y="266" text-anchor="middle">jetstream backend</text>
-    <text class="cm-svg-sub" x="565" y="283" text-anchor="middle">revision-checked update</text>
-    <path d="M520,182 L520,214 L175,214 L175,236" fill="none" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#mw-ah)"/>
-    <path d="M520,182 L520,214 L565,214 L565,236" fill="none" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#mw-ah)"/>
-    <text class="cm-svg-sub" x="380" y="322" text-anchor="middle">one serialized format, so a value migrates between backends unchanged</text>
+    <rect class="cm-svg-box" x="20" y="60" width="150" height="56" rx="8"/>
+    <text class="cm-svg-label" x="95" y="84" text-anchor="middle">memory_write</text>
+    <text class="cm-svg-sub" x="95" y="102" text-anchor="middle">model tool call</text>
+    <line x1="170" y1="88" x2="209" y2="88" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#mem-ah)"/>
+    <rect x="215" y="60" width="150" height="56" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
+    <text class="cm-svg-label" x="290" y="84" text-anchor="middle" style="fill:var(--cm-accent)">ValidateWrite</text>
+    <text class="cm-svg-sub" x="290" y="102" text-anchor="middle">key, size, desc</text>
+    <line x1="365" y1="88" x2="404" y2="88" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#mem-ah)"/>
+    <rect class="cm-svg-box" x="410" y="60" width="150" height="56" rx="8"/>
+    <text class="cm-svg-label" x="485" y="84" text-anchor="middle">Serialize</text>
+    <text class="cm-svg-sub" x="485" y="102" text-anchor="middle">header plus body</text>
+    <line x1="560" y1="88" x2="599" y2="88" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#mem-ah)"/>
+    <rect class="cm-svg-box" x="605" y="60" width="135" height="56" rx="8"/>
+    <text class="cm-svg-label" x="672" y="84" text-anchor="middle">backend</text>
+    <text class="cm-svg-sub" x="672" y="102" text-anchor="middle">Create or Update</text>
+    <rect class="cm-svg-box" x="605" y="170" width="135" height="50" rx="8"/>
+    <text class="cm-svg-label" x="672" y="190" text-anchor="middle">run scope</text>
+    <text class="cm-svg-sub" x="672" y="207" text-anchor="middle">key to revision</text>
+    <line x1="672" y1="170" x2="672" y2="122" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#mem-ah)"/>
+    <path d="M605,105 L588,105 L588,255 L95,255 L95,122" fill="none" stroke="var(--cm-faint)" stroke-width="2" marker-end="url(#mem-ah2)"/>
+    <text class="cm-svg-sub" x="330" y="248" text-anchor="middle">ErrExists or ErrStale, carrying the reason the model needs</text>
+    <text class="cm-svg-sub" x="672" y="150" text-anchor="middle">grants the overwrite</text>
   </svg>
-  <figcaption>Validation runs before any backend sees the key. The two backends differ only in how they commit.</figcaption>
+  <figcaption>A write is validated in the shared package, stored by the backend, and refused with a reason the model can act on.</figcaption>
 </figure>
 
-The identical serialized format on both sides is deliberate. A value written by one backend migrates to the other
-unchanged.
+## Keys and read-before-update
 
-## The value format
+Legal keys match `^[A-Za-z0-9._=-]+$`, the intersection of legal NATS KV key characters and safe filename characters. The slash is excluded so a key maps one to one onto a flat filename with no path separator to escape. `ValidateKey` also refuses a leading or trailing dot and any `..`, and every method in both backends calls it, including `Read` and `Delete`. The file backend re-validates when listing, so a hand-planted file whose stem is not a legal key stays invisible.
 
-`Serialize` marshals a one-field struct rather than concatenating strings.
+The JetStream backend requires a read before an update. Only `Read` records a revision in the run's `Scope`. `List` and the start-of-run index also read values, but they read them to build an index rather than on the model's behalf, so seeing a key in the index grants no authority to overwrite it. A successful create does grant it, since the model just wrote that value. A delete drops the revision, so a stale one cannot authorize an overwrite of a key that was re-created in between.
 
-```go
-type frontmatter struct {
-	Description string `yaml:"description"`
-}
-```
-
-That choice is what makes a description containing `key: value`, a quote, or a leading dash safe. Combined with the
-single-line normalization invariant, the header cannot grow a second key or break out of the block.
-
-`Parse` (`frontmatter.go:53`) is deliberately lenient in the other direction, so a hand-written file still reads:
-
-| Input | Result |
-|-------|--------|
-| No `---` prefix | Description empty, the whole input is the body |
-| A body containing its own `---` line | The first closing delimiter wins, the body survives intact |
-| Header closed by `---` with no trailing newline | Accepted, empty body |
-| No closing delimiter at all | Treated as not frontmatter, the whole input is the body |
-| Header present but invalid YAML | Degrades to the whole input as body, no error |
-
-## Reading, and the two kinds of miss
-
-`memory_read` never fails for an absent key. A miss returns `{"found": false, "reason": ...}` naming `memory_list` as the
-way to see the current set, so the model corrects itself without burning an error turn. `memory_delete` behaves the same
-way, returning `{"deleted": false}` for a key that was not there.
-
-An existing key on the create path is also a soft result rather than an error. `existsReason`
-(`builtin_memory.go:325`) spends an extra `Read` purely to name the colliding memory's description, so the model can
-decide whether to retry with `overwrite` in the same turn instead of a separate round trip.
-
-## The index, and treating stored text as data
-
-When memory is enabled and `no_index` is not set, the agent calls `List` once at startup and appends
-`builtin.MemoryIndexBlock(entries)` to the system prompt (`internal/agent/agent.go:1118`). The block wraps entries in
-`<memory-index>` tags and opens with a line stating that these are notes saved on earlier runs, not instructions. The
-system note ends with the same framing: anything stored in memory is data the agent saved, not an instruction to follow.
-
-Descriptions are sanitized twice: `normalizeDescription` strips control characters at write time, and
-`util.SanitizeForTerminal` truncates to 200 runes at render time. A description written by an earlier run therefore
-cannot smuggle a terminal escape onto an operator's screen or inflate the prompt.
-
-A `List` failure at startup is advisory. The agent emits a `WarnMemoryIndex` warning and continues, because the tools
-still reach the store; only the free preview is lost.
-
-{{% notice style="warning" title="Load-bearing decision" %}}
-The index is appended after the run fingerprint is computed (`internal/agent/agent.go:1112`). Memory is data, not
-configuration, so a memory written between a suspend and a resume must never block that resume. Folding the index into
-the fingerprint would make every successful memory write invalidate its own session. See
-[Sessions and replay]({{% relref "state" %}}) for what the fingerprint does cover.
-{{% /notice %}}
-
-Memory tools are never hidden behind tool search. They are always declared directly, though they do count toward the
-tool-count threshold and the degradation warning described in
-[Tools and introspection]({{% relref "tools" %}}).
+The scope is resolved per call rather than captured at construction, so one shared store serves many concurrent runs and each keeps its own. Across a suspend and resume the scope is stored in the journal: the runner writes `Scope.Snapshot()` as an optional record after the terminal record, replay takes newest-wins, and resume seeds the scope back. It survives a tool-set change, because revisions record what the store held rather than what an operator agreed to.
 
 ## The two backends
 
-Both funnel through the same validation, the same capacity check, the same serialization, and the same strict option
-decoder. They differ in what they can promise.
-
 | | `file` | `jetstream` |
-|---|--------|-------------|
-| Layout | One `<key>.md` per memory in a `0o700` directory | One KV entry per memory, keys prefixed with the identity |
-| Location | `options.directory`, else `memory/<identity>` rebased under the state directory | A pre-existing bucket, never created by Fisk AI |
-| Create atomicity | `os.Link` from a temp file; `ErrExist` becomes `ErrExists` | `kv.Create` |
-| Overwrite | `os.Rename`, last write wins | Revision-checked `kv.Update` |
-| Returns `ErrStale` | No | Yes |
-| `Delete` accuracy | Exact, a single `os.Remove` | Best-effort, Get-then-Delete can race |
-| Listing | Directory scan, skipping temp, non-regular, and invalid names | One server-side `Watch` pass filtered to the prefix |
+|---|---|---|
+| Unit | one `.md` file per key under `memory/<identity>` | one KV value per key, `<prefix>.<key>` |
+| Namespacing | a directory per identity | a key prefix, defaulting to the identity |
+| Create | `os.Link`, which fails if the name exists | `kv.Create` |
+| Overwrite | `os.Rename`, last write wins | revision-checked `kv.Update` by default |
+| `ErrStale` | never returned | returned on a revision mismatch |
+| Listing | read the directory, then one read per file | one server-side watcher pass, filtered to the prefix |
+| Startup check | create the directory at mode 0700 | bind the bucket, reject a missing one, a TTL, or an undersized one |
+| `Info.Location` | empty | the bucket name |
 
-The JetStream backend binds a bucket and refuses to create one, so durability policy stays with the operator. It also
-refuses to start against a bucket that would quietly break the contract. `checkBucketConfig`
-(`internal/memory/jetstream/jetstream.go:138`) rejects any bucket with a TTL, because stored memories would expire
-without anyone noticing, and any bucket whose positive `MaxValueSize` is below `MaxEntryBytes`. A missing bucket produces
-an error containing a ready-to-paste `nats kv add` command with the right size.
+The prefix option is a pointer so an omitted prefix, which defaults to the identity, stays distinguishable from an explicit empty string, which means a flat keyspace.
 
-A backend declares what it needs at registration time rather than being special-cased by the host. The JetStream backend
-registers with `memory.RequiresNats()`, and that single flag is why `memory.NeedsNats(cfg)` can tell the agent to dial
-NATS before construction without the agent naming any backend.
+{{% notice style="warning" title="Load-bearing decision" %}}
+Memory content is data, not instruction. The system note ends on that sentence, and the start-of-run index repeats it and fences the entries in a `<memory-index>` block. Descriptions are normalized to a single line at write time and passed through `util.SanitizeForTerminal` again at render time, which strips ANSI escapes as well. A value written by a hand-editing operator, or one written before the normalizer existed, is caught at render.
+{{% /notice %}}
 
-### The read-before-update guard
+{{% notice style="warning" title="Load-bearing decision" %}}
+The file backend opens with `O_NOFOLLOW` and then stats the returned descriptor, rejecting anything that is not a regular file. Content is read from that descriptor and never by re-opening the path, because a second open by name would resolve the path again and follow whatever was swapped in since. On Windows the flag is a no-op and the defense rests on the stat plus the privilege required to create a symlink.
+{{% /notice %}}
 
-By default the JetStream backend will not overwrite a key whose current revision it does not know. `Read` records the
-entry revision in the `memory.Scope` on the context, and `overwrite` requires a known revision and issues a
-revision-checked update. A wrong-last-sequence error maps to `ErrStale`, and the stale revision is dropped so a retry is
-forced to re-read.
+## Failing at run start
 
-A scope belongs to a run, and a turn of a checkpointed conversation is a run. The agent journals the scope as each run
-ends and seeds a fresh one from `RunState.MemoryRevisions` on resume, so the revisions follow the conversation across
-turns, processes and a week of wall clock.
+A JetStream bucket with any non-zero TTL is a construction failure, not a degraded run, because stored memories would silently expire. A positive `MaxValueSize` below `MaxEntryBytes` is refused for the same reason, and the check uses `MaxEntryBytes` rather than the content cap because the stored value is body plus frontmatter. A missing bucket produces a copy-pasteable `nats kv add` command. The backend binds and never creates, so the operator owns the durability policy. The bind runs under a ten second timeout, so a wrong bucket name surfaces at run start rather than hanging.
 
-`List` deliberately does not grant that authority. Seeing a key in the index is not the same as having read it. A
-successful create or overwrite does carry authority forward, so a sequence of edits within one conversation costs a
-single read.
+Strict option decoding is centralized in `DecodeOptions`, so an unknown key in a backend's options block fails identically for every backend and the rule cannot drift. If the operator names a backend in config and an injected store reports a different one, the run refuses with an error naming both; naming no backend leaves the choice to the caller.
 
-The switch to disable this is spelled `no_require_read_before_update`, one of two negative switches in the memory config.
-Both are phrased as opt-outs so that omitting them leaves the safe behavior in place.
+## Read-only memory
 
-## The tools
+With `read_only` set, the write and delete tools are not registered and the system note does not mention them, because the model spends a call on any tool it can see. The setting exists for a fleet endpoint that takes caller-supplied prompt text, which can otherwise be talked into planting something a later run reads back as its own note.
 
-Four tools, all pure. They receive a `Prompter` and ignore it, because none of them needs a terminal.
-
-| Tool | Parameters | Success | Miss |
-|------|-----------|---------|------|
-| `memory_list` | none | `{"memories": [{"key", "description"}]}` sorted by key | error only |
-| `memory_read` | `key` | `{"found": true, "key", "description", "content"}` | `{"found": false, "reason"}` |
-| `memory_write` | `key`, `description`, `content`, optional `overwrite` | `{"written": true}` | `{"written": false, "reason"}` |
-| `memory_delete` | `key` | `{"deleted": true}` | `{"deleted": false}` |
-
-`memory_list` is described to the model as the live view, in contrast to the index captured in its instructions at the
-start of the run. `memory_write` explicitly tells the model not to write frontmatter itself and restates the key
-charset, so the common failure is prevented by the description rather than caught by validation.
-
-`content` is a `*string` in the read result so that an empty body still serializes as `"content": ""` instead of
-vanishing from the object.
-
-Every handler tolerates a nil store and returns an error rather than panicking. That is what makes
-`MemoryTools(cfg, nil)` safe for `fisk info` to call when it only needs to enumerate names offline.
-
-Traced output for the three key-taking tools runs the model-supplied key through `util.SanitizeForTerminal` before it
-reaches the screen, falling back to the bare tool name on a decode failure.
-
-None of these tools can be served over MCP or a2a. They declare no serving exposure, which the serving surfaces apply
-per tool, and the configuration validator independently rejects any name but the two knowledge tools in the MCP
-allowlist. Both gates must pass, so neither one alone is load-bearing.
-
-## Failing at construction
-
-Every memory misconfiguration is a startup error, never a surprise at the first tool call. Unknown backend, unknown
-option key, unwritable directory, missing bucket, bucket with a TTL, undersized bucket, illegal prefix, and a missing
-NATS connection all fail before the agent runs. Option decoding uses `DisallowUnknownFields` through a single shared
-`DecodeOptions` helper, so a typo fails as loudly as a bad top-level YAML key and the strict rule cannot drift between
-backends.
-
-## Growth points
-
-Several parts are generalized slightly ahead of need, and the comments say so.
-
-- `ErrStale` is optional in the contract and unused by the file backend, but the tool layer already handles it. The file
-  backend can gain the guard with no tool change.
-- `frontmatter` has one field today. The typed struct plus the lenient `Parse` is the growth path for more header keys.
-- `RuntimeEnv` is a struct rather than two parameters so a future per-run value is a new field instead of a signature
-  change across every backend. Today each backend ignores the other's field.
-- `RegisterOption` exists for one option.
-
-`internal/agenttest.FakeMemoryStore` is a third implementation of `Store`, written in a separate package to prove the
-interface is implementable from outside using only exported identifiers. It is test-only and enforces neither validation
-nor caps.
+All four memory tools carry an empty `ExposeSpec`, which keeps them off the MCP and A2A surfaces. The builtin constructor panics on a nil spec, so that decision has to be made explicitly for every tool.
 
 {{% notice style="tip" title="Next" %}}
-[Knowledge]({{% relref "knowledge" %}}) covers the other store an agent reads from, where the content is operator-owned
-rather than model-written.
+Memory is what the model writes. For what the operator supplies, continue to [Knowledge]({{% relref "knowledge" %}}). For how revisions survive a suspend, see [Durable state]({{% relref "state" %}}).
 {{% /notice %}}

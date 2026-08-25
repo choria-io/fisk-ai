@@ -1,220 +1,126 @@
-# Sessions and replay
+# Durable state
 
-A checkpointed run writes an append-only journal. Nothing about the run's configuration is stored: the fold reconstructs
-the conversation, and everything else is rebuilt from the config file. That is what makes a resumed run verifiable rather
-than merely restarted.
+A run writes an append-only journal. Nothing is cached beside it: the conversation, the counters and the resume position are all recomputed from the records, so they cannot drift from what happened.
 
 {{% notice style="note" title="Where it lives" %}}
-`internal/runstate` holds the format and the fold. Key files: `record.go`, `state.go`, `fingerprint.go`, `store.go`,
-`validate.go`, `schemas.go`. Backends are `internal/runstate/file` and `internal/runstate/jetstream`. The CLI surfaces
-are `session_command.go` and `resume_replay.go`.
+`internal/runstate` holds the record model (`record.go`), the fold (`state.go`), the store contract (`store.go`), the shared append rules (`validate.go`), the resume gate's fingerprint (`fingerprint.go`) and the embedded JSON schemas. `internal/runstate/file` and `internal/runstate/jetstream` are the backends. `internal/tasks` is a separate store for a different question.
 {{% /notice %}}
 
-## Records
+## Records and sequence
 
-A record is a sequence number, a protocol id, and exactly one payload. Sequence starts at 1 on the meta record and is the
-sole ordering authority.
-
-The protocol ids sit under `io.choria.fisk-ai.v1.session.*`. The namespace constant is spelled out by hand rather than
-imported from the A2A package, so storage does not depend on the protocol package, with a comment noting it must track
-the other. The intent is stated plainly: the record stream maps one to one onto the durability journal today and onto the
-A2A event stream later, so one model backs both local resume and remote streaming.
+Ten protocol ids, one shape each, with the id in the body rather than in a subject or a filename, so one record read anywhere can be validated without knowing where it came from. A JetStream record body is byte-identical to a file journal line, so a run migrates between backends unchanged.
 
 <figure class="cm-diagram">
-  <svg viewBox="0 0 760 280" role="img" aria-label="Journal write order across one run, folded into a run state">
+  <svg viewBox="0 0 760 250" role="img" aria-label="Journal records folded into a resumable run state">
     <defs>
       <marker id="st-ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--cm-accent)"/></marker>
     </defs>
-    <rect x="20" y="30" width="130" height="54" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
-    <text class="cm-svg-label" x="85" y="53" text-anchor="middle" style="fill:var(--cm-accent)">Meta</text>
-    <text class="cm-svg-sub" x="85" y="70" text-anchor="middle">seq 1, fingerprint</text>
-    <rect class="cm-svg-box" x="168" y="30" width="130" height="54" rx="8"/>
-    <text class="cm-svg-label" x="233" y="53" text-anchor="middle">Assistant</text>
-    <text class="cm-svg-sub" x="233" y="70" text-anchor="middle">before any tool</text>
-    <rect class="cm-svg-box" x="315" y="30" width="130" height="54" rx="8"/>
-    <text class="cm-svg-label" x="380" y="53" text-anchor="middle">ToolResult</text>
-    <text class="cm-svg-sub" x="380" y="70" text-anchor="middle">one per tool</text>
-    <rect class="cm-svg-box" x="462" y="30" width="130" height="54" rx="8"/>
-    <text class="cm-svg-label" x="527" y="53" text-anchor="middle">User</text>
-    <text class="cm-svg-sub" x="527" y="70" text-anchor="middle">chat follow-up</text>
-    <rect class="cm-svg-box" x="610" y="30" width="130" height="54" rx="8"/>
-    <text class="cm-svg-label" x="675" y="53" text-anchor="middle">Terminal</text>
-    <text class="cm-svg-sub" x="675" y="70" text-anchor="middle">once, at the end</text>
-    <line x1="150" y1="57" x2="162" y2="57" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#st-ah)"/>
-    <line x1="298" y1="57" x2="309" y2="57" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#st-ah)"/>
-    <line x1="445" y1="57" x2="456" y2="57" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#st-ah)"/>
-    <line x1="592" y1="57" x2="604" y2="57" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#st-ah)"/>
-    <path d="M20,104 L20,120 L740,120 L740,104" fill="none" stroke="var(--cm-faint)" stroke-width="2"/>
-    <text class="cm-svg-sub" x="380" y="140" text-anchor="middle">strictly increasing seq, fsynced or write-once per subject</text>
-    <line x1="380" y1="146" x2="380" y2="186" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#st-ah)"/>
-    <rect x="250" y="192" width="260" height="54" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
-    <text class="cm-svg-label" x="380" y="215" text-anchor="middle" style="fill:var(--cm-accent)">Fold(records)</text>
-    <text class="cm-svg-sub" x="380" y="232" text-anchor="middle">pure, no IO, derives everything</text>
-    <text class="cm-svg-sub" x="130" y="219" text-anchor="middle">a crash loses at</text>
-    <text class="cm-svg-sub" x="130" y="234" text-anchor="middle">most one tool result</text>
+    <rect class="cm-svg-box" x="20" y="30" width="115" height="44" rx="8"/>
+    <text class="cm-svg-label" x="77" y="50" text-anchor="middle">meta</text>
+    <text class="cm-svg-sub" x="77" y="65" text-anchor="middle">seq 1</text>
+    <rect class="cm-svg-box" x="150" y="30" width="115" height="44" rx="8"/>
+    <text class="cm-svg-label" x="207" y="50" text-anchor="middle">assistant</text>
+    <text class="cm-svg-sub" x="207" y="65" text-anchor="middle">seq 2</text>
+    <rect class="cm-svg-box" x="280" y="30" width="115" height="44" rx="8"/>
+    <text class="cm-svg-label" x="337" y="50" text-anchor="middle">tool_result</text>
+    <text class="cm-svg-sub" x="337" y="65" text-anchor="middle">seq 3</text>
+    <rect class="cm-svg-box" x="410" y="30" width="115" height="44" rx="8"/>
+    <text class="cm-svg-label" x="467" y="50" text-anchor="middle">decision</text>
+    <text class="cm-svg-sub" x="467" y="65" text-anchor="middle">seq 4</text>
+    <rect class="cm-svg-box" x="540" y="30" width="115" height="44" rx="8"/>
+    <text class="cm-svg-label" x="597" y="50" text-anchor="middle">terminal</text>
+    <text class="cm-svg-sub" x="597" y="65" text-anchor="middle">seq 5</text>
+    <line x1="77" y1="74" x2="77" y2="100" stroke="var(--cm-faint)" stroke-width="2"/>
+    <line x1="207" y1="74" x2="207" y2="100" stroke="var(--cm-faint)" stroke-width="2"/>
+    <line x1="337" y1="74" x2="337" y2="100" stroke="var(--cm-faint)" stroke-width="2"/>
+    <line x1="467" y1="74" x2="467" y2="100" stroke="var(--cm-faint)" stroke-width="2"/>
+    <line x1="597" y1="74" x2="597" y2="100" stroke="var(--cm-faint)" stroke-width="2"/>
+    <line x1="77" y1="100" x2="597" y2="100" stroke="var(--cm-faint)" stroke-width="2"/>
+    <line x1="380" y1="100" x2="380" y2="129" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#st-ah)"/>
+    <rect x="290" y="135" width="180" height="50" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
+    <text class="cm-svg-label" x="380" y="157" text-anchor="middle" style="fill:var(--cm-accent)">Fold</text>
+    <text class="cm-svg-sub" x="380" y="174" text-anchor="middle">pure, no IO</text>
+    <line x1="470" y1="160" x2="534" y2="160" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#st-ah)"/>
+    <rect class="cm-svg-box" x="540" y="135" width="180" height="50" rx="8"/>
+    <text class="cm-svg-label" x="630" y="157" text-anchor="middle">RunState</text>
+    <text class="cm-svg-sub" x="630" y="174" text-anchor="middle">messages, counters</text>
+    <text class="cm-svg-sub" x="360" y="222" text-anchor="middle">seq is the ordering authority: a duplicate is skipped, a gap is an error</text>
   </svg>
-  <figcaption>The assistant turn becomes durable before any tool runs, and each tool result as it completes.</figcaption>
+  <figcaption>Everything the resume needs is derived. Nothing is stored twice.</figcaption>
 </figure>
 
-## Write order is the durability argument
+`CheckAppend` is the shared rule so the two backends cannot drift: at or below the last sequence is a duplicate to skip, one above is next, anything higher is a gap. Its contract says explicitly not to fold the advance into the helper, because the caller must advance only after the record is durably stored, so a torn write re-appends the same sequence instead of losing it. The file backend advances after fsync, the JetStream backend after the ack.
 
-Every append goes through one helper that is a no-op when the journal is nil, so an unchecked run costs nothing.
+The file backend fsyncs every record and fsyncs the directory on a new journal's first write. It drops an unparsable final line as a torn tail but treats an interior parse failure as corruption, which is only valid because the file is append-only and synced. JetStream enforces append-only at the server with one message per subject and a discard-new policy, and refuses a stream with a maximum age, since stored runs would silently expire.
 
-- The **assistant record** is written before any tool executes, so a crash midway through a batch resumes without re-paying
-  for that model call.
-- **One tool-result record** is written as each tool completes, so a crash loses at most one tool.
-- A **user record** is written only for a free-standing interactive follow-up. The initial prompt lives in the meta
-  record and tool results in their own records. A journal failure here ends the session before the turn, so the journal
-  stops at the last coherent boundary rather than recording assistant turns with no preceding user message.
-- The **terminal record** is written once, at the true end, carrying the reason and any error text. A failed terminal
-  write is a warning, not a failure.
+## Folding
 
-`CheckAppend` decides whether an append is a duplicate, a gap, or valid, but the backend advances its own last-sequence
-counter. The doc comment explicitly forbids folding the advance into the helper: the writer must advance only after the
-record is durably stored, which is what makes a torn or failed write re-append the same sequence instead of losing it.
+`Fold` is pure. It requires the first record to be meta, requires the version to match exactly in both directions, and requires strictly increasing sequences. It walks the records keeping a current assistant turn, and commits that turn, appending the assistant message plus a synthetic user message of tool results, when the next assistant record begins or a user follow-up arrives. A trailing turn with unanswered tool calls becomes the pending batch instead.
 
-## The fold
+Consecutive user turns are merged, because the API rejects two user messages in a row.
 
-`Fold` is pure and does no IO. Counters and the resume position are derived from the records rather than stored, so they
-cannot drift from the recorded events.
+An `optional` flag carries forward compatibility, and may be set only where a reader that skips the record behaves more conservatively rather than differently. A record whose absence would change a decision in the permissive direction needs a version bump. A deferral record must never carry the flag. New fields are added with `omitempty` and a documented fold-as-zero rule instead.
 
-Two invariants define the output:
+## The resume gate
 
-<dl class="cm-kv">
-  <dt>Messages</dt><dd>Always ends on a boundary the model API would accept. An in-flight tool batch never appears here.</dd>
-  <dt>Pending</dt><dd>Holds the partly-answered assistant turn: the message, its iteration, its stop reason, the results so far, and the set of answered tool-use ids.</dd>
-</dl>
+The fingerprint records the configuration a stored conversation was written under, and each field is classed hard, blocking, tools or budget.
 
-Role alternation is reconstructed rather than stored. A user record holds only the newly typed blocks, never a merged
-view, and the fold re-derives the same merge the live path performs. Recording the merged message instead would double
-the tool-result blocks the fold already appended. A test asserts both paths reconstruct an identical conversation.
+| Class | Fields | Behavior |
+|---|---|---|
+| Hard | Provider | Refused, and `--force` cannot cross it |
+| Blocking | Model, system prompt hash, thinking mode, reasoning effort | Refused unless forced. Each can leave a history the provider will not accept |
+| Tools | Tool set hash | Never refused. It drops standing approvals and warns, because a moved tool set invalidates the grants rather than the stored conversation |
+| Budget | Max tokens, max iterations | Reported only. A served conversation's caller may lower both per request |
 
-On resume, the loop first completes the pending turn: it reuses journaled results for answered tool-use ids, runs only the
-unanswered ones, journals each, and then commits the assistant turn together with the full result set.
+The system prompt is stored as a hash, never verbatim. The resume reminder is appended to the prompt after the fingerprint is computed, so it can never perturb the comparison.
 
-## The fingerprint
+## Claiming a run
 
-The fingerprint records the configuration the journal was written against: provider, model, a hash of the system prompt,
-a hash of the tool set, thinking mode, max tokens, and max iterations.
+A resume appends a claim record before it does anything else. The payload is diagnostic; the append moves the journal's tail, so any worker that still believes it holds the run is refused at its own next append.
 
-Continuing a conversation against a changed configuration can be genuinely incoherent. A stored tool call may reference a
-tool that no longer exists, or a thinking signature may be rejected outright. So the gates run in a fixed order.
+The claim lands before this worker causes any effect, and the last sequence is read after the claim, because reading it first would make the runner's first record collide with the claim's sequence and be folded away as a duplicate. A claim that fails is fatal to the resume, since skipping it when the store is briefly unreachable would leave a second worker free to append.
 
-| Gate | Behavior |
-|------|----------|
-| Already completed | Refused. Only `ReasonCompleted` blocks a resume |
-| Interactivity mismatch | Refused in both directions, as defense in depth behind the CLI's own reconciliation |
-| Provider changed | Refused unconditionally. `--force` does not apply |
-| Anything else changed | Refused unless `--force`, with a per-field diff |
+The fold treats a claim as completely inert: a claim written on resume lands between an assistant turn and the tool results answering it, so touching the current turn there would commit it early and destroy the pending batch the resume exists to finish.
 
-Provider is checked before drift so the message is unambiguous, and it is deliberately excluded from `Equal` and `Diff`
-so those govern only forceable drift.
+The backends enforce it differently. The file backend takes an exclusive `flock` on a lock file for the journal's lifetime, released by the kernel on exit, so a crash leaves no stale lock. JetStream publishes with an expected-last-sequence condition and disambiguates a rejection by reading the target subject: the same message id means a lost ack to adopt, sequence one means a concurrent creator, anything else means another writer.
 
 {{% notice style="warning" title="Load-bearing decision" %}}
-The system prompt is only ever hashed, never stored verbatim, and there is a test named for exactly that: it must not leak
-a sensitive prompt into the fingerprint on disk. Three things are deliberately outside the fingerprint so that data drift
-never blocks a resume: the memory index, the resume reminder, and the prompt-cache setting. All three are appended after
-the fingerprint is computed and none is persisted.
+Standing grants survive a suspend, which is what they are for, but one-shot call approvals are cleared by a terminal record, so an approval the run never reached is spent rather than authorizing a later dispatch nobody approved. Neither record type carries a denial.
 {{% /notice %}}
 
-A resume seeds the sequence from the journal's last, the iteration from the recorded next, plus the pending turn, the
-messages, and the six counters.
+{{% notice style="warning" title="Load-bearing decision" %}}
+No credential of this process reaches the journal. The system prompt is only ever a hash. The one credential stored is the caller's conversation token: reading it requires store access that already grants writing the journal, it is never logged, and it is worth nothing without the identity that minted it.
+{{% /notice %}}
 
-An interactive resume gets a fresh per-turn iteration budget from where it left off, because a chat's grown cap is not
-stored, only the position. A one-shot resume keeps the absolute cumulative cap.
+## Answering a deferred call
 
-`resumeAtInputBoundary` skips the first loop entirely when the session is interactive, has no pending turn, ends on an
-assistant message, and did not stop on a paused turn. The operator lands at the input bar rather than watching a
-redundant model call.
+Supplying a result loads and validates before opening the journal, so a refusal costs no lock. It then writes one ordinary tool result record and nothing else, which makes the next resume an ordinary resume.
 
-A run resting on a paused-turn boundary raises `WarnResumePausedTurn`, since the server-side state it depends on may have
-expired.
+The check looks at the committed conversation first. Answering a deferral completes and commits its turn, so reporting it as never deferred would tell somebody answering twice that their first answer never landed.
 
-The resume reminder is advisory: it tells the model that tool results may be stale and to re-verify before taking
-state-changing actions. It is not enforcement.
+## The task record
 
-## Two backends
+`internal/tasks` stores what was asked and what came back. The journal holds how the work was done, which is private working state, and a caller is never sent there for an answer: not because it is hidden, but because depending on it would make every internal change a breaking one.
 
-Both store byte-identical record bodies, so a run migrates between them unchanged. There is a test asserting the two fold
-identically.
+| | Journal | Task record |
+|---|---|---|
+| Shape | Append-only, folded over N entries | Rewritten in place, two observable states |
+| Contents | Neutral messages and this process's working state | The a2a messages verbatim |
+| Id | Minted or derived | Taken from the request, so one identifier threads request, record, trace and session |
+| Audience | This software | The caller |
 
-| | `file` | `jetstream` |
-|---|--------|-------------|
-| Unit | One line in one JSON-lines file | One message on one subject |
-| Write-once | Append-only plus fsync | `MaxMsgsPerSubject=1` with discard-new-per-subject |
-| Mutual exclusion | Advisory `flock` on a per-run lock file | Per-run tail fence on the expected last sequence |
-| Retry safety | Last sequence advances only after fsync | A nonce message id lets a lost ack be adopted |
-| Torn tail | Dropped as the final line only | Impossible; a message is atomic |
-| Crash recovery | The kernel releases the flock | Nothing to release |
-| Requires NATS | No | Yes |
+The state vocabulary reports only what the store can observe. Queued, claimed, running and retrying belong to the queue, and duplicating them would give two answers to one question. Completing refuses a second write, because with at-least-once delivery the loser is usually the failed worker and last-write-wins would let a failure replace an answer that succeeded.
 
-The file backend syncs the line, and on the first write of a new journal also syncs the directory so the entry survives a
-crash, and only then advances its counter. Reads drop an unparsable final line as a torn tail but treat an interior parse
-failure as corruption, which is valid only because the file is append-only and fsynced.
+## Reserved and not yet wired
 
-The JetStream backend binds a stream and never creates one; the operator owns durability. The subject prefix is derived
-from the stream's single wildcard subject rather than configured, and zero or multiple wildcards are construction
-failures. `checkStreamConfig` rejects, at construction, a stream whose per-subject message limit is not 1, whose discard
-policy is not discard-new per subject, that has any max age, or whose max message size is below the record floor. Each
-error names the exact `nats stream` fix, and a missing stream produces a ready-to-run `nats stream add` line.
+Nothing outside its own file backend imports `internal/tasks` yet, and there is no stream backend, though the registry hooks for one exist and the package doc names it.
 
-Its exclusion is not a lock. Appends are fenced against the expected last sequence for the run's subject, so a stale
-writer is rejected rather than interleaving. A wrong-last-sequence error is disambiguated by reading the target subject
-back: a matching message id means this writer's own ack was lost and the record can be adopted, and anything else is a
-genuine conflict.
+The schema validator is exercised only by tests. Neither backend validates before writing and neither validates before folding, so an entry that violates its schema is written and folded without complaint.
 
-Non-Unix platforms get a stub file lock that does not exclude. The comment is explicit that those platforms rely on the
-operator not resuming a run twice.
+Call approval records are read and spent but never written here: they are journaled by whatever supplied the operator's answer while the run was suspended, and that out-of-band approval channel does not exist yet.
 
-## Where a run is stored
-
-Runs are never stored in the working directory, so state does not leak into repositories, and `DefaultDir` lives in the
-core rather than the file backend precisely so that contract stays visible to every backend.
-
-Sessions are also not namespaced by identity, unlike memory. A resume must find its run whatever identity is active, so
-the registry passes no identity to a session backend at all.
-
-`ValidateID` is both a format rule and a path-traversal defense: a single safe path component that is also a valid NATS
-subject token, bounded to 128 characters so the same ids work in both backends without producing an oversized filename.
-Both stores validate before an id becomes a key or a path, and listings skip ids that fail it.
-
-`Load` reads and folds without locking; `Open` takes the lock for appending. Resume reads and gates with `Load`, then
-takes the lock with `Open`, so inspection never blocks a running session. The `ErrLocked` message names neither a process
-nor a run, because a flock is per open file description and a caller genuinely cannot tell which holder it hit.
-
-## Version 3 is refused in both directions
-
-A newer snapshot may carry record shapes this build cannot fold. An older one predates the provider-neutral record format
-and does not round-trip. Refusing beats silently mis-folding, so neither is accepted.
-
-## Replay
-
-Three renderings share one folded state: live narration to stderr on resume, a plain-text dump for inspection, and
-structured lines for the full-screen transcript viewer.
-
-`transcriptLines` pairs each tool call with its result by tool-use id across the whole conversation, so calls and results
-interleave as they did live. An unanswered call in a suspended turn simply has no result. All three walks handle the
-pending turn explicitly after the committed messages, since the in-flight turn lives outside the conversation.
-
-A read-only view renders tool calls without loading the tool registry, while the live resume path renders the resolved
-command line when the tool is still known.
-
-## Reserved and unused
-
-- **The JSON schema validator is not wired into any write or read path.** Five schemas exist, are embedded, and are
-  compiled, and nothing in production calls them; only tests do. It exists as the published contract for external and
-  future consumers, and for parity with A2A, where the equivalent validator is on the live path.
-- The message and result objects in those schemas are intentionally opaque, so provider-specific blocks round-trip
-  verbatim without the schema constraining them.
-- **`Journal.Records()` has no production caller.** The resume path uses the unlocked load followed by a locked open.
-- **`Backends()` has no CLI surface**, despite its doc comment; it only feeds the unknown-backend error message.
-- **`RunInfo.Created` is populated and never displayed.** `session ls` shows only the updated time.
-- `SessionInteractive` double-dials NATS on a JetStream resume, once for the pre-flight meta read and once for the resume
-  itself. That is accepted for simplicity.
-- `RemoteToolCalls` and the per-record remote flag are counted and displayed, but resume logic does not act on them.
-- `internal/agenttest.FakeSessionStore` is an in-memory implementation written in a separate package to prove the
-  interface is implementable from outside. It reuses the shared id and append validation.
+The two backends disagree in one documented case. The file backend folds every run to build its listing; JetStream rejected that as too expensive and summarizes from two records, so a run with a turn in flight is reported open by one and can be reported completed by the other.
 
 {{% notice style="tip" title="Next" %}}
-[Memory]({{% relref "memory" %}}) covers the other durable store, and why it is deliberately kept out of the fingerprint.
+Continue to [Serving]({{% relref "serving" %}}) for the surfaces that create these sessions, or [The agent loop]({{% relref "agent-loop" %}}) for what writes each record.
 {{% /notice %}}

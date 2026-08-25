@@ -1,250 +1,103 @@
 # Model providers
 
-`internal/llm` is the domain model for talking to a model, and it imports no vendor SDK anywhere. Exactly one package,
-`internal/llm/anthropic`, translates that model to and from the Anthropic SDK. Everything else in the tree, including the
-durable journal, speaks the neutral types.
+`internal/llm` describes a conversation in types that name no vendor. `internal/llm/anthropic` is the only package in the tree that imports the Anthropic SDK, and it is the only place a concrete API is spoken.
 
 {{% notice style="note" title="Where it lives" %}}
-`internal/llm` holds the contracts. Key files: `types.go` for the message model, `provider.go` for the interface,
-`request.go`, `response.go`, `middleware.go`, `registry.go`. `internal/llm/anthropic` holds the only provider:
-`provider.go`, `codec.go`, `tools.go`. `internal/llm/README.md` is the normative contract document and the best source for
-the reasoning.
+`internal/llm` holds the neutral model and the registry: `types.go`, `request.go`, `response.go`, `provider.go`, `registry.go`, `middleware.go`. `internal/llm/anthropic` holds the backend: `provider.go`, `codec.go`, `tools.go`. `internal/llm/README.md` is written as the contract a second provider must satisfy.
 {{% /notice %}}
+
+## The neutral model
+
+A `Message` is a role and a list of content blocks. `ContentBlock` is a union with exactly one of `Text`, `Thinking`, `ToolUse`, `ToolResult` or `Provider` set.
+
+<dl class="cm-kv">
+  <dt>ThinkingBlock.Signature</dt><dd>A byte slice, because the neutral model never inspects or renders it. It only preserves it, and the model rejects a turn whose signature was dropped or altered.</dd>
+  <dt>ToolUseBlock.Input</dt><dd>Raw JSON, so arguments survive with no schema-shaped intermediate in between.</dd>
+  <dt>ProviderBlock</dt><dd>The escape hatch for server-side blocks the neutral model does not name: tool search results, web search results, redacted thinking. Kind plus faithful raw JSON.</dd>
+  <dt>SystemBlocks</dt><dd>A slice rather than a string, so a provider that supports separate system blocks can place a cache breakpoint on the last one.</dd>
+</dl>
+
+`ThinkingMode` has three states: unset sends no parameter at all, where off sends the parameter set false. `ReasoningEffort` is a plain string rather than an enum, since the levels belong to the model and a newer one may take a level this build never heard of.
+
+`Usage` carries five numbers, and `Thinking` counts inside `Out` rather than adding to it.
+
+## One call, end to end
 
 <figure class="cm-diagram">
-  <svg viewBox="0 0 760 350" role="img" aria-label="The neutral message model and the single package allowed to speak an SDK">
+  <svg viewBox="0 0 760 250" role="img" aria-label="A neutral request encoded to the Anthropic API and decoded back through one codec">
     <defs>
-      <marker id="pv-ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--cm-accent)"/></marker>
+      <marker id="prov-ah" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="var(--cm-accent)"/></marker>
     </defs>
-    <line x1="482" y1="12" x2="482" y2="304" stroke="var(--cm-accent3)" stroke-width="2" stroke-dasharray="6 5"/>
-    <text class="cm-svg-sub" x="625" y="330" text-anchor="middle" style="fill:var(--cm-accent3)">an SDK is spoken only right of this line</text>
-    <rect class="cm-svg-box" x="20" y="30" width="170" height="56" rx="8"/>
-    <text class="cm-svg-label" x="105" y="54" text-anchor="middle">agent loop</text>
-    <text class="cm-svg-sub" x="105" y="71" text-anchor="middle">builds one request</text>
-    <rect x="250" y="30" width="200" height="56" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
-    <text class="cm-svg-label" x="350" y="54" text-anchor="middle" style="fill:var(--cm-accent)">llm.Request</text>
-    <text class="cm-svg-sub" x="350" y="71" text-anchor="middle">provider-neutral</text>
-    <rect class="cm-svg-box" x="510" y="30" width="230" height="56" rx="8"/>
-    <text class="cm-svg-label" x="625" y="54" text-anchor="middle">anthropic codec</text>
-    <text class="cm-svg-sub" x="625" y="71" text-anchor="middle">the only SDK importer</text>
-    <line x1="190" y1="58" x2="244" y2="58" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#pv-ah)"/>
-    <line x1="450" y1="58" x2="504" y2="58" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#pv-ah)"/>
-    <rect class="cm-svg-box" x="510" y="146" width="230" height="56" rx="8"/>
-    <text class="cm-svg-label" x="625" y="170" text-anchor="middle">middlewares</text>
-    <text class="cm-svg-sub" x="625" y="187" text-anchor="middle">http debug, then tracer</text>
-    <line x1="625" y1="86" x2="625" y2="140" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#pv-ah)"/>
-    <rect class="cm-svg-box" x="510" y="248" width="230" height="56" rx="8"/>
-    <text class="cm-svg-label" x="625" y="272" text-anchor="middle">Messages API</text>
-    <text class="cm-svg-sub" x="625" y="289" text-anchor="middle">no streaming path</text>
-    <line x1="625" y1="202" x2="625" y2="242" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#pv-ah)"/>
-    <rect x="250" y="248" width="200" height="56" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
-    <text class="cm-svg-label" x="350" y="272" text-anchor="middle" style="fill:var(--cm-accent)">runstate journal</text>
-    <text class="cm-svg-sub" x="350" y="289" text-anchor="middle">stores llm.Message</text>
-    <line x1="350" y1="86" x2="350" y2="242" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#pv-ah)"/>
+    <rect class="cm-svg-box" x="20" y="50" width="150" height="50" rx="8"/>
+    <text class="cm-svg-label" x="95" y="72" text-anchor="middle">llm.Request</text>
+    <text class="cm-svg-sub" x="95" y="89" text-anchor="middle">neutral value</text>
+    <line x1="170" y1="75" x2="209" y2="75" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#prov-ah)"/>
+    <rect x="215" y="50" width="150" height="50" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
+    <text class="cm-svg-label" x="290" y="72" text-anchor="middle" style="fill:var(--cm-accent)">buildParams</text>
+    <text class="cm-svg-sub" x="290" y="89" text-anchor="middle">cache, thinking</text>
+    <line x1="365" y1="75" x2="424" y2="75" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#prov-ah)"/>
+    <rect class="cm-svg-box" x="430" y="50" width="160" height="50" rx="8"/>
+    <text class="cm-svg-label" x="510" y="72" text-anchor="middle">Messages.New</text>
+    <text class="cm-svg-sub" x="510" y="89" text-anchor="middle">one blocking call</text>
+    <line x1="510" y1="100" x2="510" y2="144" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#prov-ah)"/>
+    <rect x="430" y="150" width="160" height="50" rx="8" fill="color-mix(in srgb, var(--cm-accent) 12%, transparent)" stroke="var(--cm-accent)"/>
+    <text class="cm-svg-label" x="510" y="172" text-anchor="middle" style="fill:var(--cm-accent)">block codec</text>
+    <text class="cm-svg-sub" x="510" y="189" text-anchor="middle">one representation</text>
+    <line x1="430" y1="175" x2="371" y2="175" stroke="var(--cm-accent)" stroke-width="2" marker-end="url(#prov-ah)"/>
+    <rect class="cm-svg-box" x="215" y="150" width="150" height="50" rx="8"/>
+    <text class="cm-svg-label" x="290" y="172" text-anchor="middle">llm.Response</text>
+    <text class="cm-svg-sub" x="290" y="189" text-anchor="middle">usage, stop reason</text>
+    <text class="cm-svg-sub" x="330" y="232" text-anchor="middle">block kinds the neutral model does not name survive byte for byte</text>
   </svg>
-  <figcaption>The neutral model is not only an abstraction over vendors. It is also the durable format, which is why lossless round-tripping is a hard requirement.</figcaption>
+  <figcaption>A reply and a journaled turn go through the same block codec, so they share one representation.</figcaption>
 </figure>
 
-## The interface
+There is no streaming. `Call` issues a single blocking request, and tool calls come back as ordinary `tool_use` blocks in the completed message. The provider is also the only enforcer of the per-call timeout.
 
-```go
-type Provider interface {
-	Call(ctx context.Context, req Request) (*Response, error)
-	Capabilities() Caps
-}
-```
+`buildParams` is split out from `Call` so request assembly is testable without a wire call. It builds the system blocks fresh on every call, which keeps a cache-control marker out of the value hashed into the run fingerprint.
 
-`Call` owns the wire call end to end, including the per-call timeout. `Caps` reports the neutral provider id, whether
-tool search is supported, and a declared maximum output.
+## Prompt caching and thinking
 
-Capabilities are declared rather than discovered, because neither Anthropic nor OpenAI expose capability flags at
-runtime. The set is deliberately minimal and grows when a second provider makes a real difference concrete rather than
-predicted.
+`buildParams` places two cache breakpoints: the tools-and-system one on the last system block, and the conversation-tail one at request level. The TTL is one hour for an interactive run and five minutes otherwise, because an operator can sit thinking for longer than five minutes and come back to an expired cache.
 
-## The neutral model is also the on-disk format
+Thinking blocks are stripped only when the mode is explicitly off. Stripping on unset would break the signature chain within a run, since the model emits thinking alongside `tool_use` and the next iteration has to echo it back. The stripper also returns the message untouched when everything would be removed, because an assistant turn with no content is rejected by the API.
 
-`runstate` records store `llm.Message` and `llm.ToolResultBlock` directly. An earlier version stored the Anthropic wire
-format and did not round-trip, which is why the record version refuses both older and newer snapshots.
-
-That makes lossless preservation a hard requirement rather than a nicety:
-
-- `ThinkingBlock.Signature` is `[]byte`. The neutral model never inspects or renders it; it only preserves it. The model
-  rejects a turn whose thinking signature was dropped or altered.
-- `ToolUseBlock.Input` is `json.RawMessage`, so arguments survive byte-for-byte with no schema-shaped intermediate.
-- `ProviderBlock{Kind, Raw}` is the escape hatch for a server-side block the neutral model does not name. `Kind` is the
-  provider's own discriminator and `Raw` its faithful JSON.
-
-A golden test asserts a byte-identical round-trip across thinking, redacted thinking, text, server tool use, web search
-results, tool use, and tool results. That test is the tripwire for the whole scheme.
-
-### One codec subtlety worth knowing
-
-`providerBlockToNeutral` reads the type discriminator out of the marshaled JSON rather than calling `GetType()`, because
-the SDK leaves each block's `Type` field at its zero value and fills the default only on marshal. A block with no
-discriminator is an error rather than a silently untyped passthrough.
-
-Coming back the other way, `repairToolSearchResult` rebuilds the entire content union from `Raw`. The SDK decoder drops
-`tool_references` on a successful tool-search result and mis-selects the error variant, so a plain unmarshal would lose
-data. The error variant already round-trips and is left alone.
-
-A response is routed through the same block codec as a stored message, so a reply and a journaled turn share one
-representation.
-
-## The registry, and credentials as a boundary
-
-Registration is by import side effect. The agent package blank-imports the provider, and a second provider is a second
-blank import there.
-
-```go
-func Register(name string, factory Factory, credentialEnvNames []string)
-```
-
-The credential list is a required positional argument, not an option. A provider cannot be registered without declaring
-its secrets.
+A 400 from a call that sent thinking or a reasoning effort gains a remedy hint. For thinking the remedy is removing the block rather than setting it false, since false is still a parameter and is rejected the same way.
 
 {{% notice style="warning" title="Load-bearing decision" %}}
-`llm.CredentialEnvNames()` is a security boundary, not documentation. Its union is stripped from the environment of every
-model-chosen tool subprocess, and it covers every linked provider rather than only the active one. Selector variables
-such as `ANTHROPIC_PROFILE` and `XDG_CONFIG_HOME` are deliberately excluded, since they hold no secret and stripping them
-buys nothing a tool could not rediscover. An injected `agent.Options.Provider` bypasses the registry, so its credentials
-are not in this union and are therefore not scrubbed.
+Opaque payloads round-trip byte for byte. A thinking signature and a provider block's raw JSON are preserved exactly, and a golden round-trip test guards it. The discriminator for an unnamed block is read from the marshaled JSON rather than from the SDK's accessor, because the SDK leaves the type field at its zero value and fills the default only on marshal.
 {{% /notice %}}
 
-`Register` panics on an empty name, a nil factory, or a duplicate, mirroring `database/sql.Register`. Each is a
-programming error resolvable at compile time.
+The codec also repairs a documented SDK round-trip defect: decoding a successful tool-search result drops a required field and selects the error variant, so the whole content union is rebuilt rather than patched.
 
-## The request
+## Registration and identity
 
-`Request` carries no client, no credential, and no timeout, so it is a plain value a test can build and assert on.
+A provider registers itself from `init` with a name, a factory, and the environment variables that carry its secrets. That third argument is positional and required, so a provider cannot be registered without declaring them. The union across every linked-in provider is stripped from tool subprocess environments regardless of which provider is active.
 
-Two fields deserve a note. `SystemBlocks` is a slice rather than a string because Anthropic sends separate system blocks
-and places the cache breakpoint on the last one; a string-system provider would join them. `Interactive` exists only to
-select a longer cache TTL.
+The list names the secret-bearing variables only, not selector variables like a profile or config directory, which hold no secret and are guarded by file permissions.
 
-The SDK system slice is rebuilt fresh on every call, specifically so marking its last element for caching cannot write
-through to any value the caller hashed into the run fingerprint. That has its own test.
+`Caps` separates two names. `Provider` is the neutral id stamped into the run fingerprint; `SemconvProvider` is the name the OpenTelemetry semantic conventions use. The two vocabularies do not always agree and answer to different owners.
 
-## Tool declaration
+{{% notice style="warning" title="Load-bearing decision" %}}
+Provider identity is a hard resume gate that `--force` cannot cross, and it is read off the resolved provider rather than the configuration, because an injected provider bypasses the registry. A stored thinking signature or provider block belongs to the provider that produced it.
+{{% /notice %}}
 
-`defer_loading` is emitted unconditionally, including a present `false`, so the rendered tool is a pure function of the
-neutral value rather than varying with its zero state.
+Capabilities are declared rather than discovered, since neither Anthropic nor OpenAI exposes capability flags at runtime. Middlewares are `net/http`-shaped type aliases rather than defined types, so a provider SDK expecting the same function shape accepts them unchanged and the caller never imports the SDK to install one.
 
-Schema rendering maps `properties` and `required` to dedicated SDK fields and forwards every other schema key verbatim
-through `ExtraFields`, notably `additionalProperties`. The `type` key is dropped because the SDK fixes it to object.
+## What is Anthropic-specific
 
-Strict mode is deliberately not used: its grammar compilation caps the total optional parameters across all tools, which a
-broad command tree exceeds.
+The two-breakpoint cache scheme and its TTL choice, the adaptive summarized thinking display, the BM25 tool-search tool, forwarding extra schema keys verbatim through the SDK's extension fields, and the stop-reason mapping, which is currently an identity cast because the values coincide. An unrecognized stop reason passes through rather than being lost.
 
-Deferral itself is decided in `util.BuildToolParams` over the combined local, remote, custom, and built-in count against a
-threshold of 10. It reports back whether anything actually deferred, so the tool-search tool is only requested when there
-is something to find.
+Only a plain-text tool result decomposes into the neutral shape. An image or multi-block result is preserved as a provider block instead of being flattened.
 
-## Middleware
+## Outstanding
 
-`Middleware` and `MiddlewareNext` are type aliases rather than defined types. That is what lets an `llm.Middleware` pass
-straight into the SDK's `option.WithMiddleware` unchanged.
+`Caps.MaxOutputTokens` is declared and nothing clamps a request against it. OpenAI is the named next target, over the Responses API where its own tool search lives, with an explicit decision to hand-roll an HTTP client rather than take on an SDK whose types would leak back through the neutral layer.
 
-Middlewares are assembled in the agent, where their lifecycle lives, not in the provider. The SDK wraps from last to
-first, so the first appended is outermost. With the current order the HTTP debug dump is outermost and the tracer sits
-closest to the wire.
+Chat Completions needs one message per tool result where Anthropic batches them into a single synthetic user message; a system prompt as a plain string makes the cache-breakpoint mechanism meaningless; and the Responses thinking round trip pairs encrypted content with item ids, which may need more than the single opaque signature field.
 
-<dl class="cm-kv">
-  <dt>HttpDebugMiddleware</dt><dd>Dumps the request via <code>GetBody</code> and the response by buffering and replacing it, so the SDK still parses normally. The sink is injectable so it cannot corrupt the full-screen UI.</dd>
-  <dt>Tracer.Middleware</dt><dd>JSON-lines trace of every request, response, and error. Nil-safe, and tracing never changes the call's outcome.</dd>
-</dl>
-
-Middleware is HTTP-level and therefore invisible to an injected provider. The `PreModelCall` and `PostModelCall` hooks are
-the provider-agnostic complement: they sit above the provider and fire either way.
-
-## No streaming, and what compensates
-
-There is no streaming path. `Call` uses the non-streaming Messages API only.
-
-The accommodation is on the output cap: the thinking-mode default of 16384 stays within the non-streaming ceiling that
-keeps responses clear of SDK HTTP timeouts. Streaming-shaped feedback is achieved at a coarser grain through per-turn
-events and the verbose request summary.
-
-## Retries
-
-Retries are delegated entirely to the SDK default of two retries, three attempts. Two consequences follow.
-
-The retry loop lives inside the middleware-wrapped handler's caller, so middlewares are re-entered per attempt. The
-tracer relies on exactly that: it reads the SDK's retry-count header to set `attempt`, giving each retry a new trace id
-while reusing the iteration number.
-
-All attempts share the one per-call deadline, because `Call` wraps the context before dispatching. So
-`llm.budget.call_timeout` bounds the attempt series, not each attempt.
-
-`Call` adds one error-shaping rule: a 400 while thinking is enabled is annotated with the suggestion to set
-`llm.thinking.enabled` to false, because older and compatibility models reject adaptive thinking.
-
-## Token accounting
-
-`Usage` has exactly four tiers: input, output, cache read, and cache create. The run sums all four, and the same four are
-journaled on each assistant record so a resume can reseed the totals.
-
-`InTokens` is the uncached remainder, which makes the summary line diagnostic. A healthy multi-iteration run shows a small
-input count and a climbing cache-read count. A silent cache miss shows cache reads stuck at zero against a large input
-count.
-
-The budget check sums all four tiers, so the cap measures total throughput and keeps its magnitude comparable to the
-pre-cache world.
-
-## Local and compatible endpoints
-
-Running against ollama, llama.cpp, or LM Studio is a first-class deployment, and four knobs exist mostly for it.
-
-`--base-url` or `ANTHROPIC_BASE_URL` is applied only when non-empty, so the SDK default endpoint is used otherwise.
-`util.ValidateBaseURL` requires http or https, rejects embedded userinfo, and requires https for any non-loopback host.
-Plain http is allowed only for `127.0.0.1`, `::1`, and `localhost`, so a local server keeps working. It does not resolve
-names, so a hostname that happens to resolve to loopback is not treated as loopback.
-
-Validation runs twice on purpose: once at the CLI boundary, so a bad base URL fails on a normal terminal before the
-HTTP debug file is created or the full-screen UI starts, and again inside `agent.Run`. That is what lets the provider
-factory declare construction infallible.
-
-<dl class="cm-kv">
-  <dt>llm.no_tool_search</dt><dd>The manual complement to the capability flag. The flag says tool search is possible; this switch turns it off for an endpoint where it is possible but unwanted, such as a proxy that does not implement the tool-search tool.</dd>
-  <dt>llm.no_prompt_cache</dt><dd>For a proxy that rejects or ignores <code>cache_control</code>. Disabling only raises cost; it never changes output.</dd>
-  <dt>llm.budget.max_output_tokens</dt><dd>Set it to fit an endpoint whose per-response limit is below the default.</dd>
-  <dt>llm.thinking.enabled</dt><dd>Off by default, because older and compatibility models reject adaptive thinking.</dd>
-</dl>
-
-A future `anthropic-compat` selector is anticipated, and the contract document is explicit that it must still report the
-same provider id when the backend semantics are identical, so it does not break resumes.
-
-## Provider identity gates a resume
-
-`Capabilities().Provider` is stamped into the run fingerprint, and it is the resolved provider's own id rather than the
-config selector. A provider change is a hard resume refusal that `--force` cannot cross, which is why `Provider` is
-excluded from the fingerprint's `Equal` and `Diff`: those govern only forceable drift.
-
-Prompt caching is deliberately outside the fingerprint, so toggling it never refuses a resume.
-
-## Reserved and unused
-
-- **Three exported codec functions have no non-test callers**: `ToolUseToNeutral`, `ToolResultToAnthropic`, and
-  `ToolResultFromAnthropic`. Their comments reference boundaries that now use neutral types end to end. They are
-  migration residue.
-- **`Caps.MaxOutputTokens` is declared but never read.** Nothing clamps or validates the per-call cap against a
-  provider's stated ceiling, and the Anthropic provider leaves it zero.
-- **`Providers()` has no caller** beyond the unknown-provider error message.
-- **The factory's error return is always nil today.** It exists for a future provider that can fail to construct.
-- **`StopStopSequence` is never branched on.** A stop-sequence reply with no tool call reads as a completed answer.
-- **Only one provider exists.** The declared next target is OpenAI, explicitly with no new SDK dependency, following the
-  hand-rolled client in the rag embedder rather than taking on an SDK whose types would leak back through this layer. The
-  known hard spots are enumerated in the README: per-tool-result messages versus Anthropic's batched synthetic user turn,
-  a string system prompt which voids the cache-breakpoint mechanism, and a thinking round-trip that may need more than a
-  single opaque field.
-- **Credential selection is not yet provider-conditional.** `--api-key` is hardwired to `ANTHROPIC_API_KEY` and
-  unconditionally required.
-- **`internal/util/anthropic.go` is named for the provider but contains no SDK reference** and is fully neutral. The name
-  is misleading rather than meaningful.
-- **A latent trap, not a bug today**: `Call` unconditionally applies its timeout, so a provider built with a zero timeout
-  would fail instantly. The run path always supplies a resolved value, and the one zero-timeout construction only reads
-  capabilities offline.
+Credential selection is hardwired to one variable today, so a second provider needs a per-provider convention before `provider: openai` stops requiring an Anthropic key.
 
 {{% notice style="tip" title="Next" %}}
-[Sessions and replay]({{% relref "state" %}}) covers what the journal does with these neutral messages, and why a
-provider change is the one refusal `--force` cannot override.
+Continue to [The agent loop]({{% relref "agent-loop" %}}) for what builds the request, or [Telemetry]({{% relref "telemetry" %}}) for what a call reports.
 {{% /notice %}}
