@@ -1,6 +1,6 @@
 # Knowledge
 
-Knowledge is the corpus the operator supplies. One SQLite file holds the documents, the lexical index and, when embeddings are configured, the vectors. The user-facing name is knowledge everywhere: the config block, the CLI command and the tool names. Go identifiers keep `rag`, because retrieval-augmented generation is the technique.
+Knowledge is the corpus the operator supplies. One SQLite file holds the documents, the lexical index and, when embeddings are configured, the vectors. The user-facing name is knowledge everywhere: the config block, the CLI command and the tool names. Go identifiers use `rag`, because retrieval-augmented generation is the technique.
 
 {{% notice style="note" title="Where it lives" %}}
 `internal/rag` holds the store and every operation on it. Key files: `store.go` for the lifecycle and format gate, `index.go` for the corpus walk, `chunk.go`, `embed.go`, `search.go`, `enumerate.go`, `integrity.go`, `watch.go`. `internal/toolkit/builtin/builtin_rag.go` is the tool surface; `rag_command.go` is the CLI.
@@ -124,5 +124,5 @@ The injection budget is the configured token count times four characters. Adding
 The `documents.title` column is written on every upsert and read by nothing; the matched-document type has no title field, so the write-only column stays unread. There is no migration path at all, by design. Indexing, the doctor and the watcher open no telemetry spans; only search, enumerate and the embedding batch do.
 
 {{% notice style="tip" title="Next" %}}
-Knowledge is what the operator supplies. For what the model writes, see [Memory]({{% relref "memory" %}}). For the surfaces that expose these tools, see [Serving]({{% relref "serving" %}}).
+Continue to [Durable state]({{% relref "state" %}}) for the third store and the journal a run is resumed from, or [Memory]({{% relref "memory" %}}) for what the model writes rather than the operator.
 {{% /notice %}}

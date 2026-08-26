@@ -1,6 +1,6 @@
 # Durable state
 
-A run writes an append-only journal. Nothing is cached beside it: the conversation, the counters and the resume position are all recomputed from the records, so they cannot drift from what happened.
+A run writes an append-only journal, and the conversation, the counters and the resume position are recomputed from the records, so they cannot drift from what happened.
 
 {{% notice style="note" title="Where it lives" %}}
 `internal/runstate` holds the record model (`record.go`), the fold (`state.go`), the store contract (`store.go`), the shared append rules (`validate.go`), the resume gate's fingerprint (`fingerprint.go`) and the embedded JSON schemas. `internal/runstate/file` and `internal/runstate/jetstream` are the backends. `internal/tasks` is a separate store for a different question.

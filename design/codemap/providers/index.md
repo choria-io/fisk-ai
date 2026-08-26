@@ -1,6 +1,6 @@
 # Model providers
 
-`internal/llm` describes a conversation in types that name no vendor. `internal/llm/anthropic` is the only package in the tree that imports the Anthropic SDK, and it is the only place a concrete API is spoken.
+`internal/llm` describes a conversation in types that name no vendor. `internal/llm/anthropic` is the only package in the tree that imports the Anthropic SDK; every other package speaks the neutral types.
 
 {{% notice style="note" title="Where it lives" %}}
 `internal/llm` holds the neutral model and the registry: `types.go`, `request.go`, `response.go`, `provider.go`, `registry.go`, `middleware.go`. `internal/llm/anthropic` holds the backend: `provider.go`, `codec.go`, `tools.go`. `internal/llm/README.md` is written as the contract a second provider must satisfy.
@@ -99,5 +99,5 @@ Chat Completions needs one message per tool result where Anthropic batches them 
 Credential selection is hardwired to one variable today, so a second provider needs a per-provider convention before `provider: openai` stops requiring an Anthropic key.
 
 {{% notice style="tip" title="Next" %}}
-Continue to [The agent loop]({{% relref "agent-loop" %}}) for what builds the request, or [Telemetry]({{% relref "telemetry" %}}) for what a call reports.
+Continue to [Memory]({{% relref "memory" %}}) for the first of the three stores, or [Telemetry]({{% relref "telemetry" %}}) for what a call reports.
 {{% /notice %}}

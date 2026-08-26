@@ -1,6 +1,6 @@
 # The terminal
 
-The terminal owns no run. Even a local `fisk run` hosts an agent behind an embedded broker and talks to it over a2a, so a terminal reaches its own agent the same way it reaches somebody else's.
+The terminal is a client. Even a local `fisk run` hosts an agent behind an embedded broker and talks to it over a2a, so a terminal reaches its own agent the same way it reaches somebody else's.
 
 {{% notice style="note" title="Where it lives" %}}
 `internal/tui` holds the full-screen surface: `viewer.go` is the shared viewport, `live.go` drives a running agent, `prompter.go` is the native prompter, `callline.go` renders a tool call, `splash.go` the startup card. `package main` holds command registration and the two client surfaces, `run_chat.go` and `run_client.go`, with `run_render.go` as the single rendering point.

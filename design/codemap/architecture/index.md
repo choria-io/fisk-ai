@@ -1,6 +1,6 @@
 # Architecture
 
-The tree layers by what a package is allowed to import. The root holds commands and presentation, the middle holds `agent` and `serve`, and the leaves import nothing else from this repository.
+A package's imports place it in one of four layers. The root holds commands and presentation, the middle holds `agent` and `serve`, and the leaves import nothing else from this repository.
 
 <figure class="cm-diagram">
   <svg viewBox="0 0 760 300" role="img" aria-label="Four layers from package main down to leaf packages that import nothing from the tree">

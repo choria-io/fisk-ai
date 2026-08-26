@@ -140,5 +140,5 @@ On the protocol side, the must-understand flag, the parent header for multi-hop 
 No served run reaches an interactive turn boundary, because the serve path supplies no continuation. The startup banner is the one place the endpoint-agnostic layering is broken on purpose: it reaches each channel's description by concrete type assertion, since the three return types were never unified.
 
 {{% notice style="tip" title="Next" %}}
-Continue to [Durable state]({{% relref "state" %}}) for the journal a served run writes, or [The terminal]({{% relref "terminal" %}}) for the client on the other end.
+Continue to [Telemetry]({{% relref "telemetry" %}}) for how a trace crosses these processes, or [The terminal]({{% relref "terminal" %}}) for the client on the other end.
 {{% /notice %}}

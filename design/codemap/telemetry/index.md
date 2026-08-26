@@ -1,6 +1,6 @@
 # Telemetry
 
-Every other package reaches OpenTelemetry through one facade. `internal/telemetry` imports the standard library and OpenTelemetry and nothing else from this repository, which keeps it free of import cycles and forces its API to take primitives rather than domain types.
+`internal/telemetry` is the one facade every package reaches OpenTelemetry through. It imports the standard library and OpenTelemetry and nothing else from this repository, so it cannot join an import cycle, and its API takes primitives rather than domain types.
 
 {{% notice style="note" title="Where it lives" %}}
 `internal/telemetry` holds the provider and lifecycle (`telemetry.go`), configuration resolution (`config.go`), every span kind (`span.go`), the attribute catalogue and closed vocabularies (`attrs.go`), instruments (`metrics.go`), content capture (`content.go`) and propagation (`propagation.go`). `bootstrap` maps configuration in; `genai` renders content documents.
@@ -112,5 +112,5 @@ The embedder-facing constructor and its options have no caller in this repositor
 Only `run`, `mcp` and `serve` bootstrap telemetry. The indexing commands start none.
 
 {{% notice style="tip" title="Next" %}}
-Continue to [Serving]({{% relref "serving" %}}) for where the trace crosses a process, or [The agent loop]({{% relref "agent-loop" %}}) for what the spans wrap.
+Continue to [The terminal]({{% relref "terminal" %}}) for the client a person drives, or [The agent loop]({{% relref "agent-loop" %}}) for what the spans wrap.
 {{% /notice %}}
