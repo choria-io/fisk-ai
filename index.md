@@ -35,6 +35,12 @@ App Builder can create tools with strict guardrails, input validation and integr
 
 Deterministic AI Harnesses are only a few YAML files away.
 {{% /card %}}
+{{% card title="Multiple UI Surface" %}}
+Any Agent can be accessed via Shell, TUI, Slack or via our durable execution framework [Async Jobs](https://choria.io/asyncjobs).
+
+We have a Messaging orientated A2A protocol accessible via NATS with more planned in the future.
+{{% /card %}}
+
 {{< /cards >}}
 
 ## Use cases
