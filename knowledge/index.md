@@ -181,7 +181,7 @@ is logged. Prefixes default to empty because the model is user-chosen and a wron
 that need one document it. Run `knowledge doctor` to see whether a chosen model expects a prefix.
 
 > [!info] Note
-> A non-loopback `base_url` must use `https`. The embeddings endpoint is only ever contacted when the vector tier is on;
+> The `base_url` may be `http` or `https`. The embeddings endpoint is only ever contacted when the vector tier is on;
 > the lexical path makes no network calls.
 
 #### EmbeddingGemma prefixes
@@ -347,8 +347,7 @@ The index holds the verbatim text of every indexed document, unencrypted on disk
 - Retrieved chunks are framed as untrusted reference data and stripped of terminal control sequences before any TUI
   render, so indexed text cannot spoof the display or inject instructions.
 - Embeddings secrets are supplied by environment-variable name and never logged, and are stripped from the environment of
-  model-chosen command tools, so a tool cannot read the embeddings credential. A non-loopback embeddings `base_url` must
-  use `https`, and the request timeout is enforced.
+  model-chosen command tools, so a tool cannot read the embeddings credential. The request timeout is enforced.
 - Over MCP two gates apply, and both must pass: the tool itself declares whether it may ever be served over MCP, and the
   allowlist selects which of those this operator wants served. The allowlist can only narrow the tools declared servable,
   never widen past them, so a tool added alongside `knowledge_search` is not served on the strength of its neighbor's

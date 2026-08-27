@@ -14,6 +14,6 @@ $ export ANTHROPIC_BASE_URL=http://localhost:1234
 $ export ANTHROPIC_API_KEY=lmstudio
 ```
 
-The `base_url` is validated: a non-loopback host must use `https`, so the API key and conversation are never sent in
-cleartext. Plain `http` is allowed only for a loopback address (`127.0.0.1`, `::1`, `localhost`) as used by the local
-runners above.
+The `base_url` is validated only as a well-formed `http` or `https` URL naming a host, with no embedded userinfo
+credentials. Plain `http` is accepted for any host, since a local runner, a host gateway and a service on a private
+network all serve over it.
