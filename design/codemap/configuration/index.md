@@ -61,7 +61,7 @@ Every command starts by reading `agent.yaml`. One file drives `run`, `serve`, `m
 | `ModeAgent` | `run` hosting its own agent | `llm.model`; identity and system prompt unless the run is MCP-only; a NATS context alongside `remote_tools` or jobs |
 | `ModeServe` | `serve` | Per endpoint. Jobs, Slack and a2a prompts each need a named identity, a prompt and a model; `a2a.serve_tools` needs an application path and a named identity |
 
-The always-on checks cover what any command pays for getting wrong: identity charset, `global_flags` without an `application_path`, remote tool hosts, and every `mcp_servers` entry.
+The always-on checks cover what any command pays for getting wrong: identity charset, `global_flags` without an `application_path`, remote tool hosts, and every `mcp_clients` entry.
 
 `ModeMCP` is the most lenient on purpose. `fisk info` parses in it so it can report on a configuration it could not run.
 
@@ -72,7 +72,7 @@ A duration of `0s` means something different in each block.
 | Key | `0s` means |
 |---|---|
 | `harness.tool_timeout` | Unbounded. The operator asked for no limit |
-| `mcp_servers[].timeout` | Rejected. An unlimited startup holds the whole run against a server that never answers |
+| `mcp_clients[].timeout` | Rejected. An unlimited startup holds the whole run against a server that never answers |
 | `expose.agent.a2a.request_timeout` | Rejected. The transport reads a non-positive value as its own shorter default, so `0s` would shorten the wait rather than remove it |
 | `expose.agent.slack.answer_grace` | Rejected. It would defer every question the instant it was asked |
 | `llm.budget.call_timeout` | Rejected. It reaches the provider as a deadline already in the past, and every call fails with a context error that names nothing |
@@ -85,7 +85,7 @@ Switches that default on are spelled negatively for the same reason: `no_tui`, `
 
 | Stage | Examples |
 |---|---|
-| Parse | An unknown key, a malformed or out-of-range duration, a negative budget, an illegal identity or alias, a duplicate MCP server name, an `mcp_servers` entry with neither or both transports, a `${VAR}` syntax error, a `builtins` entry that is not exposable |
+| Parse | An unknown key, a malformed or out-of-range duration, a negative budget, an illegal identity or alias, a duplicate MCP server name, an `mcp_clients` entry with neither or both transports, a `${VAR}` syntax error, a `builtins` entry that is not exposable |
 | Command startup | `fisk mcp` with no `expose.agent.mcp` block, `fisk serve` with no endpoint enabled, a `knowledge` subcommand with knowledge disabled, telemetry endpoint resolution, `${VAR}` resolution at connect, a missing NATS stream or bucket |
 | Run | A provider name that no linked backend answers to, a reasoning effort the model rejects on the first call, embeddings settings validated when the knowledge store opens |
 
@@ -104,7 +104,7 @@ Identity is the name other agents send traffic to. When it is derived from the a
 Secrets stay out of the file and out of tool subprocesses.
 
 <dl class="cm-kv">
-  <dt><code>${VAR}</code> references</dt><dd>Recognized in <code>mcp_servers</code> <code>env</code>, <code>headers</code> and <code>url</code>. A value in <code>command</code> or <code>args</code> is taken literally.</dd>
+  <dt><code>${VAR}</code> references</dt><dd>Recognized in <code>mcp_clients</code> <code>env</code>, <code>headers</code> and <code>url</code>. A value in <code>command</code> or <code>args</code> is taken literally.</dd>
   <dt><code>CredentialEnvNames()</code></dt><dd>Strips OTLP credential variables from every tool subprocess whether or not this agent enables telemetry. These are ambient operator variables, a tool never needs them, and gating on config would mean <code>--no-telemetry</code> puts the token back into every tool subprocess.</dd>
   <dt><code>RedactURL</code></dt><dd>Applied to anything that prints an MCP endpoint. It leaves the path intact, and some hosted MCP providers put the credential in the path.</dd>
 </dl>

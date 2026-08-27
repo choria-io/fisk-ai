@@ -77,7 +77,7 @@ identity: nats
 # When set, the binary is introspected once at startup to obtain its
 # command tree and per-command JSON schemas. Leave it out to run an agent
 # on the built-in tools (knowledge, memory, human_in_the_loop) and the
-# tools remote_tools and mcp_servers import, with no wrapped application.
+# tools remote_tools and mcp_clients import, with no wrapped application.
 # Required only when expose.agent.a2a.serve_tools exposes the wrapped
 # application's tools.
 application_path: /usr/local/bin/nats
@@ -98,7 +98,7 @@ character set so those uses stay valid.
 because no built-in is offered over a2a today and such an endpoint would have nothing to serve. When set, the target must
 be built with a current [Fisk](https://github.com/choria-io/fisk) (v0.9.0 or newer) that supports `--fisk-introspect`
 and precomputed per-command schemas. When it is left out, Fisk AI skips introspection entirely and the agent runs on
-its built-in tools and whatever `remote_tools` and `mcp_servers` import; see
+its built-in tools and whatever `remote_tools` and `mcp_clients` import; see
 [a knowledge-only agent](#a-knowledge-only-agent) below.
 
 ## Tool selection
@@ -560,16 +560,16 @@ peer. `expose.agent.a2a.request_timeout` sets how long it waits for a peer to sa
 `harness.tool_timeout` limits any tool call the loop makes, remote ones included, so it is how long a remote call may
 take in total. `llm.budget.call_timeout` limits a model call and reaches nothing on the network.
 
-## MCP servers
+## MCP clients
 
-`mcp_servers` imports the tools of third-party MCP servers into an agent run, alongside the wrapped application's
+`mcp_clients` imports the tools of third-party MCP servers into an agent run, alongside the wrapped application's
 commands, the built-ins and any remote tools. Each entry names one server and selects a transport by which of `command`
 and `url` it sets: `command` starts the server as a child process and speaks stdio to it, `url` reaches an
 already-running server over streamable HTTP. Setting both is an error, and so is setting neither. Stdio and streamable
 HTTP are the only transports, and an endpoint that speaks the older HTTP+SSE transport is not supported.
 
 ```yaml
-mcp_servers:
+mcp_clients:
   - # Identifies the server in errors and prefixes every tool imported from
     # it. REQUIRED, and limited to letters, digits, "-" and "_".
     name: filesystem

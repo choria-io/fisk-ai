@@ -1,13 +1,13 @@
 # MCP client
 
-`mcp_servers` imports the tools of third-party MCP servers into an agent run, alongside the wrapped application's
+`mcp_clients` imports the tools of third-party MCP servers into an agent run, alongside the wrapped application's
 commands, the built-ins and any remote tools. Each entry names one server and selects a transport by which of `command`
 and `url` it sets: `command` starts the server as a child process and speaks stdio to it, `url` reaches an
 already-running server over streamable HTTP. Setting both is an error, and so is setting neither. Stdio and streamable
 HTTP are the only transports, and an endpoint that speaks the older HTTP+SSE transport is not supported.
 
 ```yaml
-mcp_servers:
+mcp_clients:
   - name: filesystem
     alias: fs
     command: npx
@@ -32,7 +32,7 @@ mcp_servers:
     timeout: 15s
 ```
 
-Every field is described in the [configuration reference](../../reference/#mcp-servers).
+Every field is described in the [configuration reference](../../reference/#mcp-clients).
 
 Two entries sharing a `name` is an error when the file is parsed, and so is two entries whose effective alias is the
 same, since that alias prefixes every tool they both expose.
@@ -122,7 +122,7 @@ the set it was dispatched with, and no other server's tools move.
 
 ## Seeing what a server offers
 
-`fisk info` connects every configured server and prints an `MCP servers` section: where each is reached and over which
+`fisk info` connects every configured server and prints an `MCP clients` section: where each is reached and over which
 transport, how long it took to answer, how many tools it advertised, how many the filters kept, the name each was
 imported under, and any tool left out with the reason. Discovery there is best-effort, so a server that is down is
 reported rather than failing the command. Its imported tools appear in the tool table with the alias in the `Source`
