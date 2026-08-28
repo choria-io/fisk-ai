@@ -135,6 +135,9 @@ harness:
     directory: ""
     top_k: 5
     max_injected_tokens: 6000
+    citations:
+      - pattern: '^docs/content/(.+)\.md$'
+        replace: 'https://docs.example.net/$1/#${anchor}'
     embeddings:
       base_url: http://127.0.0.1:1234/v1
       model: text-embedding-embeddinggemma-300m
@@ -152,6 +155,7 @@ harness:
 | `top_k` (integer)               | default retrieval count, default `5`, hard ceiling `20`                                                                             |
 | `max_injected_tokens` (integer) | cap on the total retrieved text fed to the model, default `6000`                                                                    |
 | `embeddings`                    | optional block; its presence turns on the vector tier                                                                               |
+| `citations` (array)             | ordered rules rewriting a document path into how the corpus is cited outside itself; see [Citations](#citations) {{% badge style="primary" title="Version" %}}0.0.6{{% /badge %}} |
 
 An absolute `directory` is used as-is; a relative value, including the default `knowledge/<identity>`, resolves under
 the store base when one is set and against the working directory otherwise. The `identity` is the agent's name, so two
@@ -204,6 +208,166 @@ harness:
       query_prefix: "task: search result | query: "
       document_prefix: "title: {title} | text: "
 ```
+
+## Citations
+
+{{% badge style="primary" title="Version" %}}0.0.6{{% /badge %}} A citation rule rewrites the document path in a
+knowledge citation into how the corpus is cited outside itself. Most often that is a URL a reader can open, but a rule
+renders a ticket key, an internal document id or a page title as readily. Rules are written under
+`harness.knowledge.citations` and the first whose pattern matches wins.
+
+Without rules a citation stays the raw `<relpath>#<ordinal>` token, which names a file on the machine that built the
+index. A reader who has never seen that filesystem cannot open it. The rewrite happens in the tool result, before the
+model sees it, so the model applies no publishing scheme of its own.
+
+```yaml
+harness:
+  knowledge:
+    citations:
+      - pattern: '^docs/content/(.+)/_index\.md$'
+        replace: 'https://docs.example.net/$1/'
+      - pattern: '^docs/content/(.+)\.md$'
+        replace: 'https://docs.example.net/$1/#${anchor}'
+```
+
+The first rule maps a Hugo section page, so `docs/content/knowledge/_index.md` is cited as
+`https://docs.example.net/knowledge/`. The second maps every other page and appends the anchor of the cited section. A
+path neither rule matches is cited as the raw token, since a corpus that is only partly published is the normal case.
+
+The second pattern also matches `docs/content/knowledge/_index.md`, capturing `knowledge/_index`, so reversing the two
+cites every section page as `https://docs.example.net/knowledge/_index/`.
+
+> [!info] Warning
+> Quote every `replace` value. YAML reads a plain scalar starting with `#` as a comment, so `replace: #${anchor}` loads
+> as an empty value and fails validation; one starting with `{` reads as a flow mapping and fails as a type error.
+
+### What rules match against
+
+Rules match the path the indexer walked, stored verbatim. A corpus indexed from `./docs` stores `docs/foo/bar.md` and
+takes relative patterns. One indexed from `/srv/docs` stores `/srv/docs/foo/bar.md` and takes absolute ones.
+`knowledge sources` shows which form is stored.
+
+Indexing a single file stores the path exactly as typed, so `fisk knowledge index ./docs/x.md` stores `./docs/x.md`
+with its leading `./`, which an anchored `^docs/` rule misses.
+
+Rules are tried in the order written. A general rule placed above a specific one takes the paths the specific rule was
+written for, and the specific rule never runs.
+
+> [!info] Note
+> A site root page at `docs/content/_index.md` has no directory between `content/` and the file name, so
+> `^docs/content/(.+)/_index\.md$` skips it and the general rule cites it as `https://docs.example.net/_index/`, an
+> address the site does not serve. Give the site root a rule of its own, above both.
+
+### Replacement syntax
+
+A replacement expands `$1`, `$name` and `${name}`, and `$$` writes a literal dollar. A name is a capture group of that
+rule's own pattern, or one of these three:
+
+| Name         | Description                                                   |
+|--------------|---------------------------------------------------------------|
+| `${ordinal}` | position of the cited section within its document, zero-based |
+| `${heading}` | the deepest crumb of the section's heading breadcrumb         |
+| `${anchor}`  | that heading slugged into a URL fragment                      |
+
+A capture group of the same name wins, so a pattern writing `(?P<heading>...)` gets its own capture rather than the
+section heading. `{anchor}` without a dollar is a literal. Go's expander reads `$1x` as a reference to a group named
+`1x` rather than as group 1 followed by an `x`.
+
+The renderer percent-encodes every substituted value for a URL path, leaving `/` alone since a capture routinely spans
+directories, so a heading of `One-shot runs` reaches `${heading}` as `One-shot%20runs`.
+
+`knowledge sources` cites whole documents and supplies none of the three, and a chunk with no heading leaves
+`${heading}` and `${anchor}` empty. The renderer trims a citation left ending in a bare `#`. Where the operator writes
+a literal between the `#` and an empty value, as in `#section-${heading}`, the citation ends `#section-`.
+
+`${anchor}` slugs a heading the way [github-slugger](https://github.com/Flet/github-slugger) does, which is the
+fragment Hugo, Docusaurus and GitHub all generate. It lowercases the heading, deletes anything that is not a letter,
+digit, underscore, space or hyphen, turns spaces into hyphens, and trims hyphens from both ends. It deletes the
+punctuation rather than collapsing it, which is where the two differ: `Don't Panic` slugs to `dont-panic` on those
+three and to `don-t-panic` under a collapsing rule, and a browser given a fragment no heading answers to opens the page
+at the top. A generator that slugs differently needs its rules checked against a few real headings.
+
+### Validation at config load
+
+Each rule is validated when the config loads, and the error carries the rule's position as `citations[0]`, so a mistake
+fails the run rather than publishing a citation with a piece missing. A rule is rejected when:
+
+* `pattern` does not compile
+* `pattern` is empty, since that matches every path and leaves every later rule dead
+* `replace` is empty, since that maps every path the pattern matches to nothing
+* `replace` names a group that is neither a named group in that rule's own pattern nor one of `ordinal`, `heading` and
+  `anchor`
+* `replace` uses a `$n` beyond what the pattern captures
+
+```nohighlight
+fisk: error: invalid harness.knowledge.citations[0] replace "https://docs.example.net/$1x/": $1x is neither a named capture group in the pattern "^docs/content/(.+)\\.md$" nor one of ordinal, heading, anchor
+```
+
+The two reference checks exist because Go's expander renders an unresolved reference as empty text and reports no
+error. `$1x` on a rule with one group is read as a group named `1x`, and without the check it would publish a URL
+missing a path element.
+
+### What the operator sees
+
+`knowledge search` prints the raw token as each result's heading, so it can still be pasted into `knowledge show`, and
+prints the mapped citation as a `Mapped` field beneath it. A result no rule matched has no `Mapped` line.
+
+```nohighlight
+$ fisk knowledge search "http debugging"
+tier: lexical (FTS5) - no embeddings configured
+
+  docs/content/agents/basic.md#11:
+
+       Mapped: https://docs.example.net/agents/basic/#http-debugging
+      Section: Running the agent > Shell mode > HTTP debugging
+        Chunk: As a debug or learning aid, all the HTTP requests can be logged to `http-debug.log` using the `--htt...
+
+  notes.md#0:
+
+      Section: Rollout notes
+        Chunk: HTTP debugging was turned on for the staging agent during the migration and left on for a week. Noth...
+```
+
+`knowledge sources` and `knowledge match` each gain a `Mapped` column, blank where no rule matched. `knowledge sources`
+closes with a count of how many documents no rule reached. A rule that matches nothing sends raw paths to the model and
+reports no error anywhere, and that count is where it shows. The column and the count appear only when citation rules
+are configured.
+
+```nohighlight
+$ fisk knowledge sources
+tier: lexical (FTS5) - no embeddings configured
+╭───────────────────────────────┬────────┬─────────────────────┬────────────────────────────────────────╮
+│ Path                          │ Chunks │ Last Indexed        │ Mapped                                 │
+├───────────────────────────────┼────────┼─────────────────────┼────────────────────────────────────────┤
+│ docs/content/agents/_index.md │ 3      │ 2026-08-28 14:05:29 │ https://docs.example.net/agents/       │
+│ docs/content/agents/basic.md  │ 12     │ 2026-08-28 14:05:29 │ https://docs.example.net/agents/basic/ │
+│ notes.md                      │ 1      │ 2026-08-28 14:06:09 │                                        │
+╰───────────────────────────────┴────────┴─────────────────────┴────────────────────────────────────────╯
+
+1 of 3 documents matched no citation rule and is cited by path
+```
+
+`knowledge sources` cites whole documents, so only capture groups fill there. `knowledge match` cites each document at
+its first matching chunk and fills `${ordinal}` as well, so a rule using `${ordinal}` shows different values on the two.
+
+`knowledge show` takes the raw token and not a mapped citation. A regular expression does not run backwards, so no
+chunk can be found from what a rule produced.
+
+### What the model receives
+
+Both knowledge tools put the mapped citation in `citation` and the raw token in `index_ref`. Their descriptions tell
+the model to cite `citation` verbatim and to treat `index_ref` as an index key it never shows a reader, so the mapping
+needs no prompt engineering from the operator. Where no rule matched, `citation` carries the raw token, which the
+descriptions also state.
+
+### What the mapping cannot reach
+
+* A path regex cannot express front matter `slug:` or `url:`, aliases, or an i18n path scheme, so a document whose
+  published address is set in its own front matter needs a rule of its own or stays unmapped
+* github-slugger appends `-1` and `-2` to a heading it has already seen in a document, and the chunker keeps no
+  occurrence index, so two `## Options` sections in one document produce the same `${anchor}` and the second cites the
+  first
+* `${ordinal}` is zero-based and shifts on every reindex, so a citation built from it goes stale
 
 ## The agent tools
 
