@@ -294,6 +294,84 @@ var _ = Describe("Store (lexical tier)", func() {
 	})
 })
 
+var _ = Describe("Hit document title", func() {
+	ctx := context.Background()
+
+	var (
+		docsD string
+		cfg   *config.Config
+	)
+
+	BeforeEach(func() {
+		tmp := GinkgoT().TempDir()
+		docsD = filepath.Join(tmp, "docs")
+		cfg = lexicalConfig(filepath.Join(tmp, "knowledge"))
+	})
+
+	index := func() {
+		w, err := OpenWriter(cfg, "")
+		Expect(err).ToNot(HaveOccurred())
+		defer w.Close()
+
+		_, err = w.Index(ctx, []string{docsD}, IndexOptions{Reconcile: true})
+		Expect(err).ToNot(HaveOccurred())
+	}
+
+	// searchFor returns the hit on one chunk of one document, so an assertion names
+	// the chunk it is about instead of depending on where BM25 ranked it.
+	searchFor := func(query string, base string, ordinal int) Hit {
+		r, err := Open(cfg, "")
+		Expect(err).ToNot(HaveOccurred())
+		defer r.Close()
+
+		res, err := r.Search(ctx, query, 10)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(res.Status).To(Equal(StatusOK))
+
+		for _, h := range res.Hits {
+			if filepath.Base(h.DocPath) == base && h.Ordinal == ordinal {
+				return h
+			}
+		}
+
+		Fail(fmt.Sprintf("no hit on %s chunk %d", base, ordinal))
+
+		return Hit{}
+	}
+
+	// Text before the first heading packs under an empty breadcrumb, so the title is
+	// all this hit carries besides its path.
+	It("carries the document's first heading on a hit with no breadcrumb", func() {
+		writeDoc(docsD, "retry.md", "Retries are capped at five attempts before the caller gives up.\n\n# Retry Policy\n\nThe backoff doubles on each attempt.\n")
+		index()
+
+		hit := searchFor("retries capped attempts caller", "retry.md", 0)
+		Expect(hit.HeadingPath).To(BeEmpty())
+		Expect(hit.DocTitle).To(Equal("Retry Policy"))
+	})
+
+	It("carries the title and the breadcrumb both on a hit deeper in a document", func() {
+		writeDoc(docsD, "design.md", "# Design\n\n## Backpressure\n\nThe queue applies backpressure when the buffer is full.\n\n## Sharding\n\nKeys are hashed to shards for horizontal scale.\n")
+		index()
+
+		hit := searchFor("sharding hashed shards horizontal", "design.md", 1)
+		Expect(hit.DocTitle).To(Equal("Design"))
+		Expect(hit.HeadingPath).To(Equal("Design > Sharding"))
+	})
+
+	// DocumentTitle finds the first heading anywhere in the file, so an empty title
+	// means the document has no heading at all. The hit reports that as empty rather
+	// than a path fragment dressed as a title.
+	It("leaves the title empty for a document with no heading", func() {
+		writeDoc(docsD, "notes.md", "Quotas are enforced per tenant and every rejected request is logged.\n")
+		index()
+
+		hit := searchFor("quotas tenant rejected request", "notes.md", 0)
+		Expect(hit.DocTitle).To(BeEmpty())
+		Expect(hit.HeadingPath).To(BeEmpty())
+	})
+})
+
 var _ = Describe("Store rm and reset", func() {
 	ctx := context.Background()
 

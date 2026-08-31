@@ -88,6 +88,7 @@ func registerRAGCommand(cmd *fisk.Application) {
 	k.Command("stats", "Prints the tier banner and index counts and sizes").Action(knowledgeStatsAction)
 
 	registerKnowledgeWordsCommand(k)
+	registerKnowledgeAgentCommand(k)
 }
 
 // knowledgeConfig parses the config in the lenient MCP mode (the knowledge CLI

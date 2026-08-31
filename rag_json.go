@@ -25,6 +25,7 @@ import (
 type ragSearchHitJSON struct {
 	Citation    string `json:"citation"`
 	DocPath     string `json:"doc_path"`
+	DocTitle    string `json:"doc_title,omitempty"`
 	Ordinal     int    `json:"ordinal"`
 	HeadingPath string `json:"heading_path,omitempty"`
 
@@ -116,6 +117,7 @@ func newRAGSearchJSON(query string, res *rag.SearchResult, vectorEnabled bool, f
 		hit := ragSearchHitJSON{
 			Citation:    h.Citation,
 			DocPath:     h.DocPath,
+			DocTitle:    h.DocTitle,
 			Ordinal:     h.Ordinal,
 			HeadingPath: h.HeadingPath,
 			Mapped:      h.Mapped,

@@ -52,6 +52,22 @@ var _ = Describe("knowledge JSON rendering", func() {
 			Expect(out.Hits[0].MappedCitation).To(Equal("https://example.net/design#cancellation"))
 		})
 
+		// A hit on the first chunk of a document has no heading path, so the title tells
+		// a consumer which document answered. A document with no heading has no title,
+		// and the key is left out rather than emitted empty.
+		It("carries the document title only when the document has one", func() {
+			titled := hit
+			titled.DocTitle = "Design"
+
+			body, err := json.Marshal(newRAGSearchJSON("cancel", &rag.SearchResult{Status: rag.StatusOK, Hits: []rag.Hit{titled}}, true, false))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(body)).To(ContainSubstring(`"doc_title":"Design"`))
+
+			body, err = json.Marshal(newRAGSearchJSON("cancel", &rag.SearchResult{Status: rag.StatusOK, Hits: []rag.Hit{hit}}, true, false))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(body)).ToNot(ContainSubstring("doc_title"))
+		})
+
 		// The tier cannot be read off Degraded: a store with no embeddings is lexical
 		// and has not degraded.
 		It("reports the configured tier separately from a degradation", func() {

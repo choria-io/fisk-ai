@@ -80,6 +80,12 @@ type Hit struct {
 	HeadingPath string
 	Content     string
 
+	// DocTitle is the document's first heading, the value the indexer wrote to
+	// documents.title. It is empty for a document that holds no heading at all.
+	// The first chunk of a document has an empty HeadingPath, so on such a hit
+	// DocTitle is the only thing besides the path that names what was found.
+	DocTitle string
+
 	// MappedCitation is how this chunk is cited outside the corpus, rendered from
 	// the configured citation rules: a URL where the rules publish one, and whatever
 	// else a rule renders otherwise. It is the Citation token itself when no rule
@@ -411,7 +417,7 @@ func (s *Store) hydrate(ctx context.Context, ranked []result) ([]Hit, error) {
 	}
 
 	q := fmt.Sprintf(
-		`SELECT c.id, d.path, c.heading_path, c.ordinal, c.body
+		`SELECT c.id, d.path, d.title, c.heading_path, c.ordinal, c.body
 		 FROM chunks c JOIN documents d ON d.id = c.document_id
 		 WHERE c.id IN (%s)`, strings.Join(placeholders, ","))
 	rows, err := s.db.QueryContext(ctx, q, ids...)
@@ -423,7 +429,7 @@ func (s *Store) hydrate(ctx context.Context, ranked []result) ([]Hit, error) {
 	byID := map[int64]Hit{}
 	for rows.Next() {
 		var h Hit
-		if err := rows.Scan(&h.ChunkID, &h.DocPath, &h.HeadingPath, &h.Ordinal, &h.Content); err != nil {
+		if err := rows.Scan(&h.ChunkID, &h.DocPath, &h.DocTitle, &h.HeadingPath, &h.Ordinal, &h.Content); err != nil {
 			return nil, fmt.Errorf("hydrating results: %w", err)
 		}
 		h.Citation = Citation(h.DocPath, h.Ordinal)

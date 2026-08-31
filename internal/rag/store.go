@@ -60,6 +60,12 @@ const (
 	// tokens and per-call cost.
 	topKCeiling = 20
 
+	// MaxTopK is topKCeiling for callers that have to explain the clamp to a reader.
+	// Search applies it silently, so a surface offering a top_k asks for a number it
+	// may not get, and one whose help quotes its own copy of the number goes stale
+	// without a build failure.
+	MaxTopK = topKCeiling
+
 	// defaultTopK is the retrieval count used when the config leaves top_k unset.
 	defaultTopK = 5
 

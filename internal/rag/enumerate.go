@@ -74,9 +74,10 @@ type EnumerateOptions struct {
 	MinBodyMatches int
 }
 
-// MatchedDoc is one document in the matched set. It carries no title: nothing
-// renders one, and reading documents.title here would make a column that is written
-// and never read into one that is read, for no output.
+// MatchedDoc is one document in the matched set. It carries no title because no
+// surface renders one here: match answers which documents hold the terms, and the
+// path is the answer. Hit.DocTitle carries the title on the search path, where a
+// chunk with no heading has nothing else to identify it by.
 type MatchedDoc struct {
 	Path     string
 	Citation string
