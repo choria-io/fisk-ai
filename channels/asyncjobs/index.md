@@ -142,6 +142,20 @@ task. It is not retried: a model refusal or an exhausted budget fails the same w
 | `suspended`         | the run stopped at a point it can resume from     |
 | `error`             | the run failed                                    |
 
+Where the failure is one a caller can act on, the stored `error` also carries a `code` beside its `stop_reason`. It is
+the same vocabulary [Answering prompts](../prompts/) sends on a terminal message, and these are the ones a job reaches:
+
+| Code                | Meaning                                                              |
+|---------------------|----------------------------------------------------------------------|
+| `provider_busy`     | the model provider had no capacity or refused a rate-limited call; submit the same job again shortly |
+| `provider_refused`  | the agent cannot use its model provider at all; an operator has to fix its credentials or its model name |
+| `context_exceeded`  | the conversation holds more than the model's context window takes, so the model refused the call; start a new conversation or send less context |
+
+A job whose session journal another writer holds reaches none of these: the run ends with no outcome, so the worker
+returns the job to the queue and stores no answer at all, and the redelivery runs it.
+
+An `error` with no `code` is a failure this vocabulary does not name, and the message text is what says how it failed.
+
 ## Redelivery
 
 The worker journals every run under the session its task id derives. When a worker dies mid-job, the redelivery

@@ -91,11 +91,11 @@ Fetches a peer's agent card over the configured NATS context.
 | `Tool` | `toolkit` | Nine methods every tool kind answers, whatever provides it |
 | `Behavior` | `toolkit` | What a tool declares about itself, resolved conservatively |
 | `Prompter` | `toolkit` | The only path permitted to read the terminal or draw a prompt |
-| `ToolSet` | `agent` | An immutable set of definitions plus the registry that dispatches them |
+| `toolSet` | `agent` | An immutable set of definitions plus the registry that dispatches them |
 | `Hooks` | `agent` | Seven points a caller can observe or interrupt |
 | `Provider` | `llm` | Call and Capabilities: the only code that calls a provider SDK |
 | `ContentBlock` | `llm` | The neutral union, with a provider block as its escape hatch |
-| `Store` | `memory` | Five methods, no close, safe across processes |
+| `Store` | `memory` | Six methods, no close, safe across processes |
 | `Store` | `rag` | The knowledge database and every operation on it |
 | `Record`, `RunState` | `runstate` | One journal entry, and the fold of all of them |
 | `Fingerprint` | `runstate` | The configuration a stored conversation was written under |

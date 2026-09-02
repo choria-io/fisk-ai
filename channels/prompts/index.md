@@ -225,6 +225,9 @@ closes the set. The `error` carries a `code` the caller can branch on:
 | `conversation_busy` | a turn of this conversation is running here; wait for its terminal message |
 | `turn_not_taken`    | the conversation could not take the turn, and the prompt did not run |
 | `budget_exhausted`  | the conversation has used its whole token allowance and is finished  |
+| `provider_busy`     | the agent's model provider had no capacity or refused a rate-limited call; wait and send the same work again |
+| `provider_refused`  | the agent cannot use its model provider at all; an operator has to fix its credentials or its model name |
+| `context_exceeded`  | the conversation holds more than the model's context window takes, so the model refused the call; start a new conversation or send less context |
 | `unknown_call`      | no such call is waiting for an answer                                |
 | `already_answered`  | the call already has an answer                                       |
 | `answer_too_large`  | the answer is over 256KB                                             |
@@ -502,7 +505,7 @@ The rules a client follows:
 
 * Send a `waiting` every `wait_ms / 3`, starting when the question goes on screen. The window restarts when the worker
   receives the message, so the remaining two thirds cover the round trip and one lost message. In Go,
-  `a2a.NewWaitingAck(question, sender)` builds the message and `question.AckInterval()` is the interval.
+  `wire.NewWaitingAck(question, sender)` builds the message and `question.AckInterval()` is the interval.
 * Stop before sending the answer. A `waiting` that arrives after the answer is refused, since the worker has finished
   with the question.
 * A `404` means the question is gone: take it off the screen and send no answer, since that would be refused too.

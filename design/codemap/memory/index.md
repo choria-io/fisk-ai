@@ -8,17 +8,22 @@ The model writes a note under a key and reads it back on a later run. The harnes
 
 ## The contract
 
-`Store` has five methods and no `Close`. No backend owns a resource to release; the JetStream connection is borrowed from the host and must never be closed by the backend.
+`Store` has six methods and no `Close`. No backend owns a resource to release; the JetStream connection is borrowed from the host and must never be closed by the backend.
 
 ```go
 type Store interface {
 	Info() Info
 	List(ctx context.Context) ([]Item, error)
 	Read(ctx context.Context, key string) (description, content string, err error)
-	Write(ctx context.Context, key, description, content string, overwrite bool) error
+	Create(ctx context.Context, key, description, content string) error
+	Update(ctx context.Context, key, description, content string) error
 	Delete(ctx context.Context, key string) (existed bool, err error)
 }
 ```
+
+`Create` returns `ErrExists` for a key that is already there. `Update` replaces what a key holds, and writes one that
+holds nothing yet on a backend that does not enforce read-before-update. The jetstream backend does enforce it by
+default, so an `Update` of a key this scope never read returns `ErrStale` rather than writing it.
 
 An implementation must be safe for concurrent use by independent processes sharing one backing store, and must validate the key before touching that store. `Info` is a required method rather than an optional capability, so every backend reports its name and location.
 
@@ -89,7 +94,7 @@ The scope is resolved per call rather than captured at construction, so one shar
 | Namespacing | a directory per identity | a key prefix, defaulting to the identity |
 | Create | `os.Link`, which fails if the name exists | `kv.Create` |
 | Overwrite | `os.Rename`, last write wins | revision-checked `kv.Update` by default |
-| `ErrStale` | never returned | returned on a revision mismatch |
+| `ErrStale` | never returned | returned when the scope knows no revision for the key, or the key changed since it was read |
 | Listing | read the directory, then one read per file | one server-side watcher pass, filtered to the prefix |
 | Startup check | create the directory at mode 0700 | bind the bucket, reject a missing one, a TTL, or an undersized one |
 | `Info.Location` | empty | the bucket name |
