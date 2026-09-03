@@ -827,7 +827,7 @@ or a telemetry collector sees it, and either replaces what it finds or refuses t
 otherwise. `fisk info` reports the mode in effect, and a run says so the first time it acts.
 
 It looks for `BANK_ACCOUNT`, `CLOUD_RESOURCES`, `CREDIT_CARD`, `DATE_OF_BIRTH`, `DRIVERS_LICENSE`, `EMAIL`,
-`MEDICAL_ID`, `OTP`, `PASSPORT`, `PHONE`, `PHYSICAL_ADDRESS`, `SECRETS`, `SSN` and `VIN`. `mode` is its only key:
+`MEDICAL_ID`, `OTP`, `PASSPORT`, `PHONE`, `PHYSICAL_ADDRESS`, `SECRETS` and `SSN`. `mode` is its only key:
 nothing narrows or widens that set. A value of another kind reaches the model as written, including a national
 identity number that is not a US SSN, an account identifier internal to your own systems, and a person's name in
 prose.
