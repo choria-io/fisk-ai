@@ -360,6 +360,12 @@ the model to cite `citation` verbatim and to treat `index_ref` as an index key i
 needs no prompt engineering from the operator. Where no rule matched, `citation` carries the raw token, which the
 descriptions also state.
 
+Both tools also put the document path in `path`, as the index recorded it and without the chunk ordinal, so no citation
+rule touches it. The descriptions tell the model to keep it off the page and to hand it to a file-reading tool where the
+operator offers one, which is how a model that read one section reads the rest of the document. A relative `path`
+resolves from the directory the agent runs in, so it reaches the document only when the agent runs where the index was
+built. Index with absolute `knowledge.paths` when the two directories differ.
+
 ### What the mapping cannot reach
 
 * A path regex cannot express front matter `slug:` or `url:`, aliases, or an i18n path scheme, so a document whose
