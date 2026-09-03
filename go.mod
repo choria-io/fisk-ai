@@ -10,7 +10,7 @@ require (
 	github.com/choria-io/asyncjobs v0.3.1-0.20260811185158-04223e56eeef
 	github.com/choria-io/fisk v0.9.1
 	github.com/choria-io/ui v0.0.2-0.20260820224910-01997961c3f7
-	github.com/coder/acp-go-sdk v0.13.5
+	github.com/eino-contrib/acp v0.0.4
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gdamore/tcell/v2 v2.13.10
 	github.com/go-logr/stdr v1.2.2

@@ -25,7 +25,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	acp "github.com/coder/acp-go-sdk"
+	acpconn "github.com/eino-contrib/acp/conn"
+	"github.com/eino-contrib/acp/transport/stdio"
 
 	"github.com/choria-io/fisk-ai/config"
 	"github.com/choria-io/fisk-ai/internal/a2a"
@@ -116,9 +117,12 @@ func run(configFile string, natsContext string, agentName string, debug bool) er
 	log.Debug("Serving ACP for a remote agent", "agent", agentName, "context", natsContext)
 
 	bridge := newBridge(client, agentName, log)
-	conn := acp.NewAgentSideConnection(bridge, os.Stdout, os.Stdin)
-	conn.SetLogger(log)
+	conn := acpconn.NewAgentConnectionFromTransport(bridge, stdio.NewTransport(os.Stdin, os.Stdout))
 	bridge.setConnection(conn)
+
+	if err := conn.Start(ctx); err != nil {
+		return err
+	}
 
 	select {
 	case <-conn.Done():

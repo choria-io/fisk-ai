@@ -7,9 +7,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 
-	acp "github.com/coder/acp-go-sdk"
+	acp "github.com/eino-contrib/acp"
 
 	wire "github.com/choria-io/fisk-ai/internal/a2a/wire/v1"
 )
@@ -20,7 +21,7 @@ import (
 // It is the a2a.TaskHandler for a single RunTask call, so it lives for one turn.
 type taskHandler struct {
 	bridge  *bridge
-	session acp.SessionId
+	session acp.SessionID
 
 	mu sync.Mutex
 	// calls remembers a tool call's name by its id, so a result can be titled with the
@@ -42,29 +43,34 @@ func (h *taskHandler) Block(block wire.Block) {
 			return
 		}
 
-		_ = h.bridge.update(ctx, h.session, acp.UpdateAgentMessageText(b.Text))
+		_ = h.bridge.message(ctx, h.session, b.Text)
 
 	case wire.ThinkingBlock:
 		if b.Text == "" {
 			return
 		}
 
-		_ = h.bridge.update(ctx, h.session, acp.UpdateAgentThoughtText(b.Text))
+		_ = h.bridge.update(ctx, h.session, acp.NewSessionUpdateAgentThoughtChunk(acp.ContentChunk{
+			Content: acp.NewContentBlockText(acp.TextContent{Text: b.Text}),
+		}))
 
 	case wire.ToolCallBlock:
 		h.mu.Lock()
 		h.calls[b.ID] = b.Name
 		h.mu.Unlock()
 
-		_ = h.bridge.update(ctx, h.session, acp.StartToolCall(
-			acp.ToolCallId(b.ID),
-			b.Name,
-			// Fisk's tool kind names the provider rather than the verb ACP wants, so
-			// every call is "other" until something derives one from the impact tags.
-			acp.WithStartKind(acp.ToolKindOther),
-			acp.WithStartStatus(acp.ToolCallStatusInProgress),
-			acp.WithStartRawInput(rawInput(b.Input)),
-		))
+		status := acp.ToolCallStatusInProgress
+		// Fisk's tool kind names the provider rather than the verb ACP wants, so every
+		// call is "other" until something derives one from the impact tags.
+		kind := acp.ToolKindOther
+
+		_ = h.bridge.update(ctx, h.session, acp.NewSessionUpdateToolCall(acp.ToolCall{
+			ToolCallID: acp.ToolCallID(b.ID),
+			Title:      b.Name,
+			Kind:       &kind,
+			Status:     &status,
+			RawInput:   b.Input,
+		}))
 
 	case wire.ToolResultBlock:
 		status := acp.ToolCallStatusCompleted
@@ -72,20 +78,18 @@ func (h *taskHandler) Block(block wire.Block) {
 			status = acp.ToolCallStatusFailed
 		}
 
-		opts := []acp.ToolCallUpdateOpt{
-			acp.WithUpdateStatus(status),
-			acp.WithUpdateContent([]acp.ToolCallContent{acp.ToolContent(acp.TextBlock(b.Output))}),
-		}
-
 		h.mu.Lock()
 		name := h.calls[b.CallID]
 		h.mu.Unlock()
 
-		if name != "" {
-			opts = append(opts, acp.WithUpdateTitle(name))
-		}
-
-		_ = h.bridge.update(ctx, h.session, acp.UpdateToolCall(acp.ToolCallId(b.CallID), opts...))
+		_ = h.bridge.update(ctx, h.session, acp.NewSessionUpdateToolCallUpdate(acp.ToolCallUpdate{
+			ToolCallID: acp.ToolCallID(b.CallID),
+			Title:      name,
+			Status:     &status,
+			Content: []acp.ToolCallContent{acp.NewToolCallContentContent(acp.Content{
+				Content: acp.NewContentBlockText(acp.TextContent{Text: b.Output}),
+			})},
+		}))
 	}
 }
 
@@ -131,18 +135,21 @@ func (h *taskHandler) approve(ctx context.Context, ask *wire.ElicitRequest) (*wi
 		title = ask.Display
 	}
 
+	status := acp.ToolCallStatusPending
+	kind := acp.ToolKindExecute
+
 	resp, err := conn.RequestPermission(ctx, acp.RequestPermissionRequest{
-		SessionId: h.session,
+		SessionID: h.session,
 		ToolCall: acp.ToolCallUpdate{
-			ToolCallId: acp.ToolCallId(ask.ToolUseID),
-			Title:      acp.Ptr(title),
-			Kind:       acp.Ptr(acp.ToolKindExecute),
-			Status:     acp.Ptr(acp.ToolCallStatusPending),
+			ToolCallID: acp.ToolCallID(ask.ToolUseID),
+			Title:      title,
+			Kind:       &kind,
+			Status:     &status,
 		},
 		Options: []acp.PermissionOption{
-			{Kind: acp.PermissionOptionKindAllowOnce, Name: "Allow once", OptionId: acp.PermissionOptionId(string(wire.ChoiceOnce))},
-			{Kind: acp.PermissionOptionKindAllowAlways, Name: "Always allow " + ask.Command, OptionId: acp.PermissionOptionId(string(wire.ChoiceAlways))},
-			{Kind: acp.PermissionOptionKindRejectOnce, Name: "Reject", OptionId: acp.PermissionOptionId(string(wire.ChoiceNo))},
+			{Kind: acp.PermissionOptionKindAllowOnce, Name: "Allow once", OptionID: acp.PermissionOptionID(wire.ChoiceOnce)},
+			{Kind: acp.PermissionOptionKindAllowAlways, Name: "Always allow " + ask.Command, OptionID: acp.PermissionOptionID(wire.ChoiceAlways)},
+			{Kind: acp.PermissionOptionKindRejectOnce, Name: "Reject", OptionID: acp.PermissionOptionID(wire.ChoiceNo)},
 		},
 	})
 	if err != nil {
@@ -158,7 +165,7 @@ func (h *taskHandler) approve(ctx context.Context, ask *wire.ElicitRequest) (*wi
 		return wire.NewNoOperatorReply(ask, clientSender), nil
 	}
 
-	choice := wire.ElicitChoice(resp.Outcome.Selected.OptionId)
+	choice := wire.ElicitChoice(resp.Outcome.Selected.OptionID)
 	switch choice {
 	case wire.ChoiceNo, wire.ChoiceOnce, wire.ChoiceAlways:
 		return wire.NewApproveReply(ask, clientSender, choice), nil
@@ -168,6 +175,10 @@ func (h *taskHandler) approve(ctx context.Context, ask *wire.ElicitRequest) (*wi
 }
 
 // elicit asks the client to render a form for one of the three human-in-the-loop tools.
+//
+// The request is session scoped and names the tool call it is about, which is what lets a
+// client attach the form to the right conversation and the right row. It also carries the
+// tool_use id, so a client that groups a question under the call that asked it can.
 //
 // Every field is a string or a string enum. A confirm is a boolean in Go and is not sent
 // as one: the client that renders forms best outside an editor handles string, array and
@@ -180,42 +191,48 @@ func (h *taskHandler) elicit(ctx context.Context, ask *wire.ElicitRequest) (*wir
 
 	const field = "answer"
 
-	property := map[string]any{"type": "string", "title": ask.Question}
+	property := acp.StringPropertySchema{Title: ask.Question}
 
 	switch ask.Kind {
 	case wire.ElicitConfirm:
-		property["oneOf"] = []any{
-			map[string]any{"const": "yes", "title": "Yes"},
-			map[string]any{"const": "no", "title": "No"},
+		property.OneOf = []acp.EnumOption{
+			{Const: "yes", Title: "Yes"},
+			{Const: "no", Title: "No"},
 		}
 
 	case wire.ElicitSelect:
-		options := make([]any, len(ask.Options))
+		property.OneOf = make([]acp.EnumOption, len(ask.Options))
 		for i, option := range ask.Options {
-			options[i] = map[string]any{"const": fmt.Sprintf("%d", i), "title": option}
+			property.OneOf[i] = acp.EnumOption{Const: strconv.Itoa(i), Title: option}
 		}
-		property["oneOf"] = options
 
 	case wire.ElicitInput:
-		if ask.Default != "" {
-			property["default"] = ask.Default
-		}
+		property.Default = ask.Default
 
 	default:
 		return nil, fmt.Errorf("the run asked a %q question, which this bridge does not know how to put to anybody", ask.Kind)
 	}
 
-	resp, err := conn.UnstableCreateElicitation(ctx, acp.UnstableCreateElicitationRequest{
-		Form: &acp.UnstableCreateElicitationForm{
-			Mode:    "form",
-			Message: ask.Question,
-			RequestedSchema: acp.UnstableElicitationSchema{
-				Type:       acp.UnstableElicitationSchemaTypeObject,
-				Properties: map[string]any{field: property},
+	schemaType := acp.ElicitationSchemaTypeObject
+	message := ask.Question
+
+	scope := acp.ElicitationSessionScope{SessionID: h.session}
+	if ask.ToolUseID != "" {
+		call := acp.ToolCallID(ask.ToolUseID)
+		scope.ToolCallID = &call
+	}
+
+	resp, err := conn.UnstableCreateElicitation(ctx, acp.NewCreateElicitationRequestForm(acp.CreateElicitationRequestForm{
+		Message: &message,
+		ElicitationFormMode: acp.NewElicitationFormModeElicitationSessionScope(acp.ElicitationFormModeElicitationSessionScope{
+			ElicitationSessionScope: scope,
+			RequestedSchema: acp.ElicitationSchema{
+				Type:       &schemaType,
+				Properties: map[string]acp.ElicitationPropertySchema{field: acp.NewElicitationPropertySchemaString(property)},
 				Required:   []string{field},
 			},
-		},
-	})
+		}),
+	}))
 	if err != nil {
 		h.bridge.log.Warn("Asking the client a question failed", "error", err, "kind", ask.Kind)
 
@@ -229,22 +246,18 @@ func (h *taskHandler) elicit(ctx context.Context, ask *wire.ElicitRequest) (*wir
 		return wire.NewNoOperatorReply(ask, clientSender), nil
 	}
 
-	value, _ := resp.Accept.Content[field].(string)
+	value := ""
+	if answer, ok := resp.Accept.Content[field]; ok && answer.String != nil {
+		value = string(*answer.String)
+	}
 
 	switch ask.Kind {
 	case wire.ElicitConfirm:
 		return wire.NewConfirmReply(ask, clientSender, value == "yes"), nil
 
 	case wire.ElicitSelect:
-		index := -1
-		for i := range ask.Options {
-			if value == fmt.Sprintf("%d", i) {
-				index = i
-
-				break
-			}
-		}
-		if index < 0 {
+		index, err := strconv.Atoi(value)
+		if err != nil || index < 0 || index >= len(ask.Options) {
 			return wire.NewNoOperatorReply(ask, clientSender), nil
 		}
 
@@ -253,14 +266,4 @@ func (h *taskHandler) elicit(ctx context.Context, ask *wire.ElicitRequest) (*wir
 	default:
 		return wire.NewInputReply(ask, clientSender, value), nil
 	}
-}
-
-// rawInput is a tool call's arguments as something the client can render. The wire
-// carries them as JSON the model produced, and a client shows them under the call.
-func rawInput(input []byte) any {
-	if len(input) == 0 {
-		return nil
-	}
-
-	return string(input)
 }
