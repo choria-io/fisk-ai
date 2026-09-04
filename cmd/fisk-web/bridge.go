@@ -51,8 +51,35 @@ func (b *bridge) mux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("OPTIONS /api/chat", b.preflight)
 	mux.HandleFunc("POST /api/chat", b.chat)
+	mux.HandleFunc("OPTIONS /api/agent", b.preflight)
+	mux.HandleFunc("GET /api/agent", b.card)
 
 	return mux
+}
+
+// card answers the agent's own description: who it is, the model it answers with, and the
+// tools it exposes.
+//
+// It is asked of the worker on every request rather than cached, so a page reload shows
+// an agent that was restarted with a different model or a different tool set. A browser
+// otherwise has no way to see what is answering it.
+func (b *bridge) card(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", b.origin)
+
+	card, err := b.client.Discover(r.Context(), b.agent)
+	if err != nil {
+		b.log.Warn("Discovering the agent failed", "agent", b.agent, "error", err)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+
+		return
+	}
+
+	w.Header().Set("content-type", "application/json")
+
+	err = json.NewEncoder(w).Encode(card)
+	if err != nil {
+		b.log.Warn("Writing the agent card failed", "agent", b.agent, "error", err)
+	}
 }
 
 // preflight answers the OPTIONS the browser sends before the POST. It is not optional:
@@ -207,12 +234,29 @@ func (b *bridge) turn(ctx context.Context, w http.ResponseWriter, chat string, r
 
 // ask sends the question the run stopped on.
 //
-// An approval has a shape of its own: tool-approval-request mutates the tool part that
-// call's tool-input-available already created, so it is only valid after that part, which
-// has gone out by the time the gate asks. The other three have no shape in the AI SDK, so
-// they go as a data part, which the page reads without a schema.
+// An approval carries no part of its own: tool-approval-request mutates the tool part its
+// toolCallId names, and the client drops it in silence when there is none. The gate runs
+// before the runner traces the call, so a call waiting on approval has never been sent as
+// a block and the part it needs does not exist. This sends it, carrying the gate's own
+// rendered command line, which is more than the tool block would have held.
+//
+// The other three questions have no shape in the AI SDK at all, so they go as a data
+// part, which the page reads without a schema.
 func (b *bridge) ask(s *stream, ask *wire.ElicitRequest) {
 	if ask.Kind == wire.ElicitApprove {
+		input, err := json.Marshal(approvalInput{Command: ask.Display, Tag: ask.Tag})
+		if err != nil {
+			input = json.RawMessage("{}")
+		}
+
+		s.part(toolInputPart{
+			Type:       "tool-input-available",
+			ToolCallID: ask.ToolUseID,
+			ToolName:   ask.Command,
+			Input:      input,
+			Dynamic:    true,
+		})
+
 		s.part(approvalPart{
 			Type:       "tool-approval-request",
 			ApprovalID: ask.QuestionID,

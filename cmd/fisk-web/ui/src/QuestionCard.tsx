@@ -28,16 +28,18 @@ export interface FiskAnswer {
 
 export interface QuestionCardProps {
   question: FiskQuestion
-  answered: boolean
+  // answered is what was said, and undefined for a question still open.
+  answered?: string
   onAnswer: (answer: FiskAnswer, said: string) => void
 }
 
 // QuestionCard renders a yes or no, a pick one of several, or a line of text with a
 // default, and sends the answer as a request of its own.
 //
-// An answered card stays on the page as the record of what was asked and stops taking
-// input: the part it was drawn from is still in the history that every later request
-// resends, so it is drawn again on every render after the answer.
+// An answered card keeps the question and shows the answer beside it, because sending an
+// answer adds no turn to the transcript and this is the only place it appears. It is
+// drawn again on every render after that, since the part it comes from stays in the
+// history that each later request resends.
 export const QuestionCard = ({ question, answered, onAnswer }: QuestionCardProps) => {
   const [value, setValue] = useState(question.default ?? "")
 
@@ -45,15 +47,26 @@ export const QuestionCard = ({ question, answered, onAnswer }: QuestionCardProps
     onAnswer({ toolUseId: question.toolUseId, kind: question.kind, ...a }, said)
   }
 
+  if (answered !== undefined) {
+    return (
+      <Alert className="flex flex-col gap-1.5">
+        <AlertDescription className="inline text-muted-foreground">
+          {question.question}
+        </AlertDescription>
+        <p className="font-mono text-[13px] text-foreground">{answered}</p>
+      </Alert>
+    )
+  }
+
+  // Amber says a person is needed, the same signal the approval carries.
   return (
-    <Alert className="mb-4 flex flex-col gap-3">
-      <AlertDescription className="inline font-medium">{question.question}</AlertDescription>
+    <Alert className="flex flex-col gap-3 border-signal-rule bg-signal-quiet">
+      <AlertDescription className="inline">{question.question}</AlertDescription>
 
       {question.kind === "confirm" && (
         <div className="flex justify-end gap-2">
           <Button
-            className="h-8 px-3 text-sm"
-            disabled={answered}
+            className="h-8 bg-signal px-3 text-sm text-signal-foreground hover:bg-signal/90"
             onClick={() => answer({ confirmed: true }, "Yes")}
             type="button"
           >
@@ -61,7 +74,6 @@ export const QuestionCard = ({ question, answered, onAnswer }: QuestionCardProps
           </Button>
           <Button
             className="h-8 px-3 text-sm"
-            disabled={answered}
             onClick={() => answer({ confirmed: false }, "No")}
             type="button"
             variant="outline"
@@ -75,8 +87,7 @@ export const QuestionCard = ({ question, answered, onAnswer }: QuestionCardProps
         <div className="flex flex-col gap-2">
           {(question.options ?? []).map((option) => (
             <Button
-              className="h-8 justify-start px-3 text-sm"
-              disabled={answered}
+              className="h-8 justify-start px-3 font-mono text-sm"
               key={option}
               onClick={() => answer({ value: option }, option)}
               type="button"
@@ -93,16 +104,23 @@ export const QuestionCard = ({ question, answered, onAnswer }: QuestionCardProps
           className="flex gap-2"
           onSubmit={(e) => {
             e.preventDefault()
-            answer({ value }, value)
+
+            if (value.trim() !== "") {
+              answer({ value }, value)
+            }
           }}
         >
           <Input
-            disabled={answered}
+            autoFocus
+            className="font-mono"
             onChange={(e) => setValue(e.target.value)}
             placeholder={question.default}
             value={value}
           />
-          <Button className="h-9 px-3 text-sm" disabled={answered} type="submit">
+          <Button
+            className="h-9 bg-signal px-3 text-sm text-signal-foreground hover:bg-signal/90"
+            type="submit"
+          >
             Answer
           </Button>
         </form>

@@ -2,56 +2,76 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* The ground is a cool paper rather than white, so a card sitting on it reads as raised
+   without needing a shadow. Amber is the only warm value in the palette and it means one
+   thing: the run is waiting on a person. Nothing decorative may use it. */
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
+  --radius: 0.375rem;
+  --background: oklch(0.968 0.004 165);
+  --foreground: oklch(0.235 0.014 245);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
+  --card-foreground: oklch(0.235 0.014 245);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  --popover-foreground: oklch(0.235 0.014 245);
+  --primary: oklch(0.36 0.032 245);
+  --primary-foreground: oklch(0.985 0.003 165);
+  --secondary: oklch(0.928 0.006 175);
+  --secondary-foreground: oklch(0.3 0.018 245);
+  --muted: oklch(0.935 0.005 175);
+  --muted-foreground: oklch(0.5 0.014 235);
+  --accent: oklch(0.928 0.006 175);
+  --accent-foreground: oklch(0.3 0.018 245);
+  --destructive: oklch(0.52 0.17 27);
+  --destructive-foreground: oklch(0.985 0.003 165);
+  --border: oklch(0.878 0.006 175);
+  --input: oklch(0.878 0.006 175);
+  --ring: oklch(0.6 0.11 68);
+
+  /* The one signal. A run that stopped to ask is the only thing allowed to wear it. */
+  --signal: oklch(0.56 0.128 68);
+  --signal-foreground: oklch(0.99 0.005 90);
+  --signal-quiet: oklch(0.962 0.026 84);
+  --signal-rule: oklch(0.845 0.072 76);
 }
 
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --destructive-foreground: oklch(0.985 0 0);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --background: oklch(0.208 0.013 245);
+  --foreground: oklch(0.928 0.006 175);
+  --card: oklch(0.253 0.014 245);
+  --card-foreground: oklch(0.928 0.006 175);
+  --popover: oklch(0.253 0.014 245);
+  --popover-foreground: oklch(0.928 0.006 175);
+  --primary: oklch(0.88 0.008 175);
+  --primary-foreground: oklch(0.235 0.014 245);
+  --secondary: oklch(0.295 0.015 245);
+  --secondary-foreground: oklch(0.928 0.006 175);
+  --muted: oklch(0.295 0.015 245);
+  --muted-foreground: oklch(0.665 0.014 230);
+  --accent: oklch(0.31 0.016 245);
+  --accent-foreground: oklch(0.928 0.006 175);
+  --destructive: oklch(0.63 0.16 27);
+  --destructive-foreground: oklch(0.98 0.003 165);
+  --border: oklch(1 0 0 / 12%);
+  --input: oklch(1 0 0 / 16%);
+  --ring: oklch(0.66 0.1 68);
+
+  --signal: oklch(0.74 0.12 72);
+  --signal-foreground: oklch(0.22 0.02 60);
+  --signal-quiet: oklch(0.3 0.036 68);
+  --signal-rule: oklch(0.44 0.068 70);
 }
 
+/* The two families split on who wrote the text. Instrument Sans is the interface talking;
+   IBM Plex Mono is anything the machine produced, which is command lines, tool output,
+   ids and the model name. */
 @theme inline {
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", monospace;
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+  --radius-xl: calc(var(--radius) + 6px);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -71,13 +91,36 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-signal: var(--signal);
+  --color-signal-foreground: var(--signal-foreground);
+  --color-signal-quiet: var(--signal-quiet);
+  --color-signal-rule: var(--signal-rule);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+
   body {
     @apply bg-background text-foreground;
+    font-feature-settings: "ss01", "cv01";
+  }
+
+  /* Tool output is where cowsay lives, so the mono has to keep its columns and its
+     line box exact or the cow comes apart. */
+  pre,
+  code {
+    @apply font-mono;
+    font-variant-ligatures: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }

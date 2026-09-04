@@ -185,6 +185,14 @@ type dataPart struct {
 	Data any    `json:"data"`
 }
 
+// approvalInput stands in for the arguments of a call waiting on approval. An
+// ElicitRequest carries no argument JSON, so the gate's rendered command line and the tag
+// that triggered it are what the page has to show.
+type approvalInput struct {
+	Command string `json:"command"`
+	Tag     string `json:"tag,omitempty"`
+}
+
 // questionData is a confirm, select or input question as the page receives it. It carries
 // the ids an answer names, since the page sends them back rather than the run
 // reconstructing them.
