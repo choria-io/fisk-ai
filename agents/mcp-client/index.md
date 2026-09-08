@@ -120,6 +120,15 @@ A server can tell a live session that its tool list changed. The run re-lists th
 and names the survivors, and the model sees the new set on its next call. A tool batch already dispatched runs against
 the set it was dispatched with, and no other server's tools move.
 
+Set `watch_tools: true` on the entry to hear that. It is off by default, and with it unset the tool list read when the
+session connects stands for the life of that session: a server that adds or removes a tool mid-run is not heard, and
+under `fisk serve`, where the sessions outlive the runs, the list read at startup stands until the session is replaced.
+
+The default is off because subscribing opens a long-lived stream that the MCP SDK reconnects when it ends, and a server
+that answers the stateless `server/discover` handshake but refuses to resume that stream loses its whole session rather
+than only the subscription. A run against such a server then starts with none of its tools and `fisk info` reports it
+unavailable. Turn the key on for a server known to hold the stream open.
+
 ## Seeing what a server offers
 
 `fisk info` connects every configured server and prints an `MCP clients` section: where each is reached and over which
