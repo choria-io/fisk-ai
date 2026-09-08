@@ -108,7 +108,8 @@ between those messages, so this agent waits for as long as the keepalives arrive
 call. A card fetch is a single message, so the same value covers a whole card fetch.
 
 The same value is how long the prompts endpoint holds a question it put to a caller, see
-[Answering questions](../prompts/#answering-questions). Raising it for a slow peer raises that window too.
+[Answering questions](../../design/protocol/prompts/#answering-questions). Raising it for a slow peer raises that
+window too.
 
 An agent that only calls other agents still needs `request_timeout`, so a block holding nothing else is valid:
 

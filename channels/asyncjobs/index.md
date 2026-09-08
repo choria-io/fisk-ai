@@ -143,7 +143,8 @@ task. It is not retried: a model refusal or an exhausted budget fails the same w
 | `error`             | the run failed                                    |
 
 Where the failure is one a caller can act on, the stored `error` also carries a `code` beside its `stop_reason`. It is
-the same vocabulary [Answering prompts](../prompts/) sends on a terminal message, and these are the ones a job reaches:
+the same vocabulary the [prompts protocol](../../design/protocol/prompts/#refusals-and-endings) sends on a terminal
+message, and these are the ones a job reaches:
 
 | Code                | Meaning                                                              |
 |---------------------|----------------------------------------------------------------------|

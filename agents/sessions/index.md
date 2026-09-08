@@ -89,8 +89,8 @@ resumes once the answer exists. `session show` lists what such a session is wait
 `tool_use` id, the tool, and whatever the tool said it is waiting for.
 
 The answer travels on a request carrying the conversation's token, described in
-[Answering after the run ended](../../channels/prompts/#answering-after-the-run-ended). The tool is never called again: it
-already started the work, which is why it deferred.
+[Answering after the run ended](../../design/protocol/prompts/#answering-after-the-run-ended). The tool is never called
+again: it already started the work, which is why it deferred.
 
 No tool that ships with fisk defers; the mechanism is for tools a Go program registers through `agent.Options.CustomTools`.
 
@@ -156,5 +156,11 @@ nats --context production stream add FISK_SESSIONS \
 The stream keeps messages forever by default, which suits sessions; do not set a max age or they would silently
 expire. The subject prefix (`fisk.sessions` above) is yours to choose; the backend derives it from the stream's single
 wildcard subject when it binds, so it is not set in the config. The backend fails at run start, rather than degrading silently, if
-the stream does not exist or its configuration does not match this shape. Sessions are never namespaced by identity, so a
-run started by one agent is found by another reading the same stream; keep separate environments in separate streams.
+the stream does not exist or its configuration does not match this shape.
+
+The stream holds one namespace. `fisk session ls` lists every run on it, whichever agent wrote it, so keep separate
+environments in separate streams. A run does record the agent that started it, and the
+[web channel](../../channels/web/) filters its session list on that identity and on the id prefix it mints its own
+conversations under, so a browser reaches the conversations that agent minted for it rather than everything on the
+stream. [The web protocol](../../design/protocol/web/) covers that listing. A run journaled before the identity was
+recorded carries none, and every listing shows it.

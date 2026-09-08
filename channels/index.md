@@ -1,17 +1,17 @@
 # Channels
 
-A channel supplies work to an agent and returns the answer. A work queue and a NATS request subject are channels
-today; an HTTP listener or a caller in the same process would be channels too.
+A channel supplies work to an agent and returns the answer. A work queue, a NATS request subject and an HTTP listener
+are channels today; a caller in the same process would be a channel too.
 
 The `fisk serve` command hosts an agent behind the channels. The queued-jobs channel polls a work queue. The prompts 
-channel answers a request on a NATS subject. The Slack channel answers people who mention a bot in a thread. The agent
-loop is the same in each case and does not see the difference.
+channel answers a request on a NATS subject. The Slack channel answers people who mention a bot in a thread. The web
+channel answers a browser over HTTP. The agent loop is the same in each case and does not see the difference.
 
 `fisk serve` also hosts endpoints that produce no work. [Serving tools](a2a/) answers another agent's tool call
 directly, running one tool. It starts no agent loop, so the behavior on this page does not apply to it.
 
 > [!info] Note
-> Queued jobs, prompts from other agents and Slack are the channels that ship today.
+> Queued jobs, prompts from other agents, Slack and the web listener are the channels that ship today.
 >
 > Channels and `fisk serve` are available since {{% badge style="primary" title="Version" %}}0.0.5{{% /badge %}}.
 
@@ -33,8 +33,12 @@ What each shipped channel offers:
 | Queued jobs | no        | no          | no              | unverified `sender` field |
 | a2a prompts | yes       | optional    | yes             | unverified `sender` field |
 | Slack       | no        | yes         | yes             | the Slack user who spoke  |
+| Web         | yes       | yes         | yes             | nobody is authenticated   |
 
 No caller waits for a queued job, so that channel does not stream output and does not take a second turn.
+
+A web turn ends on any question it asks, since the page that would answer is reading the response. The answer arrives on
+the page's next request.
 
 The prompts channel sends output to the caller as the worker produces it. It returns a conversation token with every
 prompt it accepts. Send that token on a later request to continue the conversation.
