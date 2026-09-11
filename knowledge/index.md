@@ -135,6 +135,8 @@ harness:
     directory: ""
     top_k: 5
     max_injected_tokens: 6000
+    expand_to_section: false
+    read_tool: false
     citations:
       - pattern: '^docs/content/(.+)\.md$'
         replace: 'https://docs.example.net/$1/#${anchor}'
@@ -154,6 +156,8 @@ harness:
 | `directory` (string)            | store location; a relative value resolves under the store base when set, else the working directory; default `knowledge/<identity>` |
 | `top_k` (integer)               | default retrieval count, default `5`, hard ceiling `20`                                                                             |
 | `max_injected_tokens` (integer) | cap on the total retrieved text fed to the model, default `6000`                                                                    |
+| `expand_to_section` (boolean)   | widen each result from the chunk that ranked to its whole heading section, default `false`; see [Whole sections](#whole-sections)   |
+| `read_tool` (boolean)           | offer the model `knowledge_read`, which returns the sections a citation names, default `false`; see [Reading by citation](#reading-by-citation) |
 | `embeddings`                    | optional block; its presence turns on the vector tier                                                                               |
 | `citations` (array)             | ordered rules rewriting a document path into how the corpus is cited outside itself; see [Citations](#citations) {{% badge style="primary" title="Version" %}}0.0.6{{% /badge %}} |
 
@@ -165,6 +169,42 @@ The store base is a deployment concern for running many agents in one process, n
 caller passes `store_dir`, and the `knowledge` command takes a matching `--store-dir` flag or `FISK_AI_STORE_DIR`
 environment variable. An absolute `directory` both the agent and the `knowledge` command read from the same config
 needs neither, and is the surest way to keep them pointed at the same index.
+
+### Whole sections
+
+A section longer than about 1200 bytes is packed into several chunks, so a search ranks them separately and returns the
+one that ranked. `expand_to_section` widens each result to the chunks around it that sit in the same heading section,
+subsections included, so the model reads the section instead of a slice of it. Ranking still runs on the small chunks,
+and nothing is reindexed.
+
+Each result may grow to `max_injected_tokens / top_k` tokens, so a search feeds the model no more text than it does
+today and only spends the budget differently. At the defaults that is 1200 tokens per result, about four chunks; at
+`top_k: 20` it is 300 tokens, which one chunk already fills, and nothing grows. The walk also stops at the edge of the
+document and at the first chunk under a sibling or an ancestor heading.
+
+Two results in one section come back as one, under the better-ranked one's citation. A result that grew carries a span,
+`docs/foo.md#5..#9`, naming the range of chunks its text covers; its citation stays the chunk that ranked.
+`knowledge search --expand` and `--no-expand` override the key for one query, which is how to compare both ways over
+your own corpus before setting it for every agent run.
+
+### Reading by citation
+
+`read_tool` offers the model a third tool, `knowledge_read`. It takes the `index_ref` of a result and returns that
+section from the index again, with `before` and `after` taking as many sections either side of it as the model asks for.
+Where `expand_to_section` widens every result and pays for it on every search, this pays only where the model decides it
+needs more, so the two are usefully set the opposite way around.
+
+It reads the document, not one heading's part of it: `before` and `after` count sections in document order and cross
+heading boundaries, which the expansion walk never does. A model asking for a range of sections is not the walk
+wandering.
+
+One call returns at most `max_injected_tokens / 2` tokens, 3000 at the default, which is around ten chunks. The cited
+section always comes back whatever its size; the sections around it are added while the block stays inside that limit.
+A block that reached the limit, or the edge of the document, carries a note saying which one stopped it, and its `span`
+is where to start the next call.
+
+The tool is served over MCP as well when the operator names it in the allowlist. Naming it there without setting
+`read_tool` fails config load rather than serving a client two tools where it asked for three.
 
 ### Embeddings
 
@@ -355,12 +395,12 @@ chunk can be found from what a rule produced.
 
 ### What the model receives
 
-Both knowledge tools put the mapped citation in `citation` and the raw token in `index_ref`. Their descriptions tell
+The knowledge tools put the mapped citation in `citation` and the raw token in `index_ref`. Their descriptions tell
 the model to cite `citation` verbatim and to treat `index_ref` as an index key it never shows a reader, so the mapping
 needs no prompt engineering from the operator. Where no rule matched, `citation` carries the raw token, which the
 descriptions also state.
 
-Both tools also put the document path in `path`, as the index recorded it and without the chunk ordinal, so no citation
+They also put the document path in `path`, as the index recorded it and without the chunk ordinal, so no citation
 rule touches it. The descriptions tell the model to keep it off the page and to hand it to a file-reading tool where the
 operator offers one, which is how a model that read one section reads the rest of the document. A relative `path`
 resolves from the directory the agent runs in, so it reaches the document only when the agent runs where the index was
@@ -396,6 +436,15 @@ run, so a missing index never bricks agent startup.
 {{% badge style="primary" title="Version" %}}0.0.4{{% /badge %}} `knowledge_enumerate` is the tool form of
 [`knowledge match`](#which-documents-mention-a-word), with the same syntax. The model routes here
 before answering that something is absent, then reads what it needs with `knowledge_search`.
+
+### knowledge_read
+
+`knowledge_read` returns the text an `index_ref` names, along with the sections either side of it that the call asks
+for. It is offered only when `harness.knowledge.read_tool` is set; see [Reading by citation](#reading-by-citation) for
+the arguments and the limit on one call.
+
+It is the way an agent with no file-reading tool reads more of a document than a search returned, and the answer to a
+citation rule that renders a URL: the model quotes that URL and takes the content from the index instead of fetching it.
 
 ## CLI commands
 
@@ -493,7 +542,7 @@ side by side. A store base relocates that default under it, and the `directory` 
 
 ## Serving over MCP
 
-Both knowledge tools can be served over [MCP](../mcp/) as well as to the agent. Exposure is off by default and enabled
+The knowledge tools can be served over [MCP](../mcp/) as well as to the agent. Exposure is off by default and enabled
 by naming them in an allowlist:
 
 ```yaml
@@ -507,7 +556,8 @@ expose:
 ```
 
 Name both. A client that can rank but cannot enumerate cannot tell an absent term from a low-scoring one, which is the
-whole reason the second tool exists. See [MCP](../mcp/) for binding, ports, and the rest of the serving configuration.
+whole reason the second tool exists. `knowledge_read` may be named beside them where `read_tool` is set. See
+[MCP](../mcp/) for binding, ports, and the rest of the serving configuration.
 
 ## Security
 
@@ -521,9 +571,12 @@ The index holds the verbatim text of every indexed document, unencrypted on disk
 - Over MCP two gates apply, and both must pass: the tool itself declares whether it may ever be served over MCP, and the
   allowlist selects which of those this operator wants served. The allowlist can only narrow the tools declared servable,
   never widen past them, so a tool added alongside `knowledge_search` is not served on the strength of its neighbor's
-  entry. That holds between the two knowledge tools themselves: allowlisting one never serves the other. Only the two
-  read-only knowledge tools declare MCP exposure; no index or write path is reachable over MCP, and no built-in declares
-  a2a exposure at all.
+  entry. That holds between the knowledge tools themselves: allowlisting one never serves another. Only the read-only
+  knowledge tools declare MCP exposure; no index or write path is reachable over MCP, and no built-in declares a2a
+  exposure at all.
+- `knowledge_read` returns stored text by reference rather than by query, so a client holding a reference reads the
+  document around it a section at a time. The limit on one call is `max_injected_tokens / 2`, and the tool is served
+  only where `harness.knowledge.read_tool` is set as well as named in the allowlist.
 - `knowledge_enumerate` returns a complete set rather than a ranked sample, so a client that can reach it can inventory
   which documents mention which terms without reading any of them. That is less text than `knowledge_search` discloses
   per call and more structure. Both matter when deciding what to bind.
