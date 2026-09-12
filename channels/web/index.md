@@ -143,6 +143,9 @@ identity: nats-ops
 display_name: NATS Operations
 description: Inspects and operates the production NATS cluster.
 icon_url: https://example.net/nats.png
+prompts:
+  - who can publish to ORDERS?
+  - what changed in the auth config today?
 ```
 
 | Key            | Description                                                                            |
@@ -151,13 +154,16 @@ icon_url: https://example.net/nats.png
 | `display_name` | the human name, where `identity` is the name a caller addresses; up to 128 bytes         |
 | `icon`         | an emoji drawn beside the name, up to 16 bytes                                           |
 | `icon_url`     | an `https` URL of an image drawn beside the name, up to 512 bytes                        |
+| `prompts`      | things a person can ask this agent, up to 8 of up to 256 characters each                 |
 
-A reader with no `display_name` shows the identity. `icon_url` is a claim this agent makes and nothing verifies: the
+A reader with no `display_name` shows the identity. A console offers the `prompts` to somebody who has never used the
+agent, so they read as the words to send rather than as a description of what it does. `icon_url` is a claim this agent makes and nothing verifies: the
 card is checked for an `https` scheme, a host and the length, and whether to fetch the image is the console's decision.
 
 The card is built for each request, so a worker restarted with a different model or a different tool set answers with
 what it is running now. A value the card cannot carry fails there: an `icon_url` that is not `https` or names no host,
-and a `display_name` or an `icon` over its limit. The channel answers the request `500` and logs the value.
+a `display_name`, an `icon` or a prompt over its limit, and a ninth prompt. The channel answers the request `500` and
+logs the value.
 
 > [!info] Note
 > The a2a endpoint builds its card once and refuses a bad value at startup, so the worker does not start. The web

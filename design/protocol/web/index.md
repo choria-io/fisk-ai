@@ -268,6 +268,7 @@ different model or tool set answers with what it is running now.
 | `display_name`                 | the human name, where `name` is the identity                         |
 | `icon`, `icon_url`             | an emoji and an `https` image URL, both decoration the agent asserts |
 | `notes`                        | one sentence per source whose tools are missing from this card       |
+| `prompts`                      | things a person can ask this agent, in the operator's words          |
 | `protocols`                    | the message namespaces this agent speaks                             |
 | `tools`                        | the tools, each with `name`, `description`, `input_schema` and `behavior` |
 | `model`                        | the model that answers a prompt                                      |
