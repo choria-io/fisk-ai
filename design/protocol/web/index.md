@@ -47,7 +47,7 @@ Every route sits under `base_path`. The paths below assume the default.
 | `POST`   | `/fisk/v1/agui`                  | one turn as AG-UI events                             |
 | `GET`    | `/fisk/v1/agui/sessions/{id}`    | a stored conversation as AG-UI events                |
 | `GET`    | `/fisk/v1/card`                  | the agent card as JSON                               |
-| `GET`    | `/fisk/v1/sessions`              | a page of stored conversations as JSON               |
+| `GET`    | `/fisk/v1/sessions`              | stored conversations, a page or the ids you name     |
 | `DELETE` | `/fisk/v1/sessions/{id}`         | nothing, with `204`                                  |
 
 The status codes are the same across every route, and a refusal body is plain text.
@@ -56,7 +56,7 @@ The status codes are the same across every route, and a refusal body is plain te
 |-------|---------------------------------------------------------------------------------------------------|
 | `200` | a turn, a stored conversation, the card or a listing                                              |
 | `204` | a deleted conversation, and a CORS preflight                                                      |
-| `400` | a body the format could not decode, a turn naming no thread or carrying neither a prompt nor an answer, an answer naming no call, an AG-UI `resume` array naming no interrupt this agent raised, an answer payload of the wrong shape, a bad `limit`, a cursor this agent did not mint |
+| `400` | a body the format could not decode, a turn naming no thread or carrying neither a prompt nor an answer, an answer naming no call, an AG-UI `resume` array naming no interrupt this agent raised, an answer payload of the wrong shape, a bad `limit`, a cursor this agent did not mint, more than 50 session ids, `id` named together with `limit` or `cursor` |
 | `403` | an `Origin` outside the configured list, or a `Host` that does not name the loopback listener on its bound port |
 | `404` | an answer for a thread holding no conversation, a session this channel does not hold, an unmounted path |
 | `405` | a method the route does not answer                                                                |
@@ -311,6 +311,16 @@ Rows come oldest first, which is the order a write-once journal can enumerate. `
 whose last turn ended before a turn recorded one, so a rail shows an empty slot rather than counts of zero. `terminal`
 is empty for a conversation with a turn in flight. `cursor` is absent once the listing has reached the end, and a page
 that fills to the limit always carries one, so a full last page is followed by an empty page carrying none.
+
+`GET /fisk/v1/sessions?id=w-9f2c...&id=w-41ab...` answers the rows for the ids it names rather than a page. They come
+back in the order they were named, carry no `cursor`, and a row repeated in the request is answered once. A frontend
+holding its own map of people to conversations reads its rail this way: it knows the ids already and has nothing to
+enumerate. At most 50 ids, which keeps the URL under 4KB at 66 characters an id, and more than that is a `400`.
+Naming `id` together with `limit` or `cursor` is a `400` as well.
+
+An id this channel does not hold is left out of `sessions`, as is one whose journal is corrupt or written under a
+version this build does not read, both of which the paged listing also leaves out. So a caller naming twelve ids and
+reading eight rows knows the other four are not here.
 
 `GET /fisk/v1/{format}/sessions/{id}` writes a stored conversation in the format it is mounted under: the user turns,
 the assistant turns, and the calls with the results that answered them. A conversation the run left waiting on a
