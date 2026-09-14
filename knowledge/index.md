@@ -406,6 +406,14 @@ operator offers one, which is how a model that read one section reads the rest o
 resolves from the directory the agent runs in, so it reaches the document only when the agent runs where the index was
 built. Index with absolute `knowledge.paths` when the two directories differ.
 
+Each result also carries `ref`, a six-character id derived from the index reference, so the same chunk gets the same
+`ref` from every search and from `knowledge_read`, on any node and across a resumed session. A UI that renders
+citations can have the model name a section by its `ref` and key its sources by it, and the reference stays unique
+across every tool call in a conversation, where a position in one call's results does not. The tool descriptions say
+only that the id exists; the UI's own prompt tells the model how to write a marker, since that depends on how the UI
+renders one. A reindex that moves a chunk to a different ordinal changes which chunk a `ref` names, as it does
+`index_ref`.
+
 ### What the mapping cannot reach
 
 * A path regex cannot express front matter `slug:` or `url:`, aliases, or an i18n path scheme, so a document whose
@@ -425,7 +433,8 @@ When knowledge is enabled the agent is offered these tools, along with instructi
 the ranked sections.
 
 Each result carries a citation token of the form `<relpath>#<ordinal>`, the file path relative to the index root and the
-chunk's position in that file, alongside the human-readable heading path of the section.
+chunk's position in that file, alongside the human-readable heading path of the section. It also carries `ref`, a
+short stable id for the section, unique across tool calls, which a UI that renders citations keys its sources by.
 
 Results are returned to the model as untrusted reference data, framed as material to draw on rather than as
 instructions. When the store has no index yet the tool returns a soft `index_not_built` status rather than failing the
