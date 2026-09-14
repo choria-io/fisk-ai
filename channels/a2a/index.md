@@ -71,14 +71,14 @@ Importing those tools into another agent is `remote_tools` in that agent's confi
 
 ## Tool selection
 
-`expose.agent.tools` applies on top of the agent's `include` and `exclude`. One file can run every `stream_` tool in a
-job and serve two of them to peers.
+`expose.agent.tools` applies on top of the agent's `include` and `exclude`, and each filter matches every tool by name
+or, for a command, by tag. One file can run every `stream_` tool in a job and serve two of them to peers.
 
 A tool carrying `ai:confirm` or a configured confirm tag is left off the card, because no operator is behind a served
 call to approve it. Use `ai:deny` to keep a command out entirely.
 
-Built-in tools are never served. Knowledge, memory and the human-in-the-loop tools declare no a2a exposure, and the
-startup banner lists them as withheld when the configuration enables them.
+Built-in tools are never served, since none declares a2a exposure. The startup banner lists the enabled ones as
+withheld, each with its reason.
 
 ## Limits
 

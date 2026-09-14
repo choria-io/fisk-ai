@@ -71,8 +71,7 @@ agent-only harness settings are ignored.
 
 | Field                                   | Description                                                                                                                                        |
 |-----------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| `application_path`                      | path to the Fisk application binary to introspect and serve; optional, omit it to serve only allowlisted built-ins (today the two knowledge tools) |
-| `expose.agent.mcp.builtins`             | the built-ins this operator wants served; only `knowledge_search` and `knowledge_enumerate` are accepted. A tool must also declare MCP exposure itself, so this can narrow what is served but never widen it |
+| `application_path`                      | path to the Fisk application binary to introspect and serve; optional, omit it to serve only the enabled built-ins                                 |
 | `expose.agent.mcp`                      | the opt-in block that enables MCP serving; must be present                                                                                         |
 | `expose.agent.mcp.port`                 | default listen port when `--port` and `FISK_AI_MCP_PORT` are unset, default `8080`                                                                 |
 | `expose.agent.mcp.address`              | host or IP to bind when `--address` and `FISK_AI_MCP_ADDRESS` are unset, default `127.0.0.1` (loopback); use `0.0.0.0` to listen on all interfaces |
@@ -80,8 +79,8 @@ agent-only harness settings are ignored.
 | `expose.agent.mcp.confirm_over_mcp`     | how confirmation-gated commands behave when a client cannot be asked                                                                               |
 | `expose.agent.mcp.max_concurrent_tools` | maximum tool calls run at once; `0` or unset uses the default `2`, negative is rejected, capped at `1024`                                          |
 | `expose.agent.mcp.tool_timeout`         | how long a single served tool call may run, for example `60s`; unset uses the default `30s`                                                        |
-| `include` / `exclude`                   | select which commands become tools, matched on tool name (regex) or tag                                                                            |
-| `expose.agent.tools`                    | narrow the exposed set further within the `include`/`exclude` selection                                                                            |
+| `include` / `exclude`                   | select which commands and built-ins are served, matched on tool name (regex) or tag                                                                |
+| `expose.agent.tools`                    | narrow the served set further within the `include`/`exclude` selection, over commands and built-ins alike                                          |
 | `identity`                              | the MCP server name; optional                                                                                                                      |
 
 ### Instructions
@@ -126,9 +125,16 @@ Every tag a command carries, reserved and free-form alike, also reaches the clie
 under [Command tags over MCP](#command-tags-over-mcp) below.
 
 The served tools are the agent's `include`/`exclude` selection, narrowed further by `expose.agent.tools` when it is set.
-With neither, every command is served, subject to the tag rules below. Tool selection uses the same regular expressions
-over the tool name as the [agent](../agents/tools/). A tool call runs the command and returns its result,
-limited by `tool_timeout` per call and `max_concurrent_tools` in flight at once.
+With neither, every command is served, subject to the tag rules below, along with every enabled built-in that declares
+MCP exposure: the [knowledge](../knowledge/) tools when `harness.knowledge` is enabled, and `read_file` and
+`base64_encode` when `harness.tools` lists them. Tool selection uses the same regular expressions over the tool name
+as the [agent](../agents/tools/), and a built-in is matched by its name, so `exclude: {tools: [^knowledge_read$]}`
+serves the other knowledge tools without it. A built-in carries no tags, so an `include` by tag alone removes every
+built-in unless a pattern names it back. A tool call runs the command and returns its result, limited by `tool_timeout`
+per call and `max_concurrent_tools` in flight at once.
+
+`fisk mcp` prints a note for each enabled built-in it does not serve, with the reason: the tool is reachable only in an
+agent run, or a filter excluded it.
 
 ## Command tags over MCP
 
@@ -151,6 +157,10 @@ operator on the MCP path, so Fisk AI requests approval from the calling client t
 gated command it asks the client to approve, showing the server name, the resolved command line, and the tag that gated
 it, and runs the command only on an explicit approval. A refusal, a dismissal, or any elicitation error denies the call
 and returns an authoritative result the model is told not to retry.
+
+A [built-in tool](../agents/tools/#built-in-tools) whose `harness.tools` entry sets `confirm: true` is gated the same
+way. Its prompt shows the tool's trace line in place of a command line, `read_file <path>` for example, and names
+`ai:confirm` as the gate.
 
 Not every client supports elicitation. `expose.agent.mcp.confirm_over_mcp` chooses what happens when the connected
 client cannot be asked:
@@ -184,6 +194,8 @@ MCP path:
 * the [human-in-the-loop](../agents/hitl/) `ask_human_*` tools
 * the [memory](../agents/memory/) `memory_*` tools
 
+Tools imported from remote agents and MCP servers are not re-served either; they are reachable only in an agent run.
+
 ## Safety
 
 Every served command gets the same per-command protections as the [agent](../agents/safety/): it runs as an argument
@@ -192,8 +204,9 @@ its output combines stdout and stderr and is capped at 64 KiB, and `LLMFORMAT=1`
 
 The threat model is wider than an agent run:
 
-* Any client that can reach the server's port can invoke every exposed tool with any schema-valid arguments.
-  `ai:deny` and `include`/`exclude` are the gate on what is reachable, so scope the exposed set deliberately.
+* Any client that can reach the server's port can invoke every exposed tool with any schema-valid arguments, the
+  knowledge base and the enabled `harness.tools` built-ins included. `ai:deny`, `include`/`exclude` and
+  `expose.agent.tools` are the gate on what is reachable, so scope the exposed set deliberately.
 * There is no agent loop, prompt, or token budget limiting total use. `tool_timeout` and `max_concurrent_tools` limit a
   single call and how many run at once. Neither limits how many calls a client makes, so do not expose the server on an
   untrusted network.

@@ -85,7 +85,7 @@ Switches that default on are spelled negatively for the same reason: `no_tui`, `
 
 | Stage | Examples |
 |---|---|
-| Parse | An unknown key, a malformed or out-of-range duration, a negative budget, an illegal identity or alias, a duplicate MCP server name, an `mcp_clients` entry with neither or both transports, a `${VAR}` syntax error, a `builtins` entry that is not exposable |
+| Parse | An unknown key, a malformed or out-of-range duration, a negative budget, an illegal identity or alias, a duplicate MCP server name, an `mcp_clients` entry with neither or both transports, a `${VAR}` syntax error |
 | Command startup | `fisk mcp` with no `expose.agent.mcp` block, `fisk serve` with no endpoint enabled, a `knowledge` subcommand with knowledge disabled, telemetry endpoint resolution, `${VAR}` resolution at connect, a missing NATS stream or bucket |
 | Run | A provider name that no linked backend answers to, a reasoning effort the model rejects on the first call, embeddings settings validated when the knowledge store opens |
 

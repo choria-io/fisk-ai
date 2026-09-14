@@ -76,8 +76,9 @@ identity: nats
 # Path to the Fisk application binary to introspect and run. OPTIONAL.
 # When set, the binary is introspected once at startup to obtain its
 # command tree and per-command JSON schemas. Leave it out to run an agent
-# on the built-in tools (knowledge, memory, human_in_the_loop) and the
-# tools remote_tools and mcp_clients import, with no wrapped application.
+# on the built-in tools (knowledge, memory, human_in_the_loop and those
+# listed under harness.tools) and the tools remote_tools and mcp_clients
+# import, with no wrapped application.
 # Required only when expose.agent.a2a.serve_tools exposes the wrapped
 # application's tools.
 application_path: /usr/local/bin/nats
@@ -103,37 +104,47 @@ its built-in tools and whatever `remote_tools` and `mcp_clients` import; see
 
 ## Tool selection
 
-`include` and `exclude` choose which of the application's commands become tools. Each takes a list of regular
-expressions matched against the tool name, and a list of fisk tags:
+`include` and `exclude` choose which tools the agent gets, of every kind: the application's commands, the built-in
+tools, the tools imported from remote agents and MCP servers, and an embedder's custom tools. Each takes a list of
+regular expressions matched against the tool name, and a list of fisk tags:
 
 ```yaml
-# Keep only the commands whose tool name or tag matches. When "include" is
-# present, a command must match it to be exposed.
+# Keep only the tools whose name or tag matches. When "include" is present,
+# a tool must match it to be exposed, whatever its kind.
 include:
-  # Regular expressions matched against the tool name: the command path
-  # joined with underscores, so the "stream info" command is "stream_info".
+  # Regular expressions matched against the tool name: for a command, the
+  # command path joined with underscores, so "stream info" is "stream_info";
+  # for a built-in, its name, such as knowledge_search; for an import, its
+  # final name, which is "alias_tool" when the importer prefixed it.
   tools:
     - ^stream_
     - ^consumer_info$
-  # Match commands by fisk tag. An empty string "" matches untagged
-  # commands. The reserved ai:deny tag is always active and can never be
+    - ^knowledge_
+  # Match commands by fisk tag. An empty string "" matches a tool with no
+  # tags. The reserved ai:deny tag is always active and can never be
   # included back in.
   tags:
     - scope:read
 
-# Remove matching commands. Applied as a filter: a command that matches
-# "exclude" is dropped even if "include" allowed it.
+# Remove matching tools. Applied as a filter: a tool that matches "exclude"
+# is dropped even if "include" allowed it.
 exclude:
   tools:
     - ^stream_rm$
+    - ^memory_delete$
   tags:
     - scope:system
 ```
 
-A tool's name is its command path joined with underscores, so a nested command like `stream info` becomes
+A command's tool name is its command path joined with underscores, so a nested command like `stream info` becomes
 `stream_info`. Grouping commands and hidden commands are skipped and never become tools. `include` and `exclude` can be
 used together: for example include `^stream_` but exclude `^stream_rm$`. Commands tagged `ai:deny` are dropped before
 any of this runs and can never be added back.
+
+Only a command carries tags. A built-in, an imported tool and a custom tool have none, so an `include` that lists tags
+alone removes every one of them, and a built-in the agent still needs is named back with a pattern:
+`include: {tags: [ai:read_only], tools: [^knowledge_]}`. An `include` that lists patterns alone removes every built-in
+it does not name.
 
 Run `fisk info` to preview the resulting tool set before a run.
 
@@ -242,6 +253,20 @@ harness:
   confirm_tags:
     - ai:destructive
     - impact:rw
+
+  # Opt-in built-in tools the harness implements itself. Only a listed
+  # tool is offered; today the names are read_file and base64_encode.
+  # confirm gates each call behind operator approval the way ai:confirm
+  # gates a command. options holds the tool's own settings, and an
+  # unknown key is an error. See the tools guide for each tool's
+  # arguments and options.
+  tools:
+    - name: base64_encode
+    - name: read_file
+      confirm: true
+      options:
+        root: /srv/corpus
+        max_bytes: 1048576
 
   # Limits a single tool call, at a terminal and on a worker alike.
   # Unset uses the default of 5m; set 0s for no limit at all, which is
@@ -373,9 +398,10 @@ and idempotent hints for a read-only tool. A command tagged both `ai:read_only` 
 destructive and the contradiction is reported as a warning.
 
 Because these are ordinary tags, `harness.confirm_tags: [ai:destructive]` gates every destructive command behind
-approval, and `include: {tags: [ai:read_only]}` serves a read-only tool set. Both select on what the command author
-remembered to tag, so they are a convenience rather than a boundary; `ai:deny` and name-based `include`/`exclude` remain
-the reliable controls.
+approval, and `include: {tags: [ai:read_only]}` serves the read-only commands and nothing else, since a built-in and an
+imported tool carry no tags; add `tools: [^knowledge_]` to name the built-ins back. Both select on what the command
+author remembered to tag, so they are a convenience rather than a boundary; `ai:deny` and name-based
+`include`/`exclude` remain the reliable controls.
 
 All of a command's tags, reserved and free-form alike, are appended to the tool description Fisk AI sends the model as a
 trailing `Tags: ...` line, so a prompt can reference them. Adding or changing a tag changes that description, which
@@ -436,20 +462,22 @@ expose:
       tool_timeout: 30s
 
     # Optional: narrow the served set further, within the top-level
-    # include/exclude selection. With neither, every selected command is
-    # served (subject to the tag rules). Same regex-over-tool-name and tag
-    # matching as the top-level filters.
+    # include/exclude selection. With neither, every selected command and
+    # every enabled built-in that declares MCP exposure is served (subject
+    # to the tag rules). Same regex-over-tool-name and tag matching as the
+    # top-level filters, over commands and built-ins alike.
     tools:
       include:
         tools:
           - ^stream_
+          - ^knowledge_
       exclude:
         tools:
           - ^stream_rm$
 ```
 
-The served tools are the agent's top-level `include`/`exclude` selection, narrowed further by `expose.agent.tools` when
-set. `identity`, if set, becomes the MCP server name. Elicitation is a request the client fulfills, not an enforcement
+The served tools are the agent's top-level `include`/`exclude` selection, commands and built-ins together, narrowed
+further by `expose.agent.tools` when set. `identity`, if set, becomes the MCP server name. Elicitation is a request the client fulfills, not an enforcement
 boundary; for a command that must never be reachable over MCP, use `ai:deny` rather than confirmation. The
 [MCP server](../mcp/) guide covers this mode end to end.
 
@@ -804,7 +832,8 @@ built-in default. The worker count is a property of the process; the tool timeou
 
 The configuration is the boundary on what the model can reach: `application_path` fixes the one binary it can drive
 (and with no `application_path` set the agent can drive no external binary at all), `include`/`exclude` and `ai:deny`
-fix which of its commands become tools, and nothing outside that set is callable.
+fix which of its commands become tools and which built-ins and imports stay in, and nothing outside that set is
+callable.
 Commands run as an argument vector rather than through a shell, each argument is checked against the command's schema, the
 `ANTHROPIC_API_KEY` is stripped from their environment, output is capped at 64 KiB, and `LLMFORMAT=1` is set. The
 [Agents](../agents/safety/) and [MCP](../mcp/#safety) guides describe the full threat model for each mode.

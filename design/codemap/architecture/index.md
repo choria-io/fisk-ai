@@ -30,7 +30,7 @@ A package's imports place it in one of four layers. The root holds commands and 
 
 `config` imports the standard library, a duration parser and a YAML library. `internal/telemetry` imports the standard library and OpenTelemetry.
 
-Because `config` cannot see the rest of the tree, two lists are hand-maintained duplicates: the OTLP credential variable names, mirrored in `telemetry`, and the built-in tool names that may be exposed over MCP, mirrored on each tool's own spec. Both are pinned by a test assertion so they cannot drift.
+Because `config` cannot see the rest of the tree, two lists are hand-maintained duplicates: the OTLP credential variable names, mirrored in `telemetry`, and the built-in tool names a `harness.tools` entry can enable, mirrored in the `builtin` package's constructor table. Both are pinned by a test assertion so they cannot drift.
 
 Because `telemetry` cannot see the rest of the tree, its constructors take primitives rather than domain types, and its error classes are unforgeable values rather than a classifier over somebody else's sentinels. The HTTP middleware's type is written out longhand rather than named, and the `llm` package declares both halves as type aliases, so the value satisfies the interface without either package importing the other.
 
@@ -55,9 +55,9 @@ Because `telemetry` cannot see the rest of the tree, its constructors take primi
 | Concern | Enforced by |
 |---|---|
 | Which tools exist | The flat namespace built at run start; collisions abort |
-| Which tools the model may see | Config include and exclude, after `ai:deny` is stripped unconditionally |
+| Which tools the model may see | Config include and exclude over every kind, after `ai:deny` is stripped unconditionally |
 | Which tools need a human | The confirm gate, on the union of the original and rewritten call |
-| Which tools reach a peer | The exposure methods on the interface, plus a per-surface allowlist |
+| Which tools reach a peer | The exposure methods on the interface, plus `expose.agent.tools` on top of include and exclude |
 | Whether a conversation may continue | The run fingerprint, split into hard, blocking, tools and budget classes |
 | What may leave the process on a span | Closed vocabularies and constructors that own their own attribute sets |
 

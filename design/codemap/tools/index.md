@@ -145,7 +145,7 @@ Over MCP the calling client is asked through elicitation, and anything that is n
 
 ## Not yet wired
 
-Nothing sets a2a exposure on a `functool` spec today, so only fisk command tools reach that surface. There is no a2a builtins allowlist, and declaring exposure without one would serve the tool the moment a2a is enabled, with no operator opt-in.
+Nothing sets a2a exposure on a `functool` spec today, so only fisk command tools reach that surface. A built-in that declared it would be served the moment a2a is enabled, unless a filter removed it.
 
 {{% notice style="tip" title="Next" %}}
 Continue to [Model providers]({{% relref "providers" %}}) for how a tool definition is rendered for the API, or [Serving]({{% relref "serving" %}}) for the surfaces that hand these tools to somebody else.

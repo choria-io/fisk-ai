@@ -1,6 +1,7 @@
 # Tool selection
 
-Run the `fisk info` command to verify what tools the agent has access to:
+Fisk turns an application's commands into tools for the model, alongside the built-in tools the configuration enables.
+`fisk info` shows the resulting set:
 
 ```nohighlight
 $ fisk info
@@ -20,9 +21,9 @@ Prompt:
 ...
 ```
 
-The output shows the `say` and `think` tools and some Human in the Loop tools. When the configuration sets a model,
-`fisk info` also prints a Model section first, listing the resolved model and provider, whether thinking is enabled,
-and how tool search will behave, so you can confirm the backend and feature gates without starting a run.
+The output shows the `say` and `think` tools and the Human in the Loop tools. When the configuration sets a model,
+`fisk info` also prints a Model section listing the resolved model and provider, whether thinking is enabled, and how
+tool search will behave.
 
 ## Application tags
 
@@ -73,97 +74,116 @@ exclude:
 
 This excludes any command that has the `scope:system` tag.
 
+The filters cover every tool the agent gets, not only the application's commands: a [built-in](#built-in-tools) is
+matched by its name, such as `memory_write`, and a tool imported from a [remote agent](../remote/) or an
+[MCP server](../mcp-client/) by its final name, which is `alias_tool` when the importer prefixed it. Only a command
+carries tags, so an `include` that lists tags alone removes every built-in and import; a pattern beside the tags names
+one back.
+
+## Built-in tools
+
+Fisk has a set of built-in tools that are enabled under `harness.tools`:
+
+```yaml
+harness:
+  tools:
+    - name: base64_encode
+    - name: read_file
+      confirm: true
+      options:
+        root: /srv/corpus
+        max_bytes: 1048576
+```
+
+Only listed tools are enabled. `confirm: true` requires user confirmation before each call. `options` holds the tool's
+own settings; an unknown key is an error.
+
+### read_file
+
+`read_file` reads one regular file under a configured root. Its argument is `path`. It returns:
+
+| Field               | Description                                                                          |
+|---------------------|--------------------------------------------------------------------------------------|
+| `path`              | the path as requested                                                                |
+| `found` (boolean)   | `false` when the file does not exist                                                 |
+| `size` (integer)    | the file size in bytes                                                               |
+| `encoding`          | `utf-8` for text, `base64` for content that is not valid UTF-8                      |
+| `content`           | the file content in the form `encoding` names                                        |
+
+The `root` option defaults to `root_directory`, or the working directory when that is unset; a relative `root` is
+resolved under `root_directory`. Paths are confined to the root: a leading slash is ignored, `..` cannot leave it, and
+a symlink is followed only when its target is relative and stays inside. Only regular files are read.
+
+`max_bytes` is the largest file the tool returns, 1 MiB when unset. A larger file is refused rather than truncated.
+
+### base64_encode
+
+`base64_encode` encodes its `text` argument as standard base64 and returns `{"encoded": "<base64>"}`. It takes no
+options.
+
+### Serving
+
+Both tools are served over [MCP](../../mcp/) whenever `harness.tools` lists them and the `include`, `exclude` and
+`expose.agent.tools` filters leave them in; `exclude: {tools: [^read_file$]}` under `expose.agent.tools` serves
+`base64_encode` alone. [Confirmation over MCP](../../mcp/#confirmation-over-mcp) describes how `confirm: true` behaves
+with MCP clients. Neither tool is served over a2a.
+
 ## Global flags
 
 A wrapped binary often has application-level global flags that apply to every subcommand. `nats`, for example, has
 `--context` to select a stored connection profile, alongside sensitive globals such as `--user` and `--password`. By
-default none of these are exposed to the model. `global_flags` is an allowlist of the globals you want the model to be
-able to set per command:
+default none of these are exposed to the model. `global_flags` is an allowlist of the globals the model may set per
+command:
 
 ```yaml
 global_flags:
   - context
 ```
 
-Each named global becomes an argument on every leaf command tool, so the model can run `nats stream ls` against a chosen
-context without you hard-wiring one. Names are the long flag name, with or without the leading dashes, and are validated
-against the binary's real global flags at load; a name matching none is an error. Hidden and framework flags (like
-`--help`) cannot be exposed, and a global that clashes with a command's own flag or argument is skipped for that command.
-A global the application marks required is always exposed, whether or not it is listed, since the command cannot run
-without it.
+Each named global becomes an argument on every leaf command tool. Names are the long flag name, with or without the
+leading dashes, and are validated against the binary's global flags at load; a name matching none is an error. Hidden
+and framework flags such as `--help` cannot be exposed. A global that clashes with a command's own flag or argument is
+skipped for that command. A global the application marks required is always exposed, whether or not it is listed.
 
-Run `fisk info` to see which globals a binary exposes; it lists the application's global flags and marks the ones you
-have allowlisted.
+`fisk info` lists the application's global flags and marks the allowlisted ones.
 
 ## Command tags
 
-Fisk commands can carry tags, set in their fisk definition (or, for App Builder
-applications, in YAML). Tags can be referenced by the `include`/`exclude` rules
-to select commands by group, and the `ai:` prefix is reserved for the tags fisk
-interprets. The full vocabulary is listed under
-[Command tags](../../reference/#command-tags) in the Reference guide; the tags that
-control how a command is exposed to the model are:
+Fisk commands carry tags, set in their fisk definition or, for App Builder applications, in YAML. Any tag can be
+matched by `include`/`exclude`. The `ai:` prefix is reserved for the tags fisk interprets; the full vocabulary is under
+[Command tags](../../reference/#command-tags) in the Reference guide. The tags that control how a command is exposed
+are:
 
-| Tag           | Description                                                                                                                                                           |
-|---------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `ai:deny`     | Never expose the command to the model; it is dropped before include/exclude and can never be added back.                                                              |
-| `ai:no_defer` | Always send the command directly instead of deferring it behind the tool-search tool.                                                                                 |
-| `ai:confirm`  | Require the operator to approve the command at the terminal before it runs; an "allow for the conversation" answer is remembered for that command for the rest of the conversation, across resumes of the conversation. |
+| Tag           | Description                                                                              |
+|---------------|------------------------------------------------------------------------------------------|
+| `ai:deny`     | never expose the command; dropped before include/exclude and cannot be added back        |
+| `ai:no_defer` | always send the command directly instead of deferring it behind the tool-search tool     |
+| `ai:confirm`  | require the operator to approve the command before it runs                               |
 
-The behavior tags (`ai:read_only`, `ai:destructive`, `ai:additive`,
-`ai:idempotent`) describe what a command does rather than controlling it. They
-reach the model and, over MCP, the client; they gate nothing.
+The behavior tags `ai:read_only`, `ai:destructive`, `ai:additive` and `ai:idempotent` describe what a command does.
+They reach the model and, over MCP, the client; they gate nothing. An `ai:` tag fisk does not recognize is reported as
+a warning at startup and by `fisk info`.
 
-A tag under the `ai:` prefix that fisk does not recognize does nothing, so it is
-reported as a warning at startup and by `fisk info`.
+When the model calls a command tagged `ai:confirm`, fisk prompts the operator at the terminal with the resolved command
+line and offers three choices: run it once, run it and stop asking for that command for the rest of the conversation,
+or decline. Declining tells the model the decision is final. An "allow for the conversation" answer is remembered by
+command name regardless of arguments: once `stream rm` is allowed, every later `stream rm` call runs without asking.
 
-`ai:deny` is the reliable way to keep a command the agent should never call out of
-reach, since it applies before any `include`/`exclude` rule. `ai:no_defer` keeps the
-handful of commands the model needs on most requests immediately available rather
-than discoverable only through tool search.
+The conversation records each answer and honors it on resume; `fisk session show` lists what it holds. `/clear` and a
+`--force` resume across a changed configuration drop the answers. A resume with no terminal attached declines a gated
+command. The prompt is rendered on stderr, so a piped final answer stays clean, and the displayed command line is
+stripped of terminal control sequences. With no interactive terminal, or a prompt that cannot be shown, the command is
+declined. An interrupt or end-of-input at the prompt ends the run; the conversation stays continuable and asks again.
+The tag is always active; there is no configuration flag.
 
-`ai:confirm` gates a command behind the operator's explicit permission. When the
-model calls a command tagged `ai:confirm`, fisk pauses before running it and
-prompts the operator at the terminal, showing the resolved command line with its
-arguments, and offers three choices: run it once, run it and stop asking for that
-command for the rest of the conversation, or decline. Declining returns an
-authoritative result to the model (the command is not run and the model is told
-the decision is final), so it stops rather than working around the refusal. An
-"allow for the conversation" answer is remembered **by command, regardless of its
-arguments**: once you bless `stream rm`, every later `stream rm` call runs without
-asking again, so reserve that choice for a command you trust the agent to repeat.
+`harness.confirm_tags` extends the same gate to other tags, for example `ai:destructive` or an application's own
+`impact:rw`. Matching is exact, not a regex. An entry that matches no loaded command is reported as a warning at
+startup. The approval prompt names the tag that gated the command. `fisk info` shows each command's tags and which
+commands a run would gate. Over MCP a gated command is requested through elicitation.
 
-The conversation records the answer, so continuing it honors the answer rather than
-asking again, and `fisk session show` lists what it holds. They are dropped by
-`/clear` and by a `--force` resume across a changed configuration, and a resume with
-no terminal attached declines a gated command rather than honoring one. The
-prompt is rendered on stderr (so a piped final answer stays clean), the displayed
-command line is stripped of terminal control sequences so model-supplied argument
-values cannot spoof what you see, and it denies by default: no interactive terminal,
-or a prompt that cannot be shown, declines rather than runs. An interrupt or an
-end-of-input at the prompt ends the run rather than declining, since the operator did
-not answer; the conversation stays continuable and asks again. Unlike
-`human_in_the_loop`, the tag is always active: there is no configuration flag to
-enable it.
+Any other tag is free-form: it has no built-in meaning and can be matched by the `tags` field of an `include` or
+`exclude` rule.
 
-The same gate can be extended to other tags with the `harness.confirm_tags`
-configuration key: any tag listed there gates its commands exactly as `ai:confirm` does, which
-lets an operator require confirmation for a tag the application already uses (for
-example `ai:destructive`, or an application's own `impact:rw`) without editing the application. It is additive to the
-always-on `ai:confirm` tag and matching is exact rather than a regex. A
-`confirm_tags` entry that matches no loaded command is reported as a warning at
-startup, since a typo would otherwise leave a command ungated. The approval prompt
-names the tag that gated the command, so you can tell why you are being asked. Run
-`fisk info` to see each command's tags and which commands a run would gate. Like
-`ai:confirm`, a `confirm_tags` tag gates both the agent loop and MCP, where it is
-requested through elicitation.
-
-Any other tags are free-form: they have no built-in meaning to fisk but can be
-matched by the `tags` field of an `include` or `exclude` rule.
-
-All of a command's tags, reserved and free-form alike, are also included in the
-tool description fisk sends the model, as a trailing `Tags: ...` line, in both
-the agent and over MCP. This lets your prompt reference them, for example "always
-use `ask_human_confirm` before running any command
-tagged `impact:rw`". The human-facing `fisk info` listing keeps the plain
-description.
+All of a command's tags are included in the tool description fisk sends the model, as a trailing `Tags: ...` line, in
+the agent and over MCP, so a prompt can reference them, for example "always use `ask_human_confirm` before running any
+command tagged `impact:rw`". The `fisk info` listing shows the plain description.

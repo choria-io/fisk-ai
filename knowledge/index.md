@@ -203,8 +203,8 @@ section always comes back whatever its size; the sections around it are added wh
 A block that reached the limit, or the edge of the document, carries a note saying which one stopped it, and its `span`
 is where to start the next call.
 
-The tool is served over MCP as well when the operator names it in the allowlist. Naming it there without setting
-`read_tool` fails config load rather than serving a client two tools where it asked for three.
+The tool is served over MCP as well, beside the other two, whenever `read_tool` is set and the tool filters leave it
+in.
 
 ### Embeddings
 
@@ -542,21 +542,25 @@ side by side. A store base relocates that default under it, and the `directory` 
 
 ## Serving over MCP
 
-The knowledge tools can be served over [MCP](../mcp/) as well as to the agent. Exposure is off by default and enabled
-by naming them in an allowlist:
+The knowledge tools are served over [MCP](../mcp/) as well as to the agent. Enabling knowledge is the whole opt-in: a
+configuration with `harness.knowledge` enabled and an `expose.agent.mcp` block serves `knowledge_search` and
+`knowledge_enumerate`, and `knowledge_read` too where `read_tool` is set:
 
 ```yaml
+harness:
+  knowledge:
+    enabled: true
 expose:
   agent:
     mcp:
       port: 8080
-      builtins:
-        - knowledge_search
-        - knowledge_enumerate
 ```
 
-Name both. A client that can rank but cannot enumerate cannot tell an absent term from a low-scoring one, which is the
-whole reason the second tool exists. `knowledge_read` may be named beside them where `read_tool` is set. See
+The tool filters remove one by name. `exclude: {tools: [^knowledge_read$]}` at the top level, or under
+`expose.agent.tools`, serves the other two without it; an `include` by tag alone removes every knowledge tool, since a
+built-in carries no tags, and `tools: [^knowledge_]` beside the tags names them back. Serve search and enumerate
+together: a client that can rank but cannot enumerate cannot tell an absent term from a low-scoring one, which is the
+whole reason the second tool exists, and `fisk mcp` prints a note when a filter leaves one without the other. See
 [MCP](../mcp/) for binding, ports, and the rest of the serving configuration.
 
 ## Security
@@ -568,15 +572,15 @@ The index holds the verbatim text of every indexed document, unencrypted on disk
   render, so indexed text cannot spoof the display or inject instructions.
 - Embeddings secrets are supplied by environment-variable name and never logged, and are stripped from the environment of
   model-chosen command tools, so a tool cannot read the embeddings credential. The request timeout is enforced.
-- Over MCP two gates apply, and both must pass: the tool itself declares whether it may ever be served over MCP, and the
-  allowlist selects which of those this operator wants served. The allowlist can only narrow the tools declared servable,
-  never widen past them, so a tool added alongside `knowledge_search` is not served on the strength of its neighbor's
-  entry. That holds between the knowledge tools themselves: allowlisting one never serves another. Only the read-only
-  knowledge tools declare MCP exposure; no index or write path is reachable over MCP, and no built-in declares a2a
-  exposure at all.
+- Over MCP two gates apply, and both must pass: the tool itself declares whether it may ever be served over MCP, and
+  the `include`, `exclude` and `expose.agent.tools` filters remove any it should not serve. The filters can only narrow
+  the tools declared servable, never widen past them. Of the knowledge tools only the read-only ones declare MCP
+  exposure; no index or write path is reachable over MCP, and no built-in declares a2a exposure at all. Enabling knowledge on a
+  configuration that also serves MCP serves the knowledge base to every client that can reach the port, so exclude the
+  tools where that is not wanted.
 - `knowledge_read` returns stored text by reference rather than by query, so a client holding a reference reads the
   document around it a section at a time. The limit on one call is `max_injected_tokens / 2`, and the tool is served
-  only where `harness.knowledge.read_tool` is set as well as named in the allowlist.
+  only where `harness.knowledge.read_tool` is set.
 - `knowledge_enumerate` returns a complete set rather than a ranked sample, so a client that can reach it can inventory
   which documents mention which terms without reading any of them. That is less text than `knowledge_search` discloses
   per call and more structure. Both matter when deciding what to bind.

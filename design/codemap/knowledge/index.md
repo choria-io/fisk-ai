@@ -117,7 +117,7 @@ Pending deletions are applied stat-guarded, so an editor's atomic save, a transi
 
 The injection budget is the configured token count times four characters. Adding hits stops once the budget would be exceeded, but the first hit is always included, so a large first chunk is not silently dropped to nothing. Enumeration gets a quarter of that budget, because it is a pre-check that has to leave room for the retrieval that follows, with a floor of one document so a rounding to zero never reads as absence.
 
-`knowledge_search` and `knowledge_enumerate` are the only MCP-exposable built-ins, gated per tool against the operator's allowlist, so adding a tool to the knowledge set can never widen reach without a config change. Exposing only one of the pair is legal, and the run warns what a caller loses: set membership with no way to read the text, or retrieval with no way to check completeness.
+The knowledge tools declare MCP exposure and are served whenever knowledge is enabled and the operator's `include`, `exclude` and `expose.agent.tools` filters leave them in, so a tool added to the knowledge set is served on the same terms as its neighbors. Filtering one of the pair out is legal, and `fisk mcp` warns what a caller loses: set membership with no way to read the text, or retrieval with no way to check completeness.
 
 ## Reserved
 
