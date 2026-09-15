@@ -216,13 +216,18 @@ The `embeddings` block is only read when the vector tier is on. It describes a l
 | `base_url` (string)        | OpenAI-compatible base URL; requests go to `<base_url>/embeddings`                      |
 | `model` (string)           | the embedding model name to request                                                     |
 | `api_key_env` (string)     | name of an environment variable holding the API key, never the secret itself; optional  |
+| `api_key_file` (string)    | path of a file holding the API key, such as a Docker Compose secret; optional           |
 | `timeout` (duration)       | per-request timeout, default `30s`                                                      |
 | `query_prefix` (string)    | text prepended to a query before embedding; optional, default empty                     |
 | `document_prefix` (string) | text prepended to a chunk before embedding, supports `{title}`; optional, default empty |
 
 `api_key_env` names an environment variable rather than carrying the secret, so no secret lives in `agent.yaml` and none
-is logged. Prefixes default to empty because the model is user-chosen and a wrong prefix is worse than none; the models
-that need one document it. Run `knowledge doctor` to see whether a chosen model expects a prefix.
+is logged. `api_key_file` names a file holding it instead, which is how a Docker Compose secret arrives at
+`/run/secrets/<name>`; a relative path resolves under `root_directory`. The file is read once when the store opens, so a
+file that is missing or empty fails before the agent loop starts, and trailing whitespace is dropped so the newline an
+editor or Compose leaves at the end is not sent as part of the token. Setting both keys fails config load. Prefixes
+default to empty because the model is user-chosen and a wrong prefix is worse
+than none; the models that need one document it. Run `knowledge doctor` to see whether a chosen model expects a prefix.
 
 > [!info] Note
 > The `base_url` may be `http` or `https`. The embeddings endpoint is only ever contacted when the vector tier is on;

@@ -615,9 +615,13 @@ mcp_clients:
       - /srv/data
     # Environment variables for the child, applied on top of the environment
     # a command tool gets: this process's environment with the credential
-    # variables removed.
+    # variables removed. A value holds "${VAR}" references, replaced by the
+    # variable's value, and "${file:PATH}" references, replaced by the
+    # file's content, when the session connects. A relative PATH resolves
+    # under root_directory, and the path runs to the first "}".
     env:
       FS_STATE_DIR: ${HOME}/.cache/fs-mcp
+      FS_TOKEN: ${file:/run/secrets/fs_token}
     # How long the server gets to start, finish the initialize handshake and
     # list its tools. Unset uses the default 30s; 0s and a negative are
     # rejected.
@@ -637,13 +641,16 @@ mcp_clients:
   - # A server that is already running, reached over streamable HTTP.
     name: docs
     # The endpoint. Setting it selects the HTTP transport; "command", "args"
-    # and "env" may not be set alongside it.
+    # and "env" may not be set alongside it. It takes the same "${VAR}" and
+    # "${file:PATH}" references as env and headers, for a service that
+    # authenticates by query parameter or path segment.
     url: https://mcp.example.net/mcp
     # Sent on every request to the endpoint's host, and dropped from a
     # redirect that leaves it, so a server cannot redirect an Authorization
     # header to a host of its choosing.
     headers:
       Authorization: Bearer ${DOCS_TOKEN}
+      X-Docs-Tenant: ${file:/run/secrets/docs_tenant}
     timeout: 15s
 ```
 
@@ -805,7 +812,8 @@ overlap, except for the hard off switches (`harness.no_tui`), which the command 
 | Flag           | Environment variable | Description                                                                                                                                                                |
 |----------------|----------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `--config`     |                      | Path to the configuration file. Default `agent.yaml`.                                                                                                                      |
-| `--api-key`    | `ANTHROPIC_API_KEY`  | Anthropic API key. Required.                                                                                                                                               |
+| `--api-key`    | `ANTHROPIC_API_KEY`  | Anthropic API key. Required unless `--api-key-file` is set.                                                                                                                |
+| `--api-key-file` | `ANTHROPIC_API_KEY_FILE` | File holding the Anthropic API key, such as a Docker Compose secret at `/run/secrets/<name>`. Trailing whitespace is dropped and an empty file is refused. Refused beside `--api-key`, and refused with `--nats-context` as `--api-key` is. |
 | `--base-url`   | `ANTHROPIC_BASE_URL` | Anthropic API base URL to use, for example a local Anthropic-compatible runner. Either `http` or `https`, naming a host, with no embedded userinfo credentials.             |
 | `--http-debug` | `HTTP_DEBUG`         | Dump Anthropic API request and response bodies to `http-debug.log`. The file holds the full conversation and is created mode 0600.                                         |
 | `--no-color`   | `NO_COLOR`           | Disable markdown rendering of the final answer, emitting raw text.                                                                                                         |

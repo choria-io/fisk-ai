@@ -85,14 +85,14 @@ Switches that default on are spelled negatively for the same reason: `no_tui`, `
 
 | Stage | Examples |
 |---|---|
-| Parse | An unknown key, a malformed or out-of-range duration, a negative budget, an illegal identity or alias, a duplicate MCP server name, an `mcp_clients` entry with neither or both transports, a `${VAR}` syntax error |
-| Command startup | `fisk mcp` with no `expose.agent.mcp` block, `fisk serve` with no endpoint enabled, a `knowledge` subcommand with knowledge disabled, telemetry endpoint resolution, `${VAR}` resolution at connect, a missing NATS stream or bucket |
+| Parse | An unknown key, a malformed or out-of-range duration, a negative budget, an illegal identity or alias, a duplicate MCP server name, an `mcp_clients` entry with neither or both transports, a `${VAR}` or `${file:PATH}` syntax error, `api_key_env` beside `api_key_file` |
+| Command startup | `fisk mcp` with no `expose.agent.mcp` block, `fisk serve` with no endpoint enabled, a `knowledge` subcommand with knowledge disabled, telemetry endpoint resolution, `${VAR}` and `${file:PATH}` resolution at connect, a missing NATS stream or bucket |
 | Run | A provider name that no linked backend answers to, a reasoning effort the model rejects on the first call, embeddings settings validated when the knowledge store opens |
 
 A `confirm_tags` entry that matches no loaded tool is the one case that produces a warning rather than a failure, because the tool set is only known after introspection.
 
 {{% notice style="warning" title="Load-bearing decision" %}}
-The package never reads the environment. `ExpandEnvReferences` takes a lookup function instead of calling `os.LookupEnv`, because the commands that parse a configuration are not the commands that connect. `${VAR}` syntax is checked at parse time and resolved at connect time, so `fisk info` can describe a file whose secrets are not present.
+The package never reads the environment or a credential file on its own. `ExpandReferences` takes a lookup function and a file reader instead of calling `os.LookupEnv` and `os.ReadFile`, because the commands that parse a configuration are not the commands that connect. `${VAR}` and `${file:PATH}` syntax is checked at parse time and resolved at connect time, so `fisk info` can describe a file whose secrets are not present. `ReadCredentialFile` is the one reader every caller uses: it trims trailing whitespace and refuses an empty file.
 {{% /notice %}}
 
 {{% notice style="warning" title="Load-bearing decision" %}}
@@ -104,7 +104,8 @@ Identity is the name other agents send traffic to. When it is derived from the a
 Secrets stay out of the file and out of tool subprocesses.
 
 <dl class="cm-kv">
-  <dt><code>${VAR}</code> references</dt><dd>Recognized in <code>mcp_clients</code> <code>env</code>, <code>headers</code> and <code>url</code>. A value in <code>command</code> or <code>args</code> is taken literally.</dd>
+  <dt><code>${VAR}</code> and <code>${file:PATH}</code> references</dt><dd>Recognized in <code>mcp_clients</code> <code>env</code>, <code>headers</code> and <code>url</code>. A value in <code>command</code> or <code>args</code> is taken literally. A relative <code>PATH</code> resolves under <code>root_directory</code>.</dd>
+  <dt><code>api_key_file</code> and <code>--api-key-file</code></dt><dd>The embeddings token and the model key each take a file beside their environment variable, for a Docker Compose secret. Setting a file beside its variable fails config load for <code>api_key_file</code> and the command for <code>--api-key-file</code>.</dd>
   <dt><code>CredentialEnvNames()</code></dt><dd>Strips OTLP credential variables from every tool subprocess whether or not this agent enables telemetry. These are ambient operator variables, a tool never needs them, and gating on config would mean <code>--no-telemetry</code> puts the token back into every tool subprocess.</dd>
   <dt><code>RedactURL</code></dt><dd>Applied to anything that prints an MCP endpoint. It leaves the path intact, and some hosted MCP providers put the credential in the path.</dd>
 </dl>

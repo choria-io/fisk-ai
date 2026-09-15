@@ -47,16 +47,32 @@ A collision against a local tool, a remote tool or another server's is still pos
 the run, naming the tools that collided. `fisk info` reports it and carries on. A tool arriving while a run is under
 way whose name is taken is left out and reported, and the run continues.
 
-## Variable references
+## Variable and file references
 
 `env`, `headers` and `url` values hold any number of `${VAR}` references, each replaced by the value of that
 environment variable, so a credential lives in the variable rather than in the file. A value mixes literal text with
 references freely, as in `Bearer ${DOCS_TOKEN}` and `${HOME}/cache`. A `$NAME` without braces is literal text and
 references nothing. `command` and `args` are literal throughout.
 
-References resolve when a session connects, not when the file is parsed. Parsing checks their syntax and reads no
-variable, so a host holding none of the credentials still runs `fisk info` and `fisk mcp` against the file. A variable
-that is not set fails the connect, naming the variable and the server.
+A `${file:PATH}` reference is replaced by the content of the file at `PATH`, which is how a Docker Compose secret
+arrives: Compose mounts it at `/run/secrets/<name>` and cannot expose it as an environment variable. Trailing
+whitespace is dropped, so the newline an editor or Compose leaves at the end of the file is not sent as part of the
+token, and an empty file is an error. A relative `PATH` resolves under `root_directory`. The path runs from `file:` to
+the first `}`, so a path holding a `}` cannot be written. Both forms work anywhere, including together in one value:
+
+```yaml
+headers:
+  Authorization: Bearer ${file:/run/secrets/docs_token}
+env:
+  API_TOKEN: ${file:/run/secrets/api_token}
+url: https://mcp.example.net/mcp/?apiKey=${file:/run/secrets/key}
+```
+
+References resolve when a session connects, not when the configuration is parsed. Parsing checks their syntax and
+reads no variable and no credential file, so a host holding none of the credentials still runs `fisk info` and
+`fisk mcp` against the configuration.
+A variable that is not set, or a file that cannot be read, fails the connect, naming the variable or the path and the
+server.
 
 Some services authenticate in the endpoint rather than in a header, by query parameter as in
 `https://mcp.example.net/mcp/?apiKey=${DOCS_TOKEN}`, or by a path segment as in
