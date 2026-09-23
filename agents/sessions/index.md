@@ -82,6 +82,9 @@ status; `--transcript` shows the full conversation (prompt, thinking, narration,
 interactive terminal `--transcript` opens the full-screen viewer with thinking and tool output folded, which `z` and `Z`
 expand; `--no-tui`/`NO_TUI` prints it as line output instead. `session rm` deletes a session.
 
+`session stats`, `session query` and `session search` report a session's cost, its tool calls, and the sessions
+matching a filter; [Session inspection](../session-inspection/) covers them.
+
 ## Answering a deferred tool call
 
 A tool can report that its answer arrives later rather than now. The run then suspends, releasing the process, and
