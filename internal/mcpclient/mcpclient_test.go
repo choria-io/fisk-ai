@@ -680,7 +680,9 @@ var _ = Describe("Sessions", func() {
 
 			clientSide, serverSide := mcp.NewInMemoryTransports()
 
-			srv := mcp.NewServer(&mcp.Implementation{Name: "docs", Version: "1"}, nil)
+			srv := mcp.NewServer(&mcp.Implementation{Name: "docs", Version: "1"}, &mcp.ServerOptions{
+				Capabilities: &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{ListChanged: true}},
+			})
 			_, err := srv.Connect(context.Background(), serverSide, nil)
 			Expect(err).ToNot(HaveOccurred())
 
