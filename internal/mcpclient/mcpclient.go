@@ -531,9 +531,11 @@ func (s *Sessions) open(ctx context.Context, e *entry) error {
 //
 // The tool-list handler is set only for a server whose entry sets WatchTools, and it
 // is set whether or not anything is watching yet: under the 2026-07-28 protocol
-// Connect subscribes to tools/list_changed only when the handler is there, opening
-// the subscriptions/listen stream with the notifications the client's handlers ask
-// for, and a session connected without one is never told. A run that registers with
+// Connect subscribes to tools/list_changed only when the handler is there and the
+// server advertises tools.listChanged, opening the subscriptions/listen stream with
+// the notifications the client's handlers ask for, and a session connected without
+// one is never told. Against a server that does not advertise it, WatchTools has no
+// effect. A run that registers with
 // OnToolListChanged after the sessions were built, which is every run under fisk
 // serve, would otherwise have nothing to hear.
 //

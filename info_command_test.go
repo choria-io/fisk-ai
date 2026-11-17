@@ -16,6 +16,7 @@ import (
 	"github.com/choria-io/ui/columns"
 	"github.com/choria-io/ui/table"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/nats-io/jsm.go/natscontext"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -240,7 +241,9 @@ var _ = Describe("info tools", func() {
 		Expect(src.Unbound[0].Source).To(Equal(agent.SourceRemoteTools))
 
 		asm := assemble(src)
-		Expect(renderProblems(asm)).To(Equal(`warning: cannot connect to NATS context "nowhere" to discover remote tools: connecting to NATS context "nowhere": unknown context "nowhere"` + "\n"))
+		problems := renderProblems(asm)
+		Expect(problems).To(HavePrefix(`warning: cannot connect to NATS context "nowhere" to discover remote tools: connecting to NATS context "nowhere": `))
+		Expect(problems).To(ContainSubstring(natscontext.ErrNotFound.Error()))
 		Expect(renderTable(asm)).To(ContainSubstring("| backup | local | Yes |"))
 		Expect(renderStatus(asm)).ToNot(ContainSubstring("Remote tool hosts"))
 	})
