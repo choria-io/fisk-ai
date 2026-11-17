@@ -1,6 +1,6 @@
 module github.com/choria-io/fisk-ai
 
-go 1.27
+go 1.27.0
 
 require (
 	github.com/AlecAivazis/survey/v2 v2.3.7
